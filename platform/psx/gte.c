@@ -1275,24 +1275,24 @@ static void Rtp(int v, int last, int sf)
         if (z > 0.0 && h < z * 2.0) {
             float px = (float)(c[OFX] / 65536.0 + x * h / z);
             float py = (float)(c[OFY] / 65536.0 + y * h / z);
-            if (px > -1024.0f && px < 1024.0f && py > -1024.0f && py < 1024.0f) {
-                int32_t same = SameCorner((uint32_t)gte.data[SXY2], px, py, (float)z, pendingKey[v]);
+            /* IR1/IR2 saturation need not reject a polygon. Retain offscreen precision so libgpu
+               does not fall back to affine drawing and oversized-triangle rejection. */
+            int32_t same = SameCorner((uint32_t)gte.data[SXY2], px, py, (float)z, pendingKey[v]);
 
-                sxyHandle[2] = RecordPrecise((uint32_t)gte.data[SXY2], px, py, (float)z);
-                if (sxyHandle[2] && same >= 0) {
-                    /* (kept under its own pixel, which the packet holds) */
-                    records[(sxyHandle[2] & HANDLE_INDEX_MASK) - 1].value = records[same].value;
-                } else if (sxyHandle[2]) {
-                    PreciseRecord *record = &records[(sxyHandle[2] & HANDLE_INDEX_MASK) - 1];
+            sxyHandle[2] = RecordPrecise((uint32_t)gte.data[SXY2], px, py, (float)z);
+            if (sxyHandle[2] && same >= 0) {
+                /* (kept under its own pixel, which the packet holds) */
+                records[(sxyHandle[2] & HANDLE_INDEX_MASK) - 1].value = records[same].value;
+            } else if (sxyHandle[2]) {
+                PreciseRecord *record = &records[(sxyHandle[2] & HANDLE_INDEX_MASK) - 1];
 
-                    if (fadeOn) {
-                        record->value.fade = GteFade(sqrt(x * x + y * y + z * z));
-                    }
-                    record->value.key = pendingKey[v];
-                    record->value.view[0] = (float)x;
-                    record->value.view[1] = (float)y;
-                    record->value.view[2] = (float)z;
+                if (fadeOn) {
+                    record->value.fade = GteFade(sqrt(x * x + y * y + z * z));
                 }
+                record->value.key = pendingKey[v];
+                record->value.view[0] = (float)x;
+                record->value.view[1] = (float)y;
+                record->value.view[2] = (float)z;
             }
         }
     }
