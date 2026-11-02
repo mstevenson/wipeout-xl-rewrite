@@ -55,6 +55,10 @@ int PortPrmShiftTextures(char *file, int length, int shift);
 /* Convert N64 texture tint colours to the PS1 scale before loading scenery, sky or signs.
    Call once on a copy of the file: calling again would darken the colours a second time. */
 int PortPrmNormalizeN64(char *file, int length);
+/* Split unlit N64 scenery quads along their original diagonal for independent triangle culling.
+   Returns required/written bytes, or 0 for malformed input/count overflow. destination may be
+   null to measure; otherwise it must be a separate buffer of the measured size. */
+int PortPrmTriangulateN64(const char *file, int length, char *destination);
 
 /* Length of the widened image PortWidenPrmImage built last (the weapon code copies whole images). */
 extern int portLastPrmImageLength;

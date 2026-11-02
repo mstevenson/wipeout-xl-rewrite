@@ -877,6 +877,7 @@ static int Wipeout64Gates(const uint8_t *sections, int count, const uint8_t *fac
 static uint8_t *Relocate(const uint8_t *cmp, size_t length, int *paletteSlot, size_t *size);
 static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes);
 int PortPrmNormalizeN64(char *file, int length);
+int PortPrmTriangulateN64(const char *file, int length, char *destination);
 int PortPrmShiftTextures(char *file, int length, int shift); /* (game/src/port_widen.c) */
 
 static int Build(void)
@@ -2045,6 +2046,18 @@ static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
         sizes[8] = comSize + sinSize;
         ok = PortPrmShiftTextures((char *)parts[8] + comSize, (int)sinSize, comCount);
         ok = ok && PortPrmNormalizeN64((char *)parts[8], (int)sizes[8]);
+        if (ok) {
+            int bytes = PortPrmTriangulateN64((char *)parts[8], (int)sizes[8], NULL);
+            uint8_t *triangles = bytes ? SDL_malloc((size_t)bytes) : NULL;
+            ok = triangles && PortPrmTriangulateN64((char *)parts[8], (int)sizes[8], (char *)triangles) == bytes;
+            if (ok) {
+                SDL_free(parts[8]);
+                parts[8] = triangles;
+                sizes[8] = (size_t)bytes;
+            } else {
+                SDL_free(triangles);
+            }
+        }
         data = WadPart(at, "sky.prm", &size);
         parts[9] = SDL_malloc(size + 1);
         memcpy(parts[9], data, size);

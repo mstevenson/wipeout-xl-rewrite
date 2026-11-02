@@ -1,6 +1,7 @@
 /* Port: widening of 32-bit file records to native records. See port_widen.h. */
 #include "functions.h"
 #include "port_widen.h"
+#include <limits.h>
 #include "../../platform/n64_material.h"
 
 extern char errorString[];
@@ -264,6 +265,86 @@ int PortPrmShiftTextures(char *file, int length, int shift)
 int PortPrmNormalizeN64(char *file, int length)
 {
     return ConvertPrm(file, length, 0, 1);
+}
+
+/* Split unlit N64 quads into independently culled (0,1,2)/(2,1,3) triangles.
+   These file records are pointer-free; see docs/N64_RENDERING.md for the ROM evidence. */
+static void N64Triangle(const unsigned char *quad, int type, int half, unsigned char *triangle)
+{
+    static const int corners[2][3] = {{0, 1, 2}, {2, 1, 3}};
+    int textured = type == TypeFT4 || type == TypeGT4;
+    int gouraud = type == TypeG4 || type == TypeGT4;
+    int fromColour = textured ? offsetof(FT4, colour) : offsetof(F4, colour);
+    int toColour = textured ? offsetof(FT3, colour) : offsetof(F3, colour);
+    int i;
+
+    memset(triangle, 0, PrimitiveSize(type - 2));
+    triangle[1] = (unsigned char)(type - 2);
+    memcpy(triangle + offsetof(F3, flag), quad + offsetof(F4, flag), sizeof(short));
+    if (textured) {
+        memcpy(triangle + offsetof(FT3, texture), quad + offsetof(FT4, texture), 3 * sizeof(short));
+        memcpy(triangle + offsetof(FT3, pad1), quad + offsetof(FT4, pad1), sizeof(short));
+    }
+    for (i = 0; i < 3; i++) {
+        int corner = corners[half][i];
+        memcpy(triangle + offsetof(F3, coords) + i * sizeof(short),
+               quad + offsetof(F4, coords) + corner * sizeof(short), sizeof(short));
+        if (textured)
+            memcpy(triangle + offsetof(FT3, u0) + i * 2, quad + offsetof(FT4, u0) + corner * 2, 2);
+        if (gouraud)
+            memcpy(triangle + toColour + i * sizeof(CVECTOR), quad + fromColour + corner * sizeof(CVECTOR), sizeof(CVECTOR));
+    }
+    if (!gouraud)
+        memcpy(triangle + toColour, quad + fromColour, sizeof(CVECTOR));
+}
+
+int PortPrmTriangulateN64(const char *file, int length, char *destination)
+{
+    const unsigned char *in = (const unsigned char *)file;
+    const PortRecordTable *table = &PortRecord_Object;
+    int verticesAt = FindField(table, "vertexCount")->fileOffset;
+    int countAt = FindField(table, "primitiveCount")->fileOffset;
+    int fixed = table->fileSize + PortRecord_Skeleton.fileSize;
+    int pos = 0, out = 0;
+
+    /* Validate/measure the entire stream before writing any output. */
+    if (length < 0 || (destination && !PortPrmTriangulateN64(file, length, 0)))
+        return 0;
+    while (length - pos >= fixed) {
+        int vertices = ReadBigShort(in + pos + verticesAt);
+        int count = ReadBigShort(in + pos + countAt), newCount = count;
+        int header = out, bytes, i;
+        if (vertices < 0 || count < 0 || vertices > (length - pos - fixed) / (int)sizeof(SVECTOR))
+            return 0;
+        bytes = fixed + vertices * sizeof(SVECTOR);
+        if (out > INT_MAX - bytes) return 0;
+        if (destination) memcpy(destination + out, in + pos, bytes);
+        pos += bytes;
+        out += bytes;
+        for (i = 0; i < count; i++) {
+            int type = length - pos >= 2 ? ReadBigShort(in + pos) : 0;
+            int size = PrimitiveSize(type), split = type == TypeF4 || type == TypeFT4 || type == TypeG4 || type == TypeGT4;
+            int written = split ? 2 * PrimitiveSize(type - 2) : size;
+            if (!size || size > length - pos || out > INT_MAX - written)
+                return 0;
+            if (split && ++newCount > SHRT_MAX) return 0;
+            if (destination) {
+                if (split) {
+                    N64Triangle(in + pos, type, 0, (unsigned char *)destination + out);
+                    N64Triangle(in + pos, type, 1, (unsigned char *)destination + out + written / 2);
+                } else {
+                    memcpy(destination + out, in + pos, size);
+                }
+            }
+            pos += size;
+            out += written;
+        }
+        if (destination) {
+            destination[header + countAt] = (char)(newCount >> 8);
+            destination[header + countAt + 1] = (char)newCount;
+        }
+    }
+    return pos == length ? out : 0;
 }
 
 int portLastPrmImageLength;
