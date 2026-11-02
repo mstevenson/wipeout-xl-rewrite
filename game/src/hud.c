@@ -1187,25 +1187,24 @@ void AssignMedals(ConfigData *config)
     short goldCount = 0;
     short trackIndex;
 
-    if (PortOriginalTrack() >= 0) {
-        return; /* Port: an original track's races give no medals for Talon's Reach */
-    }
     if (raceType == RACE_ARCADE || raceType == RACE_CHALLENGE) {
         if ((unsigned int) ((u_short) finishPosition - 1) < 3U) {
             switch (finishPosition) {
             case 1:
-                if (trackMedals[config->trackNum] == 0 || (short) finishPosition < trackMedals[config->trackNum]) trackMedals[config->trackNum] = 1;
                 envmapr = 255; envmapg = 128; envmapb = 0;
                 break;
             case 2:
-                if (trackMedals[config->trackNum] == 0 || (short) finishPosition < trackMedals[config->trackNum]) trackMedals[config->trackNum] = 2;
                 envmapr = 224; envmapg = 224; envmapb = 224;
                 break;
             case 3:
-                if (trackMedals[config->trackNum] == 0 || (short) finishPosition < trackMedals[config->trackNum]) trackMedals[config->trackNum] = 3;
                 envmapr = 192; envmapg = 32; envmapb = 0;
                 break;
             }
+        }
+        /* Guests show the finish colour, but award no XL medals or progression for Talon's Reach. */
+        if (PortOriginalTrack() >= 0) return;
+        if ((unsigned int) ((u_short) finishPosition - 1) < 3U) {
+            if (trackMedals[config->trackNum] == 0 || (short) finishPosition < trackMedals[config->trackNum]) trackMedals[config->trackNum] = finishPosition;
         }
         for (trackIndex = 0; trackIndex < 8; trackIndex++) {
             if (trackMedals[trackIndex] == 1) goldCount++;
