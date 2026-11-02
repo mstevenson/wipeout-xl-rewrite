@@ -21,6 +21,21 @@ for test in guest_sky guest_animation; do
     "$test_build/$test"
 done
 
+# Imported N64 materials must not change PS1 colour arithmetic or page state.
+${CC:-cc} -O1 -ffunction-sections -fdata-sections -Wno-deprecated-declarations \
+    -include platform/include/port.h -iquote game/include -c game/src/port_widen.c -o "$test_build/port_widen.o"
+${CC:-cc} -O1 -ffunction-sections -fdata-sections -Wno-deprecated-declarations \
+    -include platform/include/port.h -iquote game/include -c game/src/port_records.c -o "$test_build/port_records.o"
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
+    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) \
+    tools/bugtest/test_n64_material.c platform/n64_material.c "$test_build/port_widen.o" "$test_build/port_records.o" \
+    $(pkg-config --libs sdl3) -o "$test_build/n64_material"
+"$test_build/n64_material"
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
+    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_n64_page.c \
+    $(pkg-config --libs sdl3) -lm -o "$test_build/n64_page"
+"$test_build/n64_page"
+
 # Port rendering changes must preserve the original effect segments and quad geometry.
 for test in electric near_object; do
     gte_sources=

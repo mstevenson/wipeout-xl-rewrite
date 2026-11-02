@@ -9,8 +9,9 @@
    object (the rest of its primitives are not drawn).
 
    The three differ in how they treat the primitives:
-     AsmDrawObject       the plain renderer: gouraud textured polygons are drawn flat, textured with the colour
-                         of their first vertex; single sided polygons facing away are dropped; translucent ones
+     AsmDrawObject       the plain renderer: PS1 gouraud textured polygons are drawn flat, textured with the colour
+                         of their first vertex (marked N64 materials blend all corner colours for smooth lighting);
+                         single sided polygons facing away are dropped; translucent ones
                          get the semi-transparency bit; depth is the average of the vertices' depths; billboard
                          sprites (types 10 and 11) are scaled by distance and rotated by `roll`.
      AsmDrawObjectLit    the same, except that gouraud polygons keep their colours, flat textured polygons are
@@ -22,6 +23,7 @@
 #include "../../platform/psx/gte.h"
 #include "portfar.h"
 #include "portorig.h"
+#include "../../platform/n64_material.h"
 
 extern short   CurrentScreen;
 extern u_long *OT[2];
@@ -365,6 +367,12 @@ static int GouraudColours(DrawKind kind)
     return kind == DRAW_LIT || (kind == DRAW_FIXED && PortOriginalLooks());
 }
 
+/* N64 materials retain corner lighting in every draw pass. */
+static int GouraudTextured(DrawKind kind, unsigned short page)
+{
+    return GouraudColours(kind) || (page & PORT_TPAGE_N64) != 0;
+}
+
 static char *DrawGouraudTexturedTriangle(DrawKind kind, char *out, u_long *ordering, int fixedSlot, const GT3 *prim)
 {
     ProjectedVertex *v0 = &projected[prim->coords[0]], *v1 = &projected[prim->coords[1]], *v2 = &projected[prim->coords[2]];
@@ -670,9 +678,10 @@ static int DrawNearPrimitive(Object *object, int index, u_long *ordering, Poly p
         coords = prim.ft3->coords, count = 3, uv = &prim.ft3->u0, colours = &prim.ft3->colour;
         tsb = prim.ft3->tsb, cba = prim.ft3->cba;
         break;
-    case TypeGT3: /* the plain renderer draws it flat, in its first colour */
+    case TypeGT3: /* Preserve N64 corner lighting through near-plane clipping. */
         coords = prim.gt3->coords, count = 3, uv = &prim.gt3->u0, colours = prim.gt3->colour;
         tsb = prim.gt3->tsb, cba = prim.gt3->cba;
+        gouraud = GouraudTextured(DRAW_PLAIN, (unsigned short)tsb);
         break;
     case TypeFT4:
         coords = prim.ft4->coords, count = 4, uv = &prim.ft4->u0, colours = &prim.ft4->colour;
@@ -681,6 +690,7 @@ static int DrawNearPrimitive(Object *object, int index, u_long *ordering, Poly p
     case TypeGT4:
         coords = prim.gt4->coords, count = 4, uv = &prim.gt4->u0, colours = prim.gt4->colour;
         tsb = prim.gt4->tsb, cba = prim.gt4->cba;
+        gouraud = GouraudTextured(DRAW_PLAIN, (unsigned short)tsb);
         break;
     case TypeG3: coords = prim.g3->coords, count = 3, colours = prim.g3->colour, gouraud = 1; break;
     case TypeG4: coords = prim.g4->coords, count = 4, colours = prim.g4->colour, gouraud = 1; break;
@@ -784,7 +794,6 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
     char   *out;
     char   *primitive;
     int     count, index = 0;
-    int     gouraud = GouraudColours(kind);
     unsigned char *drawnFlags = NULL;
     const unsigned char *skip = NULL;
 
@@ -821,7 +830,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         culled = 0;
         switch ((u_short)prim.prim->type) {
         case TypeGT3:
-            if (gouraud) {
+            if (GouraudTextured(kind, (unsigned short)prim.gt3->tsb)) {
                 out = DrawGouraudTexturedTriangle(kind, out, ordering, fixedSlot, prim.gt3);
             } else {
                 out = DrawTexturedTriangle(kind, out, ordering, fixedSlot, (const FT3 *)prim.gt3, &prim.gt3->colour[0]);
@@ -829,7 +838,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             primitive += sizeof(GT3);
             break;
         case TypeGT4:
-            if (gouraud) {
+            if (GouraudTextured(kind, (unsigned short)prim.gt4->tsb)) {
                 out = DrawGouraudTexturedQuad(kind, out, ordering, fixedSlot, prim.gt4);
             } else {
                 out = DrawTexturedQuad(kind, out, ordering, fixedSlot, (const FT4 *)prim.gt4, &prim.gt4->colour[0]);

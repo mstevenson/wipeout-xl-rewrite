@@ -89,6 +89,24 @@ int main(void)
         assert(DrawNearPrimitive(&object, 0, ordering, prim));
         assert(linked == 1 && arena.gt.code == 0x34);
         assert(arena.gt.r0 == 40 && arena.gt.r1 == 40 && arena.gt.r2 == 40);
+        /* The same geometry with an imported material retains all three colours. */
+        smooth.tsb = PORT_TPAGE_N64 | 17;
+        linked = 0;
+        assert(DrawNearPrimitive(&object, 0, ordering, prim));
+        assert(arena.gt.r0 == 40 && arena.gt.r1 == 80 && arena.gt.r2 == 120);
+        assert(arena.gt.tpage == (PORT_TPAGE_N64 | 17));
+        GT4 quad = {0};
+        quad.type = TypeGT4; quad.tsb = smooth.tsb;
+        memcpy(quad.coords, face.coords, sizeof(quad.coords));
+        for (int i = 0; i < 4; i++) quad.colour[i].r = 20 + i * 30;
+        prim.gt4 = &quad; linked = 0;
+        assert(DrawNearPrimitive(&object, 0, ordering, prim));
+        assert(arena.gt.r0 == 20 && arena.gt.r1 == 50 && arena.gt.r2 == 80 && arena.gt.r3 == 110);
+        /* Plain, sky and far passes share the same material decision; PS1 stays flat. */
+        assert(GouraudTextured(DRAW_PLAIN, quad.tsb));
+        assert(GouraudTextured(DRAW_FIXED, quad.tsb));
+        assert(!GouraudTextured(DRAW_PLAIN, 17));
+        assert(!GouraudTextured(DRAW_FIXED, 17));
     }
     prim.ft4 = &face;
     /* Fully hidden polygons and invalid vertex references must still be rejected. */
@@ -127,6 +145,7 @@ int main(void)
                arena.bytes + sizeof(POLY_GT3));
         assert(linked == 1 && packetSlot == ordering + 8191 && ((POLY_GT3 *)arena.bytes)->code == 0x34);
     }
+    puts("N64 material preserves near-plane and normal/sky Gouraud policy: OK");
     puts("near scenery keeps PS1 quad geometry and original vertex positions: OK");
     puts("1995 sky keeps Gouraud corner colours in the fixed background slot: OK");
     return 0;

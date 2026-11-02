@@ -68,6 +68,8 @@ typedef struct GpuDrawState {
     int windowMaskX, windowMaskY, windowOffsetX, windowOffsetY; /* texture window, in 8-texel units */
     int dither;
     int fade;          /* the port's distance fade: the vertices' alpha (GpuVertex.a) blends it out */
+    /* Append new fields here so the frame recorder's first 14 saved fields keep their layout. */
+    int filtered;      /* N64 image: blend neighbouring texture colours to smooth pixel boundaries */
 } GpuDrawState;
 
 int GpuInit(void);

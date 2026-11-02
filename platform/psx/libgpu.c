@@ -20,6 +20,7 @@
 #include "../trace.h"
 #include "framecap.h"
 #include "gpu.h"
+#include "../n64_material.h"
 #include "../link.h"
 #include "../settings.h"
 #include "gte.h"
@@ -224,7 +225,8 @@ static uint32_t DrawModeWord(int dfe, int dtd, int tpage)
         }
     } else {
         mode = dtd ? 0xE1000200u : 0xE1000000u;
-        page = (uint32_t)tpage & 0x9FF; /* (bit 11: the second half of video memory, gpu.h) */
+        /* Preserve both the extra video-memory bit (11) and the N64 rendering marker (14). */
+        page = (uint32_t)tpage & (0x9FF | PORT_TPAGE_N64);
         if (dfe) {
             page |= 0x400;
         }
@@ -304,7 +306,8 @@ static void ApplyArea(void)
    depth (bits 0-8); dithering and drawing to the display stay as E1 set them. */
 static void SetTexpage(uint32_t value)
 {
-    state.texpage = (state.texpage & ~0x9FFu) | (value & 0x9FF);
+    /* Replace the N64 marker as well as the page address, so a following PS1 image cannot inherit filtering. */
+    state.texpage = (state.texpage & ~(0x9FFu | PORT_TPAGE_N64)) | (value & (0x9FF | PORT_TPAGE_N64));
 }
 
 /* GP0 E1-E6 */
@@ -1292,6 +1295,7 @@ static void TextureFromPage(GpuDrawState *draw, uint32_t page)
     draw->pageX = (int)(page & 0xF) * 64;
     draw->pageY = (int)((page >> 4) & 1) * 256 + (int)((page >> 11) & 1) * VRAM_HEIGHT; /* (the second half: gpu.h) */
     draw->depth = (int)((page >> 7) & 3);
+    draw->filtered = (page & PORT_TPAGE_N64) != 0;
 }
 
 static void StateFor(GpuDrawState *draw, int textured, int semi, int raw)

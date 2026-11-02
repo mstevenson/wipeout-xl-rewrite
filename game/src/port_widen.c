@@ -1,6 +1,7 @@
 /* Port: widening of 32-bit file records to native records. See port_widen.h. */
 #include "functions.h"
 #include "port_widen.h"
+#include "../../platform/n64_material.h"
 
 extern char errorString[];
 
@@ -197,7 +198,28 @@ static int TextureOffset(int type)
     return 0;
 }
 
-int PortPrmShiftTextures(char *file, int length, int shift)
+/* Rescale textured RGB from N64 to PS1 tint; preserve untextured colours and the fourth byte. */
+static void NormalizeN64Primitive(unsigned char *p, int type)
+{
+    int offset = 0, count = 1;
+    switch (type) {
+    case TypeFT3: offset = offsetof(FT3, colour); break;
+    case TypeFT4: offset = offsetof(FT4, colour); break;
+    case TypeGT3: offset = offsetof(GT3, colour); count = 3; break;
+    case TypeGT4: offset = offsetof(GT4, colour); count = 4; break;
+    case TypeLSFT3: offset = offsetof(LSFT3, colour); break;
+    case TypeLSFT4: offset = offsetof(LSFT4, colour); break;
+    case TypeLSGT3: offset = offsetof(LSGT3, colour); count = 3; break;
+    case TypeLSGT4: offset = offsetof(LSGT4, colour); count = 4; break;
+    case TypeTSPR: case TypeBSPR: offset = offsetof(SPR, colour); break;
+    default: return;
+    }
+    for (int i = 0; i < count; i++)
+        for (int c = 0; c < 3; c++)
+            p[offset + 4 * i + c] = PortN64Modulation(p[offset + 4 * i + c]);
+}
+
+static int ConvertPrm(char *file, int length, int shift, int n64)
 {
     unsigned char *in = (unsigned char *)file;
     const PortRecordTable *objectTable = &PortRecord_Object;
@@ -226,11 +248,22 @@ int PortPrmShiftTextures(char *file, int length, int shift)
                 in[end + at] = (unsigned char)(texture >> 8);
                 in[end + at + 1] = (unsigned char)texture;
             }
+            if (n64) NormalizeN64Primitive(in + end, type);
             end += size;
         }
         pos = end;
     }
     return pos == length;
+}
+
+int PortPrmShiftTextures(char *file, int length, int shift)
+{
+    return ConvertPrm(file, length, shift, 0);
+}
+
+int PortPrmNormalizeN64(char *file, int length)
+{
+    return ConvertPrm(file, length, 0, 1);
 }
 
 int portLastPrmImageLength;

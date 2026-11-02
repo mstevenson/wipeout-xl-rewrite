@@ -1,5 +1,6 @@
 #include "functions.h"
 #include "tim.h"
+#include "../../platform/n64_material.h"
 #include "ships.h"
 #include "portorig.h" /* Port: the original Wipeout's and Wipeout 64's tracks */
 
@@ -325,6 +326,8 @@ Texture *NewLoadTexture(struct Tim *tim, int context, int scene)
     } else {
         texture = 0;
     }
+    /* Carry per-image N64 shading/filtering provenance from TIM to texture page. */
+    if (texture && (tim->flags & PORT_TIM_N64)) texture->tsb |= PORT_TPAGE_N64;
     return texture;
 }
 

@@ -81,7 +81,8 @@ endif()
 # the sound, disc, controller and memory card libraries are the psxio target of platform/psx/CMakeLists.txt).
 set(PSXIO_SDL ON CACHE BOOL "Audio output and input through SDL3")
 add_subdirectory(platform/psx psxio)
-file(GLOB PLATFORM_TOP_SOURCES ${CMAKE_SOURCE_DIR}/platform/*.c)
+# Recheck this list when building so newly added platform sources are compiled too.
+file(GLOB PLATFORM_TOP_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/platform/*.c)
 if(EMSCRIPTEN)
     list(REMOVE_ITEM PLATFORM_TOP_SOURCES ${CMAKE_SOURCE_DIR}/platform/update_http.c)
 endif()

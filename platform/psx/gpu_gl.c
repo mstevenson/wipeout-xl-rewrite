@@ -38,6 +38,7 @@
 #include <string.h>
 
 #include "gpu.h"
+#include "../n64_material.h"
 #include "../hdtex.h"
 #include "../link.h"
 #include "../platform.h"
@@ -225,12 +226,14 @@ typedef struct BatchVertex {
     uint8_t window[4];  /* texture window: mask x, mask y, offset x, offset y */
     uint8_t mode[4];    /* textured, raw, colour depth */
     uint16_t hd[4];     /* HD texture: its part of the atlas, x, y, w, h (w 0: none) */
+    int16_t filterBounds[4]; /* full image's left/top/right/bottom texels; prevents sampling adjacent images */
     int16_t hdTexels[4]; /* ... the texels of the page it covers, x, y, w, h */
 } BatchVertex;
 static BatchVertex batch[BATCH_VERTICES];
+static int primitiveFilterBounds[4];
 static int batchCount;
 static GpuDrawState batchState;
-static int batchDepth; /* a vertex of the batch can write the depth buffer (else Flush leaves out that pass) */
+static int batchDepth; /* at least one polygon needs depth writes to hide surfaces behind it */
 
 /* The shaders are written once for OpenGL 3.3 and OpenGL ES 3 (WebGL 2): Compile() puts the version
    line in front (PORT_GLSL_VERSION); ES needs the precision of floats, integers and integer textures. */
@@ -243,6 +246,9 @@ static const char *vertexSource =
     "in uvec4 modeIn;\n"
     "in uvec4 hdIn;\n"
     "in ivec4 hdTexelsIn;\n"
+    "in ivec4 filterBoundsIn;\n"
+    "flat out ivec4 filterBounds;\n"
+    "flat out int filtered;\n"
     "flat out uvec4 hd;\n"
     "flat out ivec4 hdTexels;\n"
     "flat out ivec4 texturePage;\n"
@@ -277,6 +283,8 @@ static const char *vertexSource =
     "    vTexel = vec3(texel, 1.0);\n"
     "    hd = hdIn;\n"
     "    hdTexels = hdTexelsIn;\n"
+    "    filterBounds = filterBoundsIn;\n"
+    "    filtered = int((modeIn.w >> 1u) & 1u);\n"
     "}\n";
 
 /* mode: x = textured (0/1), y = raw, z = pass, w = depth
@@ -293,6 +301,8 @@ static const char *fragmentSource =
     "in vec4 vColour;\n"
     "in vec3 vTexel;\n"
     "flat in int semiMode;\n"
+    "flat in ivec4 filterBounds;\n"
+    "flat in int filtered;\n"
     "uniform usampler2D vram;\n"
     "uniform sampler2D glyphs;\n"
     "uniform sampler2D portPages;\n"
@@ -324,6 +334,89 @@ static const char *fragmentSource =
     "    else if (semiMode == 3) fragment = vec4(col * 0.25, 0.0);\n"      /* B + F/4 */
     "    else fragment = vec4(col, 0.0);\n"                               /* B + F; B - F (its own blend) */
     "}\n"
+    "ivec2 WindowUV(ivec2 uv) {\n"
+    "    uv = uv & 255;\n"
+    "    uv.x = (uv.x & ~(vWindow.x * 8)) | ((vWindow.z & vWindow.x) * 8);\n"
+    "    uv.y = (uv.y & ~(vWindow.y * 8)) | ((vWindow.w & vWindow.y) * 8);\n"
+    "    return uv;\n"
+    "}\n"
+    /* Resolve palette indices before filtering; retain the packed colour's semi-transparency bit. */
+    "uint NativeTexel(ivec2 uv) {\n"
+    "    if (mode.w == 0) {\n"
+    "        uint word = Fetch(texturePage.xy + ivec2(uv.x >> 2, uv.y));\n"
+    "        uint index = (word >> uint((uv.x & 3) * 4)) & 15u;\n"
+    "        return FetchClut(clut.xy + ivec2(int(index), 0));\n"
+    "    } else if (mode.w == 1) {\n"
+    "        uint word = Fetch(texturePage.xy + ivec2(uv.x >> 1, uv.y));\n"
+    "        uint index = (word >> uint((uv.x & 1) * 8)) & 255u;\n"
+    "        return FetchClut(clut.xy + ivec2(int(index), 0));\n"
+    "    }\n"
+    "    return Fetch(texturePage.xy + uv);\n"
+    "}\n"
+    /* Clamp filtered samples to the image's edges before looking up their colours. */
+    "vec4 NativeSample(ivec2 p) {\n"
+    "    ivec2 uv = clamp(WindowUV(clamp(p, filterBounds.xy, filterBounds.zw)), filterBounds.xy, filterBounds.zw);\n"
+    "    uint texel = NativeTexel(uv);\n"
+    "    if (texel == 0u) return vec4(0.0);\n"
+    "    vec3 rgb = vec3(float(texel & 31u), float((texel >> 5) & 31u), float((texel >> 10) & 31u)) * (8.0 / 255.0);\n"
+    "    return vec4(rgb, (texel & 0x8000u) != 0u ? 0.5 : 1.0);\n"
+    "}\n"
+    /* Alpha 0/0.5/1 labels transparent/semi/opaque texels; keep their PS1 blend contributions separate. */
+    "void FilterTap(vec4 sampleColour, float weight, inout vec4 opaque, inout vec4 semi) {\n"
+    "    if (sampleColour.a < 0.25) return;\n"
+    "    vec4 covered = vec4(sampleColour.rgb, 1.0) * weight;\n"
+    "    if (semiMode >= 0 && sampleColour.a < 0.75) semi += covered;\n"
+    "    else opaque += covered;\n"
+    "}\n"
+    /* N64 G_TF_BILERP: three-point filtering for native and HD images (docs/N64_RENDERING.md). */
+    "void FilteredTexture(vec2 t) {\n"
+    "    vec4 opaque = vec4(0.0), semi = vec4(0.0);\n"
+    "    vec2 at = t;\n"
+    "    bool useHd = false;\n"
+    "    if (hd.z > 0u) {\n"
+    "        vec2 into = vec2(WindowUV(ivec2(floor(t))) - hdTexels.xy) + fract(t);\n"
+    "        useHd = all(greaterThanEqual(into, vec2(0.0))) && all(lessThan(into, vec2(hdTexels.zw)));\n"
+    "        if (useHd) at = (into + 0.5) * vec2(hd.zw) / vec2(hdTexels.zw) - 0.5;\n"
+    "    }\n"
+    /* Quantize weights to 1/32 texel; retain the integer position for edge clamping. */
+    "    vec2 f = floor(fract(at) * 32.0) / 32.0;\n"
+    "    ivec2 base = ivec2(floor(at));\n"
+    "    bool lowerRight = f.x + f.y >= 1.0;\n"
+    /* Shared top-right/bottom-left diagonal; the third corner's weight vanishes there. */
+    "    vec3 weights = lowerRight ? vec3(f.x + f.y - 1.0, 1.0 - f.y, 1.0 - f.x)\n"
+    "                              : vec3(1.0 - f.x - f.y, f.x, f.y);\n"
+    "    for (int i = 0; i < 3; i++) {\n"
+    "        ivec2 corner = i == 0 ? (lowerRight ? ivec2(1) : ivec2(0))\n"
+    "                             : (i == 1 ? ivec2(1, 0) : ivec2(0, 1));\n"
+    "        ivec2 p = base + corner;\n"
+    "        vec4 sampleColour;\n"
+    "        if (useHd) sampleColour = texelFetch(hdAtlas, ivec2(hd.xy) + clamp(p, ivec2(0), ivec2(hd.zw) - 1), 0);\n"
+    "        else sampleColour = NativeSample(p);\n"
+    "        FilterTap(sampleColour, weights[i], opaque, semi);\n"
+    "    }\n"
+    "    float fade = vColour.a;\n"
+    /* Only fully opaque, unfaded coverage writes depth; filtered edges leave the background visible. */
+    "    if (mode.z == 3) {\n"
+    "        if (opaque.a < 0.999 || fade < 0.999) discard;\n"
+    "        fragment = vec4(0.0);\n"
+    "        return;\n"
+    "    }\n"
+    /* RGB is premultiplied by coverage: clamp tinted colours to coverage, not 1. */
+    "    if (mode.y == 0) {\n"
+    "        vec3 tint = vColour.rgb * (255.0 / 128.0);\n"
+    "        opaque.rgb = min(opaque.rgb * tint, vec3(opaque.a));\n"
+    "        semi.rgb = min(semi.rgb * tint, vec3(semi.a));\n"
+    "    }\n"
+    "    if (mode.z == 1) semi = vec4(0.0);\n"
+    "    if (mode.z == 2) opaque = vec4(0.0);\n"
+    "    if (opaque.a + semi.a < 0.004) discard;\n"
+    "    if (semiMode == 0) semi *= 0.5;\n"
+    "    else {\n"
+    "        if (semiMode == 3) semi.rgb *= 0.25;\n"
+    "        semi.a = 0.0;\n"
+    "    }\n"
+    "    fragment = (opaque + semi) * fade;\n"
+    "}\n"
     "void main() {\n"
     "    vec3 c = vColour.rgb;\n"
     "    float fade = vColour.a;\n"
@@ -352,9 +445,8 @@ static const char *fragmentSource =
     "        Out(rgb, g.a, semiMode >= 0);\n"
     "        return;\n"
     "    }\n"
-    "    ivec2 uv = ivec2(floor(t)) & 255;\n"
-    "    uv.x = (uv.x & ~(vWindow.x * 8)) | ((vWindow.z & vWindow.x) * 8);\n"
-    "    uv.y = (uv.y & ~(vWindow.y * 8)) | ((vWindow.w & vWindow.y) * 8);\n"
+    "    if (filtered != 0) { FilteredTexture(t); return; }\n"
+    "    ivec2 uv = WindowUV(ivec2(floor(t)));\n"
     /* the HD texture over the texels it covers: alpha 0 transparent, 0.5 semi-transparent, 1 opaque */
     "    if (hd.z > 0u) {\n"
     "        vec2 into = vec2(uv - hdTexels.xy) + (t - floor(t));\n"
@@ -368,18 +460,7 @@ static const char *fragmentSource =
     "            return;\n"
     "        }\n"
     "    }\n"
-    "    uint texel;\n"
-    "    if (mode.w == 0) {\n"
-    "        uint word = Fetch(texturePage.xy + ivec2(uv.x >> 2, uv.y));\n"
-    "        uint index = (word >> uint((uv.x & 3) * 4)) & 15u;\n"
-    "        texel = FetchClut(clut.xy + ivec2(int(index), 0));\n"
-    "    } else if (mode.w == 1) {\n"
-    "        uint word = Fetch(texturePage.xy + ivec2(uv.x >> 1, uv.y));\n"
-    "        uint index = (word >> uint((uv.x & 1) * 8)) & 255u;\n"
-    "        texel = FetchClut(clut.xy + ivec2(int(index), 0));\n"
-    "    } else {\n"
-    "        texel = Fetch(texturePage.xy + uv);\n"
-    "    }\n"
+    "    uint texel = NativeTexel(uv);\n"
     "    if (texel == 0u) discard;\n"
     "    bool semi = (texel & 0x8000u) != 0u;\n"
     "    vec3 t8 = vec3(float(texel & 31u), float((texel >> 5) & 31u), float((texel >> 10) & 31u)) * 8.0 / 255.0;\n"
@@ -504,6 +585,7 @@ int GpuInit(void)
     glBindAttribLocation(program, 5, "modeIn");
     glBindAttribLocation(program, 6, "hdIn");
     glBindAttribLocation(program, 7, "hdTexelsIn");
+    glBindAttribLocation(program, 8, "filterBoundsIn");
     glLinkProgram(program);
     glGetProgramiv(program, GL_LINK_STATUS, &ok);
     if (!ok) {
@@ -548,6 +630,9 @@ int GpuInit(void)
     glVertexAttribIPointer(6, 4, GL_UNSIGNED_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, hd));
     glEnableVertexAttribArray(7);
     glVertexAttribIPointer(7, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, hdTexels));
+
+    glEnableVertexAttribArray(8);
+    glVertexAttribIPointer(8, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, filterBounds));
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -876,14 +961,13 @@ static void BindTarget(void)
     drawnSincePresent |= !interpolatingDraw;
 }
 
-/* Whether two primitives can be drawn in one batch: the same blending and passes (what else their states say
-   goes with the vertices). */
-/* Whether a primitive is drawn over what is behind (semi-transparent, faded, or glyphs with their coverage). */
+/* Filtered edges need blending even on otherwise opaque polygons. */
 static int Blended(const GpuDrawState *s)
 {
-    return s->semi >= 0 || s->fade || (s->textured && s->depth == 3);
+    return s->semi >= 0 || s->fade || (s->textured && (s->depth == 3 || s->filtered));
 }
 
+/* Batch by blending and passes; other state travels with each vertex. */
 static int SameState(const GpuDrawState *a, const GpuDrawState *b)
 {
     /* (the console's subtraction is a blend of its own; the opaque are drawn without blending, which is cheaper) */
@@ -948,7 +1032,8 @@ static void Flush(void)
        decides. */
     if (!portSettings.consoleDepth) {
         glEnable(GL_DEPTH_TEST);
-        if (batchDepth && !(batchState.semi >= 0 && !batchState.textured)) {
+        /* Check the whole batch: a leading translucent effect must not suppress an opaque road's depth. */
+        if (batchDepth) {
             glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
             glDepthMask(GL_TRUE);
             glDepthFunc(GL_LESS);
@@ -1151,7 +1236,7 @@ static void Add(const GpuVertex *v)
     out->x = v->x;
     out->y = v->y;
     out->w = v->w > 0.0f && v->noDepth ? -v->w : v->w; /* (the vertex shader's position.z) */
-    batchDepth |= out->w > 0.0f && v->a == 255;
+    batchDepth |= out->w > 0.0f && v->a == 255 && (primitiveState.textured || primitiveState.semi < 0);
     out->r = v->r / 255.0f;
     out->g = v->g / 255.0f;
     out->b = v->b / 255.0f;
@@ -1169,8 +1254,9 @@ static void Add(const GpuVertex *v)
     out->mode[0] = (uint8_t)primitiveState.textured;
     out->mode[1] = (uint8_t)primitiveState.raw;
     out->mode[2] = (uint8_t)primitiveState.depth;
-    /* (the vertex shader's: a polygon seen from behind; the blending) */
-    out->mode[3] = (uint8_t)((v->backFacing || v->exactDepth) | (primitiveState.semi + 1) << 4);
+    /* Shader flags: bit 0 depth bias, bit 1 N64 filtering, bits 4-7 blend mode + 1. */
+    out->mode[3] = (uint8_t)((v->backFacing || v->exactDepth) | (primitiveState.filtered << 1) | (primitiveState.semi + 1) << 4);
+    for (int i = 0; i < 4; i++) out->filterBounds[i] = (int16_t)primitiveFilterBounds[i];
     memcpy(out->hd, primitiveHd, sizeof(out->hd));
     memcpy(out->hdTexels, primitiveHdTexels, sizeof(out->hdTexels));
 }
@@ -1240,6 +1326,13 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
               maxX >= (float)SCREEN_COLUMNS;
     /* ... and a menu's backdrop is enlarged about the middle of the draw area to fill them, keeping its shape */
     backdrop = backdropNext && areaWide && areaX == 0 && areaW == SCREEN_COLUMNS && !perspective && !GpuRaceWide();
+    /* Filter only with known image bounds, preventing bleed from adjacent images. */
+    memset(primitiveFilterBounds, 0, sizeof(primitiveFilterBounds));
+    if (faded.filtered) {
+        faded.filtered = faded.textured && faded.depth < 3 &&
+            PortN64TextureBounds(faded.pageX, faded.pageY, faded.depth, faded.clutX, faded.clutY,
+                                 vertices[0].u, vertices[0].v, primitiveFilterBounds);
+    }
     FindHd(state, vertices, count);
     Begin(state, count);
     for (i = 0; i < count; i++) {
