@@ -71,7 +71,7 @@ int main()
     focusSelector = true; Frame();
     assert(portSettings.render.selection == RENDER_AUTO);
     Layout(2);
-    Activate("Quantize vertex positions", RENDER_PS1);
+    Activate("PS1 vertex snapping", RENDER_PS1);
     assert(!portSettings.render.ps1.quantizeVertices && portSettings.render.ps1.dither);
     SelectRenderer(true);
     assert(RenderCurrent()->id == RENDER_PC);
@@ -101,7 +101,7 @@ int main()
     }
     Activate("Use N64 renderer for Wipeout 64 tracks");
     assert(portSettings.render.selection == RENDER_AUTO && RenderCurrent()->id == RENDER_N64);
-    Activate("Quantize vertex positions", RENDER_PS1);
+    Activate("PS1 vertex snapping", RENDER_PS1);
     assert(portSettings.render.ps1.quantizeVertices);
     n64Track = 0; RenderCommit(); Frame();
     assert(RenderCurrent()->id == RENDER_PS1);

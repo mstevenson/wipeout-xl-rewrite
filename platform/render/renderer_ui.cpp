@@ -14,7 +14,13 @@ static bool Check(const char *label, int *value)
 
 static bool Ps1Settings(Ps1RenderSettings *s)
 {
-    bool changed = Check("Quantize vertex positions", &s->quantizeVertices);
+    bool changed = Check("PS1 vertex snapping", &s->quantizeVertices);
+    if (ImGui::BeginItemTooltip()) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35);
+        ImGui::TextUnformatted("Snaps projected vertices to whole pixels in screen space, reproducing PS1-style geometry jitter. Disable for smoother movement.");
+        ImGui::PopTextWrapPos();
+        ImGui::EndTooltip();
+    }
     changed |= Check("Affine texture mapping", &s->affineTextures);
     changed |= Check("5-bit colour precision", &s->colourPrecision);
     ImGui::BeginDisabled(!s->colourPrecision);

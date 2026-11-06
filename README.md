@@ -180,7 +180,7 @@ unchecked, those tracks also use the global renderer. The selected PlayStation/P
 settings and N64 settings appear side by side, stacking in narrow windows.
 N64 settings remain visible, dimmed when the checkbox is off. Each profile has
 independently saved controls and its own restore-defaults button.
-PS1 exposes vertex quantization, affine mapping, colour precision,
+PS1 exposes vertex snapping, affine mapping, colour precision,
 dithering and optional depth buffering; PC exposes filtering, lighting and depth;
 N64 exposes three-point filtering, RGB5 precision, dithering and VI filters;
 its depth buffering is always enabled.
