@@ -120,6 +120,7 @@ static void ProfileIsolation(void)
                 assert(PortRenderGeometry().lightAllVertices == (id == RENDER_PC && enabled));
                 RenderGeometry geometry = PortRenderGeometry();
                 assert(geometry.alternateQuad == (id == RENDER_PC));
+                assert(geometry.worldBillboards == (id == RENDER_PC));
                 assert(geometry.gouraudObjects == (id == RENDER_PC && enabled));
                 assert(geometry.lightFormat == (id == RENDER_PC && enabled ? RENDER_LIGHT_RGB8 : RENDER_LIGHT_PS1));
             }

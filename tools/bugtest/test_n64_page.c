@@ -4,6 +4,8 @@
 #include <stddef.h>
 _Static_assert(offsetof(GpuDrawState, fade) == 13 * sizeof(int), "frame recording layout");
 PortSettings portSettings = {.render = RENDER_DEFAULTS};
+int portPal;
+int PortScreenMargin(void) { return 0; }
 int PortOriginalTrackIs64(void) { return 0; }
 static int frameClears, flushes;
 void GpuFlush(void) { flushes++; }
@@ -120,6 +122,39 @@ static void ClippedInterpolation(void)
     puts("Near clipping respects committed renderer RGB/UV interpolation, perspective fade and eye-plane crossings: OK");
 }
 
+static void WorldBillboardClip(void)
+{
+    POLY_FT4 packet = {0};
+    const uint32_t *words[] = {(const uint32_t *)&packet.x0, (const uint32_t *)&packet.x1,
+                              (const uint32_t *)&packet.x2, (const uint32_t *)&packet.x3};
+    GpuVertex v[4] = {0};
+    GpuDrawState draw = {.textured = 1, .depth = 2, .semi = -1};
+    portSettings.render.selection = RENDER_PC; RenderCommit();
+    GteSetExactDepth(1);
+    for (int i = 0; i < 4; i++) {
+        double x = i & 1 ? 20 : -20, y = i < 2 ? -20 : 20, z = i < 2 ? -100 : 200;
+        uint32_t handle = GteRecordProjection(0, 0, 0, (float)z, 1);
+        GteRecordView(handle, x, y, z);
+        GteBindPrecise(words[i], handle);
+    }
+    GteSetExactDepth(0);
+    assert(Vertices(v, words, 4) == 15 && GteResolvedBound());
+    for (int i = 0; i < 4; i++) {
+        assert(v[i].world && v[i].exactDepth && !v[i].noDepth);
+        v[i].u = i & 1 ? 255 : 0;
+        v[i].v = i < 2 ? 0 : 255;
+    }
+    clippedCount = 0;
+    assert(NearCut(&draw, v, 4, AlternateQuad(&draw, v, 4, (const uint32_t *)&packet)));
+    assert(clippedCount == 9);
+    for (int i = 0; i < clippedCount; i++) {
+        assert(clipped[i].w >= 16 && clipped[i].world && clipped[i].exactDepth && !clipped[i].noDepth);
+        if (clipped[i].w == 16) assert(SDL_fabsf(clipped[i].v - 98.6f) < .001f);
+    }
+    resolvedMask = 0;
+    puts("PC billboard bound corners retain perspective UVs and depth through eye-plane clipping: OK");
+}
+
 static void RendererBoundaries(void)
 {
     u_long table[1];
@@ -208,5 +243,6 @@ int main(void)
     }
     ImportedQuad();
     ClippedInterpolation();
+    WorldBillboardClip();
     return 0;
 }

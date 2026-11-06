@@ -18,6 +18,8 @@
                          tinted by `colour`, and everything is linked 0x78 slots nearer.
      AsmDrawObjectFixed  for the sky: XL draws it flat, while the original Wipeout's guest skies keep
                          their corner colours. All use one fixed slot, facing tests and no sprites. */
+#include <math.h>
+
 #include "functions.h"
 #include "drawasm.h"
 #include "../../platform/psx/gte.h"
@@ -639,6 +641,89 @@ static void CameraSpace(const SVECTOR *v, double out[3])
     }
 }
 
+/* Port: the PC's LoadPrmCommon/BuildQuads makes upright object-space billboards, with
+   texture-sized dimensions and the anchor at the bottom for both sprite types. Keep
+   its XZ facing calculation in model units, then project each corner with its own
+   depth. Bound view positions also let libgpu clip and interpolate the original quad. */
+static char *DrawWorldSprite(Object *object, int index, char *out, u_long *ordering, const SPR *prim)
+{
+    PortView view;
+    double centre[3], cameraX, cameraZ, matrixX, matrixZ, length, sine, cosine;
+    double corner[4][3], halfWidth, height, depth = 0;
+    const SVECTOR *position;
+    Texture *texture;
+    POLY_FT4 *poly = (POLY_FT4 *)out;
+    short *xy[4] = {&poly->x0, &poly->x1, &poly->x2, &poly->x3};
+    int i, k, inFront = 0, slot;
+
+    if (forceReject || (u_short)prim->coord >= (u_short)object->vertexCount) {
+        return out;
+    }
+    position = &object->vertices[prim->coord];
+    texture = textureTable[prim->texture];
+    if (farView) {
+        view = *farView;
+    } else {
+        for (i = 0; i < 9; i++) {
+            view.m[i / 3][i % 3] = (short)((u_int)GteReadControl(i / 2) >> ((i & 1) * 16)) / 4096.0;
+        }
+        for (i = 0; i < 3; i++) view.t[i] = GteReadControl(5 + i);
+    }
+    for (i = 0; i < 3; i++) {
+        centre[i] = view.t[i] + view.m[i][0] * position->vx + view.m[i][1] * position->vy +
+                    view.m[i][2] * position->vz;
+    }
+    length = hypot(centre[0], centre[2]);
+    cameraX = length > 0 ? centre[0] / length : 0;
+    cameraZ = length > 0 ? centre[2] / length : 1;
+    length = hypot(view.m[0][0], view.m[2][0]);
+    matrixX = length > 0 ? view.m[0][0] / length : 1;
+    matrixZ = length > 0 ? -view.m[2][0] / length : 0;
+    sine = -(matrixZ * cameraX + matrixX * cameraZ);
+    cosine = matrixZ * cameraZ - matrixX * cameraX;
+    /* LoadPrmCommon doubles SPR.width into a short; BuildQuads offsets each side by
+       2*width*textureW/256. textureW is the TIM's stored word width, not its texel width. */
+    halfWidth = (double)(short)(prim->width * 2) * texture->textureW / 128.0;
+    height = -(double)prim->height * texture->textureH / 256.0;
+    for (i = 0; i < 4; i++) {
+        double side = i & 1 ? halfWidth : -halfWidth;
+        double x = side * sine, y = i < 2 ? height : 0, z = -side * cosine;
+
+        for (k = 0; k < 3; k++) {
+            corner[i][k] = centre[k] + view.m[k][0] * x + view.m[k][1] * y + view.m[k][2] * z;
+        }
+        inFront |= corner[i][2] >= PORT_FAR_NEAR;
+        depth += corner[i][2] * 0.25;
+    }
+    if (!inFront) {
+        return out;
+    }
+    /* PC-authored 3D sprites participate in the depth buffer without the PS1 model slack. */
+    GteSetExactDepth(1);
+    GteSetN64((object->flags & PORT_OBJECT_N64) != 0);
+    for (i = 0; i < 4; i++) {
+        PortFarVertex point;
+
+        GteKeyNext(0, GteKeyMix(GteKeyMix(currentDrawing, 0x10000u + (u_int)index), (uint64_t)i));
+        PortFarProjectAny(corner[i][0], corner[i][1], corner[i][2], &point);
+        StoreScreenXY(xy[i], xy[i] + 1, point.screen);
+        GteBindPrecise(xy[i], point.handle);
+    }
+    GteSetExactDepth(0);
+    SetRgb(&poly->r0, &poly->g0, &poly->b0, &prim->colour);
+    ((u_char *)poly)[3] = 9;
+    poly->code = 0x2C;
+    poly->tpage = texture->tsb;
+    poly->clut = texture->cba;
+    poly->u0 = (u_char)texture->u0; poly->v0 = (u_char)texture->v0;
+    poly->u1 = (u_char)texture->u1; poly->v1 = (u_char)texture->v1;
+    poly->u2 = (u_char)texture->u2; poly->v2 = (u_char)texture->v2;
+    poly->u3 = (u_char)texture->u3; poly->v3 = (u_char)texture->v3;
+    slot = depth < 0 ? 0 : depth >= 32760 ? 8190 : (int)(depth / 4);
+    AddPrim(farView ? PortFarSlot((int)(depth / 4), depth) : ordering + slot, poly);
+    return out + sizeof(POLY_FT4);
+}
+
 typedef struct NearCorner {
     double   c[8];   /* camera x, y, z, u, v, r, g, b */
     int      vertex; /* the object's vertex */
@@ -936,7 +1021,11 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             if (kind == DRAW_FIXED) {
                 goto finished;
             }
-            out = DrawSprite(kind, out, ordering, roll, prim.spr, prim.prim->type == TypeTSPR);
+            if (geometry.worldBillboards) { /* Port: 3D billboard geometry is independent of lighting/depth toggles. */
+                out = DrawWorldSprite(object, index, out, ordering, prim.spr);
+            } else {
+                out = DrawSprite(kind, out, ordering, roll, prim.spr, prim.prim->type == TypeTSPR);
+            }
             primitive += sizeof(SPR);
             break;
         default:

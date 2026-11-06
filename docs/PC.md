@@ -86,6 +86,12 @@ The reference is the Windows Direct3D renderer in
   Gouraud shading, 255-neutral modulation, depth testing/writes, no specular light.
 - `ships.c` (`AddShipRenderObjects`) and `render.c` (`ADD_VERTEX`): road colour
   replaces every ship corner's colour, unlike PS1's flat-textured-only override.
+- `scene.c` (`LoadPrmCommon`) and `render.c` (`BuildQuads`): both sprite types
+  become upright object-space quads rooted at their anchor, sized from the
+  sprite and TIM dimensions. PC rendering projects and clips their individual
+  corners with perspective UVs and depth testing/writes; lighting, filtering and
+  depth toggles do not change their geometry. PS1 keeps its affine screen-space
+  sprites and ordering-table visibility; HUD geometry and brightness are unchanged.
 - `trackasm.c` (`TRACK_CORNER`): constant face colour and diagonal 0–2, equivalent
   to the PS1 packet's 1–2 after its first two corners swap.
 

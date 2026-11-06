@@ -11,6 +11,7 @@ typedef struct RenderGeometry {
     int gouraudObjects;   /* retain textured corner colours in the plain/sky passes */
     int lightAllVertices; /* replace every lit object's emitted corner colour */
     int lightFormat;      /* RENDER_LIGHT_* expected for shared object lighting */
+    int worldBillboards;  /* upright 3D sprite quads instead of screen-space sprite arithmetic */
 } RenderGeometry;
 RenderGeometry PortRenderGeometry(void);
 #ifdef __cplusplus

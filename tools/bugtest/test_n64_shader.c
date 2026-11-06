@@ -341,6 +341,107 @@ static void DepthTriangle(const GpuDrawState *state, float x, float depth, int r
     v.x -= 2; v.y += 2; Add(&v, style.shade);
 }
 
+/* Affine world primitives and HUD share zero-depth transport, but only the former use PC tint. */
+static void BillboardModulation(void)
+{
+    RenderSettings saved = portSettings.render;
+    const float full = 248.0f / 255.0f;
+    words[0] = words[1] = words[1024] = words[1025] = 0x7fff;
+    Upload();
+    for (int id = RENDER_PS1; id <= RENDER_PC; id++) {
+        for (int filtered = 0; filtered < 2; filtered++) {
+            for (int depth = 0; depth < 2; depth++) {
+                portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+                portSettings.render.selection = (RendererId)id;
+                portSettings.render.ps1.colourPrecision = 0;
+                portSettings.render.ps1.depth = portSettings.render.pc.depth = depth;
+                portSettings.render.pc.bilinear = filtered;
+                RenderCommit();
+                for (int ui = 0; ui < 2; ui++) {
+                    RenderMaterial material = {.textured = 1, .ui = ui};
+                    RenderStyle style = RenderPrepare(RenderCurrent(), &material);
+                    GpuDrawState draw = {.textured = 1, .depth = 2, .semi = -1, .filtered = style.filter};
+                    GpuVertex v = {.y = 100, .r = 128, .g = 128, .b = 128, .a = 255,
+                                   .u = .5f, .v = .5f, .world = !ui};
+                    float pixel[4], z;
+                    glDisable(GL_SCISSOR_TEST); glDepthMask(GL_TRUE);
+                    glClearColor(0, 0, 0, 1); glClearDepth(.25);
+                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+                    Begin(&draw, 3);
+                    Add(&v, style.shade);
+                    v.x += 2; Add(&v, style.shade);
+                    v.x -= 2; v.y += 2; Add(&v, style.shade);
+                    assert(!batchDepth);
+                    for (int i = 0; i < 3; i++) assert(batch[i].w == 0);
+                    Flush();
+                    glReadPixels(0, 100, 1, 1, GL_RGBA, GL_FLOAT, pixel);
+                    glReadPixels(0, 100, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &z);
+                    float expected = id == RENDER_PC && !ui ? full * 128 / 255 : full;
+                    for (int c = 0; c < 3; c++) assert(fabsf(pixel[c] - expected) < .002f);
+                    assert(fabsf(pixel[3] - 1) < .002f && fabsf(z - .25f) < .00001f);
+                }
+            }
+        }
+    }
+    portSettings.render = saved; RenderCommit();
+    assert(glGetError() == GL_NO_ERROR);
+    puts("Affine world primitives use PC tint; HUD/PS1 brightness and depth-free transport are preserved: OK");
+}
+
+/* Exercise a tilted 3D billboard through the production shader and depth batches. */
+static void BillboardQuad(int textured, int ui, float topDepth, float bottomDepth)
+{
+    RenderMaterial material = {.textured = textured, .spatial = !ui, .ui = ui};
+    RenderStyle style = RenderPrepare(RenderCurrent(), &material);
+    GpuDrawState draw = {.textured = textured, .depth = 2, .semi = -1, .filtered = style.filter};
+    GpuVertex v[4] = {0};
+    static const int corners[] = {0, 1, 3, 0, 3, 2};
+    assert(!(style.shade & SHADE_AFFINE_UV));
+    for (int i = 0; i < 4; i++) {
+        v[i] = (GpuVertex){.x = (i & 1) * 8, .y = i < 2 ? 100 : 108,
+            .w = ui ? 0 : i < 2 ? topDepth : bottomDepth,
+            .r = textured ? (ui ? 128 : 255) : 0, .g = textured ? (ui ? 128 : 255) : 0,
+            .b = 255, .a = 255, .u = .5f, .v = ui || i < 2 ? .5f : 1.5f,
+            .world = !ui, .exactDepth = !ui};
+    }
+    Begin(&draw, 6);
+    for (int i = 0; i < 6; i++) Add(&v[corners[i]], style.shade);
+    Flush();
+}
+
+static void WorldBillboardDepth(void)
+{
+    RenderSettings saved = portSettings.render;
+    const float full = 248.0f / 255.0f;
+    portSettings.render.selection = RENDER_PC;
+    portSettings.render.pc = (PcRenderSettings){1, 1, 1};
+    RenderCommit();
+    words[0] = words[1] = 31;
+    words[1024] = words[1025] = 31 << 5;
+    Upload();
+    for (int scenario = 0; scenario < 4; scenario++) {
+        float pixel[4], z;
+        glDisable(GL_SCISSOR_TEST); glDepthMask(GL_TRUE);
+        glClearColor(0, 0, 0, 1); glClearDepth(1);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        if (scenario == 1) BillboardQuad(0, 0, 60, 60); /* nearer wall drawn first */
+        BillboardQuad(1, 0, 80, 160);
+        if (scenario == 2) BillboardQuad(0, 0, 220, 220); /* farther wall drawn afterwards */
+        if (scenario == 3) BillboardQuad(1, 1, 0, 0); /* HUD keeps 128-neutral brightness */
+        glReadPixels(1, 103, 1, 1, GL_RGBA, GL_FLOAT, pixel);
+        glReadPixels(1, 103, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &z);
+        /* At y=103.5, screen t=7/16. Perspective t is (t/160)/((1-t)/80+t/160)=7/25. */
+        float red = scenario == 1 ? 0 : scenario == 3 ? full : full * 18 / 25;
+        float green = scenario == 1 || scenario == 3 ? 0 : full * 7 / 25;
+        assert(fabsf(pixel[0] - red) < .002f && fabsf(pixel[1] - green) < .002f);
+        assert(fabsf(pixel[2] - (scenario == 1 ? 1 : 0)) < .002f);
+        assert(fabsf(z - (scenario == 1 ? 1 - 1.0f / 60 : 1 - 5.0f / 512)) < .00001f);
+    }
+    portSettings.render = saved; RenderCommit();
+    assert(glGetError() == GL_NO_ERROR);
+    puts("PC 3D billboards: perspective UVs, per-corner depth, occlusion in either draw order and unchanged HUD: OK");
+}
+
 /* Filtering needs alpha blending even on solid geometry. That must not let a
    leading translucent effect turn off depth writes for the rest of its batch. */
 static void DepthBatches(GLuint fbo, GLuint output, GLuint dummy)
@@ -436,6 +537,8 @@ static void DepthBatches(GLuint fbo, GLuint output, GLuint dummy)
     portSettings.render.selection = RENDER_PS1;
     portSettings.render.ps1.depth = 0; portSettings.render.pc.depth = 1; RenderCommit();
     assert(glGetError() == GL_NO_ERROR);
+    BillboardModulation();
+    WorldBillboardDepth();
     glDeleteRenderbuffers(1, &depth);
     puts("PC depth batches occlude correctly; PS1 and PC depth toggles are independent: OK");
 }

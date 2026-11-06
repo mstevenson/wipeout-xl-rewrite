@@ -8,8 +8,12 @@ before and after, and compares the disassembly function by function.  A function
 changed is listed with a diff; the edit is then reviewed (the usual reasons for a change:
 a prototype now converts an argument, a type was widened/narrowed on purpose).
 
-  tools/oracle32.py snapshot REF [NAME]   compile the tree at git REF (default HEAD) -> /tmp/oracle32/NAME
+  tools/oracle32.py snapshot REF [NAME] [FILES]   compile git REF (default HEAD) -> /tmp/oracle32/NAME
   tools/oracle32.py diff NAME [-v] [FILES]  compile the working tree and compare with snapshot NAME
+
+Use --renderer ps1 on both commands to specialize geometry calls with the actual
+PS1 renderer policy. This checks the PS1 path separately from runtime dispatch.
+Exit status: 0 identical/snapshot created, 1 differences, 2 incomplete or failed.
 
 Requires Homebrew LLVM (clang with the MIPS backend and llvm-objdump).
 """
@@ -20,10 +24,14 @@ import subprocess
 import sys
 import tempfile
 import difflib
+import json
+import shutil
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SUPPORT = ROOT / 'tools/oracle32'
 LLVM = Path('/opt/homebrew/opt/llvm/bin')
 OUT = Path('/tmp/oracle32')
 NOSP = bool(os.environ.get('ORACLE_NOSP'))   # ORACLE_NOSP=1: ignore stack slot numbers (locals were retyped)
@@ -34,28 +42,54 @@ FLAGS = ['-target', 'mipsel-unknown-none-elf', '-march=mips1', '-mabi=o32', OPT,
          # the sources are compiled as the PlayStation compiler accepted them
          '-Wno-implicit-function-declaration', '-Wno-int-conversion', '-Wno-incompatible-pointer-types',
          '-Wno-return-mismatch', '-Wno-incompatible-function-pointer-types', '-Wno-implicit-int']
+FLAGS += ['-G0', '-ffunction-sections', '-fdata-sections']
+HARNESS_FUNCTIONS = {'OraclePs1Prepare', 'OraclePs1Depth', 'OraclePs1Geometry', 'PortRenderGeometry'}
 
 
-def compile_tree(src_root, out_dir, only=None):
+def compile_tree(src_root, out_dir, only=None, renderer=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     files = sorted((src_root / 'game/src').glob('*.c'))
     if only:
         files = [f for f in files if f.name in only]
+        missing = only - {f.name for f in files}
+        if missing:
+            raise RuntimeError('source files not found: ' + ', '.join(sorted(missing)))
     # the port header is for the host; the oracle uses a 32-bit libc prototype stub instead
     def one(f):
         obj = out_dir / (f.stem + '.o')
-        cmd = [str(LLVM / 'clang')] + FLAGS + ['-include', str(ROOT / 'tools/oracle32/o32.h'),
-                                               '-isystem', str(ROOT / 'tools/oracle32/include'), '-I' + str(src_root / 'game/include'), '-c', str(f), '-o', str(obj)]
+        source = f
+        if renderer == 'ps1':
+            source = out_dir / (f.stem + '-ps1.c')
+            source.write_text(
+                '#define Prepare OraclePs1Prepare\n#define Depth OraclePs1Depth\n'
+                '#define Geometry OraclePs1Geometry\n'
+                '#include "%s"\n' % (src_root / 'platform/render/ps1_renderer.c') +
+                '#undef Prepare\n#undef Depth\n#undef Geometry\n'
+                'RenderGeometry PortRenderGeometry(void) { return ps1Renderer.geometry(0); }\n'
+                '#include "%s"\n' % f)
+        cmd = [str(LLVM / 'clang')] + FLAGS + ['-include', str(SUPPORT / 'o32.h'),
+                                               '-isystem', str(SUPPORT / 'include'), '-I' + str(src_root / 'game/include'), '-c', str(source), '-o', str(obj)]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             print('COMPILE FAIL', f.name, r.stderr[:2000])
             return f.stem, None
         dis = subprocess.run([str(LLVM / 'llvm-objdump'), '-dr', '--no-show-raw-insn', str(obj)],
-                             capture_output=True, text=True).stdout
+                             capture_output=True, text=True, check=True).stdout
         (out_dir / (f.stem + '.dis')).write_text(dis)
-        return f.stem, split_functions(dis)
+        funcs = split_functions(dis)
+        if renderer:
+            funcs = {k: v for k, v in funcs.items() if k not in HARNESS_FUNCTIONS}
+        return f.stem, funcs
     with ThreadPoolExecutor(max_workers=2) as ex:
-        return dict(ex.map(one, files))
+        result = dict(ex.map(one, files))
+    failed = [name for name, funcs in result.items() if funcs is None]
+    if failed:
+        raise RuntimeError('compilation failed: ' + ', '.join(failed))
+    if not result:
+        raise RuntimeError('no sources selected')
+    if not any(result.values()):
+        raise RuntimeError('no functions disassembled in selected sources')
+    return result
 
 
 def split_functions(dis):
@@ -95,28 +129,54 @@ def reloc_lines(dis):
     return dis
 
 
-def snapshot(ref, name):
-    d = Path(tempfile.mkdtemp(prefix='oracle32-src-'))
-    arch = subprocess.run(['git', '-C', str(ROOT), 'archive', ref, 'game', 'tools'], capture_output=True).stdout
-    subprocess.run(['tar', '-x', '-C', str(d)], input=arch)
+def configuration(renderer):
+    return {'flags': FLAGS, 'nosp': NOSP, 'renderer': renderer,
+            'headers': {str(p.relative_to(SUPPORT)): hashlib.sha256(p.read_bytes()).hexdigest()
+                        for p in sorted(SUPPORT.rglob('*.h'))},
+            'compiler': subprocess.run([str(LLVM / 'clang'), '--version'], capture_output=True,
+                                       text=True, check=True).stdout}
+
+
+def snapshot(ref, name, only=None, renderer=None):
     out = OUT / name
-    funcs = compile_tree(d, out)
-    subprocess.run(['rm', '-rf', str(d)])
-    print('snapshot %s: %d files' % (name, len(funcs)))
+    if out.exists():
+        raise RuntimeError('snapshot already exists; choose another name: ' + str(out))
+    commit = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', ref + '^{commit}'],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    OUT.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix='oracle32-src-') as directory:
+        d = Path(directory)
+        arch = subprocess.run(['git', '-C', str(ROOT), 'archive', commit, 'game', 'platform'],
+                              capture_output=True, check=True).stdout
+        subprocess.run(['tar', '-x', '-C', str(d)], input=arch, check=True)
+        with tempfile.TemporaryDirectory(prefix='oracle32-build-') as build:
+            funcs = compile_tree(d, Path(build), only, renderer)
+            metadata = dict(configuration(renderer), commit=commit, files=sorted(funcs))
+            (Path(build) / 'snapshot.json').write_text(json.dumps(metadata, indent=2) + '\n')
+            shutil.copytree(build, out)
+    print('snapshot %s: %d files, %d functions, commit %s' %
+          (name, len(funcs), sum(map(len, funcs.values())), commit))
 
 
-def diff(name, verbose, only):
+def diff(name, verbose, only, renderer=None):
     base_dir = OUT / name
+    metadata = json.loads((base_dir / 'snapshot.json').read_text())
+    if any(metadata.get(k) != v for k, v in configuration(renderer).items()):
+        raise RuntimeError('snapshot compiler/options differ; recreate with matching options')
+    requested = {Path(f).stem for f in only} if only else set(metadata['files'])
+    for stem in requested:
+        if stem not in metadata['files'] or not (base_dir / (stem + '.dis')).is_file():
+            raise RuntimeError('missing baseline: ' + stem)
     cur_dir = OUT / ('cur-' + name)
-    cur = compile_tree(ROOT, cur_dir, only)
-    changed = 0
+    cur = compile_tree(ROOT, cur_dir, {f + '.c' for f in requested}, renderer)
+    changed = compared = 0
     for stem, funcs in sorted(cur.items()):
         base_dis = base_dir / (stem + '.dis')
-        if funcs is None or not base_dis.exists():
-            print('%s: no baseline or compile failure' % stem)
-            continue
         base = split_functions(base_dis.read_text())
+        if renderer:
+            base = {k: v for k, v in base.items() if k not in HARNESS_FUNCTIONS}
         for fn in sorted(set(funcs) | set(base)):
+            compared += 1
             a, b = base.get(fn), funcs.get(fn)
             if a == b:
                 continue
@@ -130,7 +190,8 @@ def diff(name, verbose, only):
                 if verbose:
                     for l in difflib.unified_diff(a, b, lineterm='', n=1):
                         print('    ' + l)
-    print('%d function(s) differ from %s' % (changed, name))
+    print('%d/%d function(s) differ from %s (commit %s)' % (changed, compared, name, metadata['commit']))
+    return 1 if changed else 0
 
 
 def main():
@@ -139,16 +200,24 @@ def main():
     s = sub.add_parser('snapshot')
     s.add_argument('ref', nargs='?', default='HEAD')
     s.add_argument('name', nargs='?')
+    s.add_argument('files', nargs='*')
+    s.add_argument('--renderer', choices=['ps1'])
     d = sub.add_parser('diff')
     d.add_argument('name')
     d.add_argument('-v', action='store_true')
     d.add_argument('files', nargs='*')
+    d.add_argument('--renderer', choices=['ps1'])
     args = ap.parse_args()
     if args.cmd == 'snapshot':
-        snapshot(args.ref, args.name or args.ref)
+        snapshot(args.ref, args.name or args.ref, {Path(f).name for f in args.files}, args.renderer)
     else:
-        diff(args.name, args.v, set(args.files))
+        return diff(args.name, args.v, set(args.files), args.renderer)
+    return 0
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.CalledProcessError) as error:
+        print('oracle32: ' + str(error), file=sys.stderr)
+        sys.exit(2)
