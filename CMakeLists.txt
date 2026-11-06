@@ -94,20 +94,25 @@ elseif(NOT WIN32 AND NOT ANDROID AND NOT EMSCRIPTEN)
     find_package(CURL REQUIRED)
 endif()
 set(PLATFORM_PSX_SOURCES
-    platform/psx/gte.c platform/psx/gte_tables.c platform/psx/gpu_gl.c
+    platform/psx/gte.c platform/psx/gte_tables.c
     platform/psx/libetc.c platform/psx/libgpu.c platform/psx/libgte.c platform/psx/libgte_more.c
     platform/psx/framecap.c)
 list(TRANSFORM PLATFORM_PSX_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/)
+set(PLATFORM_RENDER_SOURCES platform/render/gl_backend.c platform/render/renderer.c
+    platform/render/ps1_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c
+    platform/render/gl_api.c platform/render/gl_program.c platform/render/gl_pipeline.c
+    platform/render/ps1_gl.c platform/render/pc_gl.c platform/render/n64_gl.c)
+list(TRANSFORM PLATFORM_RENDER_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/)
 # The debug console: Dear ImGui (platform/third_party/imgui, MIT) over SDL3 and OpenGL 3.
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/platform/third_party/imgui)
 set(IMGUI_SOURCES ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
-set(DEBUG_UI_SOURCES ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp ${CMAKE_SOURCE_DIR}/platform/touch.cpp ${IMGUI_SOURCES})
+set(DEBUG_UI_SOURCES ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp ${CMAKE_SOURCE_DIR}/platform/render/renderer_ui.cpp ${CMAKE_SOURCE_DIR}/platform/touch.cpp ${IMGUI_SOURCES})
 # (the port's own: what the second player's game has a copy of, platform/second/)
-set(PLATFORM_OWN_SOURCES ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp
-    ${CMAKE_SOURCE_DIR}/platform/touch.cpp)
+set(PLATFORM_OWN_SOURCES ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${PLATFORM_RENDER_SOURCES} ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp
+    ${CMAKE_SOURCE_DIR}/platform/touch.cpp ${CMAKE_SOURCE_DIR}/platform/render/renderer_ui.cpp)
 list(SORT PLATFORM_OWN_SOURCES)
-set(PLATFORM_SOURCES ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${DEBUG_UI_SOURCES})
+set(PLATFORM_SOURCES ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${PLATFORM_RENDER_SOURCES} ${DEBUG_UI_SOURCES})
 # Disc images in .7z archives (platform/archive.c): the LZMA SDK's 7z decoder (platform/third_party/lzma, public
 # domain).
 file(GLOB LZMA_SOURCES ${CMAKE_SOURCE_DIR}/platform/third_party/lzma/*.c)

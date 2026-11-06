@@ -1,12 +1,44 @@
 /* Offscreen readback of the production shaders. Requires a desktop OpenGL context.
    Run with tools/bugtest/render.sh; no disc, game settings or visible window needed. */
 #define PORT_GLSL_VERSION "#version 330 core\n"
-#include "../../platform/psx/gpu_gl.c"
+#include "../../platform/port_gl.h"
+static int drawCalls;
+static void CountDrawArrays(GLenum mode, GLint first, GLsizei count)
+{
+    drawCalls++;
+    glDrawArrays(mode, first, count);
+}
+#define glDrawArrays CountDrawArrays
+#include "../../platform/render/gl_backend.c"
+#include "../../platform/render/n64_gl.c"
+#undef glDrawArrays
 #include <assert.h>
 #include <math.h>
 
+static PFNGLISPROGRAMPROC isProgram;
+static int testAtlasUnit = 1;
+
+static void TestProgram(RendererId id)
+{
+    UsePipeline(id);
+    glUseProgram(scene->program);
+    glUniform2f(scene->uniformTarget, 1, 1);
+    glUniform2f(scene->uniformOrigin, 0, 0);
+    glUniform1f(scene->uniformDepthPull, 1);
+    glUniform1i(scene->uniformDepthPass, 0);
+    glUniform1i(scene->uniformVram, 0);
+    glUniform1i(scene->uniformGlyphs, 1);
+    glUniform1i(scene->uniformHdAtlas, testAtlasUnit);
+    glUniform1i(scene->uniformPortPages, 1);
+    glBindVertexArray(vertexArray);
+    glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
+}
+
 /* Flush uses the real batching/depth code; no game or settings file is needed. */
-PortSettings portSettings;
+PortSettings portSettings = {.render = RENDER_DEFAULTS};
+static int n64Track;
+int PortOriginalTrackIs64(void) { return n64Track; }
+
 uint16_t psxVram[VRAM_HEIGHT][VRAM_WIDTH];
 uint16_t psxVramHigh[VRAM_HEIGHT][VRAM_WIDTH];
 
@@ -15,6 +47,12 @@ static BatchVertex triangle[3];
 static int bounds[4] = {0, 0, 1, 1};
 static uint16_t testHd[4];
 static int16_t testHdTexels[4];
+static uint8_t testWindow[4];
+static uint8_t testShade;
+static uint8_t testAddress;
+static int testPs1Light;
+static float testFade = 1.0f;
+static int testPageX;
 
 static void Upload(void)
 {
@@ -23,25 +61,29 @@ static void Upload(void)
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 1024, GL_RED_INTEGER, GL_UNSIGNED_SHORT, words);
 }
 
-static void Render(int filtered, int depth, float u, float v, int tint, int semi, int pass,
+static void Render(RendererId renderer, int filtered, int depth, float u, float v, int tint, int semi, int pass,
                    float red, float green, float blue, float alpha)
 {
     float result[4], expected[4] = {red, green, blue, alpha};
+    TestProgram(renderer);
     memset(triangle, 0, sizeof(triangle));
     triangle[1].x = 2; triangle[2].y = 2;
     for (int i = 0; i < 3; i++) {
         BatchVertex *b = &triangle[i];
-        b->w = 1; b->r = b->g = b->b = tint / 255.0f; b->a = 1;
+        b->w = 1; b->r = b->g = b->b = tint / 255.0f; b->a = testFade;
         b->u = u; b->v = v;
         b->texture[2] = 32; b->texture[3] = 16;
-        b->mode[0] = 1; b->mode[2] = (uint8_t)depth;
+        b->texture[0] = (int16_t)testPageX;
+        b->mode[0] = 1; b->mode[2] = (uint8_t)(depth | (testAddress >> 2) | (testPs1Light ? 32 : 0));
+        b->mode[1] = testShade;
         b->mode[3] = (uint8_t)((filtered << 1) | ((semi + 1) << 4));
         for (int k = 0; k < 4; k++) b->filterBounds[k] = (int16_t)bounds[k];
         memcpy(b->hd, testHd, sizeof(testHd));
         memcpy(b->hdTexels, testHdTexels, sizeof(testHdTexels));
+        memcpy(b->window, testWindow, sizeof(testWindow));
     }
     glBufferData(GL_ARRAY_BUFFER, sizeof(triangle), triangle, GL_STREAM_DRAW);
-    glUniform1i(glGetUniformLocation(program, "pass"), pass);
+    glUniform1i(glGetUniformLocation(scene->program, "pass"), pass);
     glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, result);
@@ -61,24 +103,37 @@ static void Render(int filtered, int depth, float u, float v, int tint, int semi
 static void ThreePointSquare(int depth)
 {
     const float full = 248.0f / 255.0f;
-    Render(1, depth, 0, 0, 128, -1, 0, full, 0, 0, 1);
-    Render(1, depth, 1, 0, 128, -1, 0, 0, full, 0, 1);
-    Render(1, depth, 0, 1, 128, -1, 0, 0, 0, full, 1);
-    Render(1, depth, 1, 1, 128, -1, 0, full, full, full, 1);
-    Render(1, depth, .25f, .25f, 128, -1, 0, full / 2, full / 4, full / 4, 1);
-    Render(1, depth, .75f, .75f, 128, -1, 0, full / 2, full * .75f, full * .75f, 1);
-    Render(1, depth, .75f, .125f, 128, -1, 0, full / 8, full * .75f, full / 8, 1);
-    Render(1, depth, .75f, .5f, 128, -1, 0, full / 4, full * .75f, full / 2, 1);
-    Render(1, depth, .25f, .75f, 128, -1, 0, 0, full / 4, full * .75f, 1);
-    Render(1, depth, .5f, .5f, 128, -1, 0, 0, full / 2, full / 2, 1);
+    Render(RENDER_N64, 1, depth, 0, 0, 128, -1, 0, full, 0, 0, 1);
+    Render(RENDER_N64, 1, depth, 1, 0, 128, -1, 0, 0, full, 0, 1);
+    Render(RENDER_N64, 1, depth, 0, 1, 128, -1, 0, 0, 0, full, 1);
+    Render(RENDER_N64, 1, depth, 1, 1, 128, -1, 0, full, full, full, 1);
+    Render(RENDER_N64, 1, depth, .25f, .25f, 128, -1, 0, full / 2, full / 4, full / 4, 1);
+    Render(RENDER_N64, 1, depth, .75f, .75f, 128, -1, 0, full / 2, full * .75f, full * .75f, 1);
+    Render(RENDER_N64, 1, depth, .75f, .125f, 128, -1, 0, full / 8, full * .75f, full / 8, 1);
+    Render(RENDER_N64, 1, depth, .75f, .5f, 128, -1, 0, full / 4, full * .75f, full / 2, 1);
+    Render(RENDER_N64, 1, depth, .25f, .75f, 128, -1, 0, 0, full / 4, full * .75f, 1);
+    Render(RENDER_N64, 1, depth, .5f, .5f, 128, -1, 0, 0, full / 2, full / 2, 1);
     /* The fractions truncate to 7/32 and 15/32, leaving 10/32 for red. */
-    Render(1, depth, .249f, .499f, 128, -1, 0, full * 10 / 32, full * 7 / 32, full * 15 / 32, 1);
+    Render(RENDER_N64, 1, depth, .249f, .499f, 128, -1, 0, full * 10 / 32, full * 7 / 32, full * 15 / 32, 1);
     /* Neighbouring 1/32 steps on either side of the diagonal use opposite third corners. */
-    Render(1, depth, .5f, .46875f, 128, -1, 0, full / 32, full / 2, full * 15 / 32, 1);
-    Render(1, depth, .5f, .53125f, 128, -1, 0, full / 32, full / 2, full * 17 / 32, 1);
+    Render(RENDER_N64, 1, depth, .5f, .46875f, 128, -1, 0, full / 32, full / 2, full * 15 / 32, 1);
+    Render(RENDER_N64, 1, depth, .5f, .53125f, 128, -1, 0, full / 32, full / 2, full * 17 / 32, 1);
 }
 
-static void HdThreePoint(void)
+/* Bilinear has texel centres at .5 and uses all four corners, with unquantized weights. */
+static void BilinearSquare(int depth)
+{
+    const float full = 248.0f / 255.0f;
+    Render(RENDER_PC, 2, depth, .5f, .5f, 128, -1, 0, full, 0, 0, 1);
+    Render(RENDER_PC, 2, depth, 1.5f, .5f, 128, -1, 0, 0, full, 0, 1);
+    Render(RENDER_PC, 2, depth, .5f, 1.5f, 128, -1, 0, 0, 0, full, 1);
+    Render(RENDER_PC, 2, depth, 1.5f, 1.5f, 128, -1, 0, full, full, full, 1);
+    Render(RENDER_PC, 2, depth, 1, 1, 128, -1, 0, full / 2, full / 2, full / 2, 1);
+    Render(RENDER_PC, 2, depth, .75f, .75f, 128, -1, 0, full * .625f, full / 4, full / 4, 1);
+    Render(RENDER_PC, 2, depth, 1.1f, .8f, 128, -1, 0, full * .46f, full * .6f, full * .3f, 1);
+}
+
+static void HdFiltering(void)
 {
     const float full = 248.0f / 255.0f;
     float pixels[4 * 4 * 4];
@@ -98,20 +153,177 @@ static void HdThreePoint(void)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, 4, 0, GL_RGBA, GL_FLOAT, pixels);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glUniform1i(glGetUniformLocation(program, "hdAtlas"), 2);
+    testAtlasUnit = 2; glUniform1i(glGetUniformLocation(scene->program, "hdAtlas"), 2);
     testHd[0] = testHd[1] = 1; testHd[2] = testHd[3] = 2;
     testHdTexels[2] = testHdTexels[3] = 2;
     ThreePointSquare(0);
-    Render(1, 0, 1.75f, 0, 128, -1, 0, 0, full, 0, 1);
-    Render(0, 0, .5f, .5f, 128, -1, 0, full, 0, 0, 1); /* PS1 HD stays nearest */
+    BilinearSquare(0);
+    Render(RENDER_PC, 2, 0, 0, 0, 128, -1, 0, full, 0, 0, 1); /* atlas edge clamps */
+    Render(RENDER_PC, 2, 0, 1.9f, .5f, 128, -1, 0, 0, full, 0, 1);
+    Render(RENDER_N64, 1, 0, 1.75f, 0, 128, -1, 0, 0, full, 0, 1);
+    Render(RENDER_PS1, 0, 0, .5f, .5f, 128, -1, 0, full, 0, 0, 1); /* PS1 HD stays nearest */
+    /* Source addressing must survive HD replacement, including edges and negative/repeated UVs. */
+    testShade = SHADE_N64 | SHADE_AFFINE_COLOUR;
+    testAddress = 0x40;
+    Render(RENDER_N64, 1, 2, 1.75f, 0, 255, -1, 0, full * .75f, full * .25f, 0, 1);
+    Render(RENDER_N64, 1, 2, -.25f, 0, 255, -1, 0, full * .75f, full * .25f, 0, 1);
+    Render(RENDER_PC, 2, 2, 2.25f, .5f, 255, -1, 0, full * .75f, full * .25f, 0, 1);
+    Render(RENDER_N64, 0, 2, 3, 0, 255, -1, 0, 0, full, 0, 1);
+    testAddress = 0x50;
+    Render(RENDER_N64, 1, 2, 2.25f, 0, 255, -1, 0, full * .25f, full * .75f, 0, 1);
+    Render(RENDER_N64, 1, 2, -.25f, 0, 255, -1, 0, full, 0, 0, 1);
+    Render(RENDER_N64, 0, 2, 2, 0, 255, -1, 0, 0, full, 0, 1);
+    testAddress = 0x60;
+    Render(RENDER_N64, 1, 2, 0, 2.25f, 255, -1, 0, full * .25f, 0, full * .75f, 1);
+    /* Upscaled HD coordinates use the native mask but address replacement pixels. */
+    testHdTexels[2] = testHdTexels[3] = 1;
+    bounds[2] = bounds[3] = 0;
+    testAddress = 0x40;
+    Render(RENDER_N64, 1, 2, .75f, -.25f, 255, -1, 0, full, 0, 0, 1);
+    testHdTexels[2] = testHdTexels[3] = 2;
+    bounds[2] = bounds[3] = 1;
+    testShade = testAddress = 0;
     /* Two replacement pixels per source texel: retain the existing centre alignment. */
     testHdTexels[2] = testHdTexels[3] = 1;
-    Render(1, 0, .125f, .125f, 128, -1, 0, full / 2, full * .75f, full * .75f, 1);
-    Render(1, 0, .875f, .875f, 128, -1, 0, full, full, full, 1);
+    Render(RENDER_N64, 1, 0, .125f, .125f, 128, -1, 0, full / 2, full * .75f, full * .75f, 1);
+    Render(RENDER_N64, 1, 0, .875f, .875f, 128, -1, 0, full, full, full, 1);
+    Render(RENDER_PC, 2, 0, .25f, .25f, 128, -1, 0, full, 0, 0, 1);
+    Render(RENDER_PC, 2, 0, .5f, .5f, 128, -1, 0, full / 2, full / 2, full / 2, 1);
+    /* Nearest N64 sampling must prefer the green HD texel over red native VRAM,
+       with the same material and primitive-transparency rules in every profile. */
+    testHdTexels[2] = testHdTexels[3] = 2;
+    words[0] = words[1] = 31;
+    Upload();
+    for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
+        RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+        RenderMaterial material = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
+        frame.settings.pc.bilinear = 0;
+        frame.settings.n64.threePoint = 0;
+        RenderStyle style = RenderPrepare(&frame, &material);
+        assert(style.filter == 0);
+        testShade = (uint8_t)style.shade;
+        Render(frame.id, 0, 2, 1, 0, 255, -1, 0, 0, full, 0, 1);
+        Render(frame.id, 0, 2, 1, 0, 255, 0, 0, 0, full / 2, 0, .5f);
+        Render(frame.id, 0, 2, 1, 0, 255, 0, 3, 0, 0, 0, 0); /* translucent texels never write depth */
+        /* Outside the replacement's coverage, retain the native N64 fallback. */
+        testHdTexels[2] = 1;
+        Render(frame.id, 0, 2, 1, 0, 255, -1, 0, id == RENDER_PS1 ? full : 1, 0, 0, 1);
+        testHdTexels[2] = 2;
+        /* An HD colour key must not reveal the opaque native texture underneath. */
+        const float transparent[4] = {0, full, 0, 0};
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, atlas);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 2, 1, 1, 1, GL_RGBA, GL_FLOAT, transparent);
+        Render(frame.id, 0, 2, 1, 0, 255, -1, 0, 0, 0, 0, 0);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 2, 1, 1, 1, GL_RGBA, GL_FLOAT, square[1]);
+    }
+    testShade = 0;
+    puts("N64 nearest HD replacements: all profiles, primitive transparency, depth and native fallback: OK");
     memset(testHd, 0, sizeof(testHd)); memset(testHdTexels, 0, sizeof(testHdTexels));
-    glUniform1i(glGetUniformLocation(program, "hdAtlas"), 1);
+    testAtlasUnit = 1; glUniform1i(glGetUniformLocation(scene->program, "hdAtlas"), 1);
     glDeleteTextures(1, &atlas);
     glActiveTexture(GL_TEXTURE0);
+}
+
+static void GlyphUpload(void)
+{
+    GLint previous, width, filter;
+    GLuint saved = glyphTexture;
+    size_t bytes = GLYPH_ATLAS_SIZE * GLYPH_ATLAS_SIZE * 4;
+    uint8_t *pixels = malloc(bytes);
+    assert(pixels);
+    glActiveTexture(GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+    CreateGlyphTexture();
+    for (int value = 64; value <= 128; value += 64) {
+        memset(pixels, value, bytes);
+        for (size_t i = 3; i < bytes; i += 4) pixels[i] = 255;
+        GpuSetGlyphMemory((const uint32_t *)pixels);
+        glActiveTexture(GL_TEXTURE1);
+        glGetTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &filter);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 1, GL_TEXTURE_WIDTH, &width);
+        assert(filter == GL_NEAREST && width == 0);
+        for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
+            testShade = SHADE_RAW;
+            int filtered = id == RENDER_PS1 ? 0 : id == RENDER_PC ? 2 : 1;
+            float c = value / 255.0f;
+            Render((RendererId)id, filtered, 3, 10, 10, 255, -1, 0, c, c, c, 1);
+        }
+    }
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
+    glDeleteTextures(1, &glyphTexture);
+    glyphTexture = saved;
+    glActiveTexture(GL_TEXTURE0);
+    testShade = 0;
+    free(pixels);
+    puts("Production glyph uploads remain sampleable by every renderer without allocating mipmaps: OK");
+}
+
+/* Full-colour source encoding must not force PC filtering or bypass PS1 rasterization. */
+static void FullColourProfiles(void)
+{
+    const uint8_t square[] = {255,0,0,255, 0,255,0,255, 0,0,255,255, 255,255,255,255};
+    const uint8_t grey[] = {104,104,104,255, 104,104,104,255, 104,104,104,255, 104,104,104,255};
+    const float expected[3][2][3] = {
+        {{1,0,0}, {0,1,0}}, /* nearest */
+        {{0,.5f,.5f}, {.5f,1,.5f}}, /* three-point */
+        {{1,0,0}, {.5f,.5f,0}} /* bilinear */
+    };
+    GLuint rgba;
+    GLint previous;
+    glActiveTexture(GL_TEXTURE1);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous);
+    glGenTextures(1, &rgba); glBindTexture(GL_TEXTURE_2D, rgba);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    testHdTexels[2] = testHdTexels[3] = 2;
+    for (int page = 0; page < 2; page++) {
+        int size = page ? 256 : 512; /* glyph coordinates address a higher-resolution atlas */
+        float unit = 256.0f / size;
+        testPageX = page ? 64 : 0;
+        glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, rgba);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        for (int id = RENDER_PS1; id <= RENDER_N64; id++) for (int enabled = 0; enabled < 2; enabled++)
+        for (int spatial = 0; spatial < 2; spatial++) {
+            for (int other = 0; other < 2; other++) {
+                RenderFrame f = {.settings = RENDER_DEFAULTS, .id = (RendererId)id, .n64Track = 1};
+                RenderMaterial m = {.fullColour = 1, .textured = 1, .spatial = spatial, .dither = 1, .ui = !spatial};
+                f.settings.ps1 = (Ps1RenderSettings){other, other, other, other, other};
+                f.settings.pc = (PcRenderSettings){other, other, other};
+                f.settings.n64 = (N64RenderSettings){other, other, other, other, other, other};
+                if (id == RENDER_PS1) f.settings.ps1 = (Ps1RenderSettings){enabled, enabled, enabled, enabled, enabled};
+                if (id == RENDER_PC) f.settings.pc = (PcRenderSettings){enabled, enabled, enabled};
+                if (id == RENDER_N64) f.settings.n64.threePoint = enabled;
+                RenderStyle style = RenderPrepare(&f, &m);
+                testShade = style.shade;
+                glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, rgba);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, square);
+                int filter = enabled ? (id == RENDER_PC ? 2 : id == RENDER_N64 && spatial) : 0;
+                float precision = id == RENDER_PS1 && enabled ? 248.0f / 255 : 1;
+                for (int sample = 0; sample < 2; sample++) {
+                    const float *c = expected[filter][sample];
+                    Render(f.id, style.filter, 3, (sample ? 1 : .5f) * unit, .5f * unit, page ? 255 : 128,
+                           -1, 0, c[0] * precision, c[1] * precision, c[2] * precision, 1);
+                }
+                glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, rgba);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE, grey);
+                float c = (id == RENDER_PS1 && enabled ? 96.0f : 104.0f) / 255;
+                Render(f.id, style.filter, 3, .5f * unit, .5f * unit, page ? 255 : 128, -1, 0, c, c, c, 1);
+                if (id == RENDER_PS1 && enabled) {
+                    f.settings.ps1.dither = 0;
+                    testShade = RenderPrepare(&f, &m).shade;
+                    Render(f.id, 0, 3, .5f * unit, .5f * unit, page ? 255 : 128,
+                           -1, 0, 104.0f/255, 104.0f/255, 104.0f/255, 1);
+                }
+            }
+        }
+    }
+    testShade = 0; testPageX = 0;
+    memset(testHdTexels, 0, sizeof(testHdTexels));
+    glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, (GLuint)previous);
+    glDeleteTextures(1, &rgba); glActiveTexture(GL_TEXTURE0);
+    puts("Full-colour PC pages and high-resolution glyphs obey each renderer's filtering and PS1 precision/dither controls: OK");
 }
 
 static void DepthTriangle(const GpuDrawState *state, float x, float depth, int red, int green)
@@ -120,10 +332,13 @@ static void DepthTriangle(const GpuDrawState *state, float x, float depth, int r
     v.x = x; v.y = 100; v.w = depth;
     v.r = (uint8_t)red; v.g = (uint8_t)green; v.a = 255;
     v.u = v.v = .5f;
+    RenderMaterial material = {state->n64, state->depth == 3, state->textured, 1,
+                               state->raw, state->dither, primitiveFilterBounds[2] >= 0};
+    RenderStyle style = RenderPrepare(RenderCurrent(), &material);
     Begin(state, 3);
-    Add(&v);
-    v.x += 2; Add(&v);
-    v.x -= 2; v.y += 2; Add(&v);
+    Add(&v, style.shade);
+    v.x += 2; Add(&v, style.shade);
+    v.x -= 2; v.y += 2; Add(&v, style.shade);
 }
 
 /* Filtering needs alpha blending even on solid geometry. That must not let a
@@ -143,22 +358,24 @@ static void DepthBatches(GLuint fbo, GLuint output, GLuint dummy)
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, VRAM_WIDTH, VRAM_HEIGHT);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
     assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
-    uniformVram = glGetUniformLocation(program, "vram");
-    uniformGlyphs = glGetUniformLocation(program, "glyphs");
-    uniformHdAtlas = glGetUniformLocation(program, "hdAtlas");
-    uniformPortPages = glGetUniformLocation(program, "portPages");
-    uniformPass = glGetUniformLocation(program, "pass");
-    uniformTarget = glGetUniformLocation(program, "target");
-    uniformOrigin = glGetUniformLocation(program, "origin");
-    uniformDepthPull = glGetUniformLocation(program, "depthPull");
-    uniformDepthPass = glGetUniformLocation(program, "depthPass");
+    scene->uniformVram = glGetUniformLocation(scene->program, "vram");
+    scene->uniformGlyphs = glGetUniformLocation(scene->program, "glyphs");
+    scene->uniformHdAtlas = glGetUniformLocation(scene->program, "hdAtlas");
+    scene->uniformPortPages = glGetUniformLocation(scene->program, "portPages");
+    scene->uniformPass = glGetUniformLocation(scene->program, "pass");
+    scene->uniformTarget = glGetUniformLocation(scene->program, "target");
+    scene->uniformOrigin = glGetUniformLocation(scene->program, "origin");
+    scene->uniformDepthPull = glGetUniformLocation(scene->program, "depthPull");
+    scene->uniformDepthPass = glGetUniformLocation(scene->program, "depthPass");
     primitiveFilterBounds[0] = primitiveFilterBounds[1] = 0;
     primitiveFilterBounds[2] = primitiveFilterBounds[3] = 1;
     words[0] = words[1024] = 0x11;
     words[16 * 1024 + 33] = 0x7fff;
     Upload();
-    for (int filtered = 0; filtered < 2; filtered++) {
-        surface.filtered = filtered;
+    portSettings.render.selection = RENDER_PC; RenderCommit();
+    for (int filtered = 0; filtered < 3; filtered++) {
+        int tint = 255;
+        surface.n64 = filtered == 1;
         for (int leading = 0; leading < 2; leading++) {
             for (int reverse = 0; reverse < 2; reverse++) {
                 for (int edge = 0; edge < 2; edge++) {
@@ -169,13 +386,13 @@ static void DepthBatches(GLuint fbo, GLuint output, GLuint dummy)
                     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
                     /* Zero-colour additive effect changes batching but not the picture. */
                     if (leading) DepthTriangle(&effect, x, 50, 0, 0);
-                    if (reverse) DepthTriangle(&surface, x, 150, 0, 128);
-                    DepthTriangle(&surface, x, 100, 128, 0);
-                    if (!reverse) DepthTriangle(&surface, x, 150, 0, 128);
+                    if (reverse) DepthTriangle(&surface, x, 150, 0, tint);
+                    DepthTriangle(&surface, x, 100, tint, 0);
+                    if (!reverse) DepthTriangle(&surface, x, 150, 0, tint);
                     Flush();
                     glReadPixels(x, 100, 1, 1, GL_RGBA, GL_FLOAT, pixel);
                     glReadPixels(x, 100, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &z);
-                    if (fabsf(pixel[0] - 248.0f / 255.0f) > .002f || pixel[1] > .002f || fabsf(z - .99f) > .00001f) {
+                    if (fabsf(pixel[0] - (filtered == 1 ? 1.0f : 248.0f / 255.0f)) > .002f || pixel[1] > .002f || fabsf(z - .99f) > .00001f) {
                         fprintf(stderr, "depth batch: filter=%d leading effect=%d reverse=%d edge=%d: rgb=%g,%g,%g depth=%g\n",
                                 filtered, leading, reverse, edge, pixel[0], pixel[1], pixel[2], z);
                         abort();
@@ -184,9 +401,876 @@ static void DepthBatches(GLuint fbo, GLuint output, GLuint dummy)
             }
         }
     }
+    /* N64 depth remains enabled when the PC option is disabled. */
+    n64Track = 1; portSettings.render.selection = RENDER_AUTO; RenderCommit();
+    surface.n64 = 1;
+    glDisable(GL_SCISSOR_TEST); glDepthMask(GL_TRUE);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    DepthTriangle(&surface, 0, 100, 255, 0);
+    DepthTriangle(&surface, 0, 150, 0, 255);
+    Flush();
+    {
+        float pixel[4];
+        glReadPixels(0, 100, 1, 1, GL_RGBA, GL_FLOAT, pixel);
+        assert(fabsf(pixel[0] - 1.0f) < .002f && pixel[1] < .002f);
+    }
+    n64Track = 0;
+    /* Each profile's depth toggle works with the other profile set to the opposite value. */
+    for (int id = RENDER_PS1; id <= RENDER_PC; id++) for (int enabled = 0; enabled < 2; enabled++) {
+        portSettings.render.selection = (RendererId)id;
+        portSettings.render.ps1.depth = id == RENDER_PS1 ? enabled : !enabled;
+        portSettings.render.pc.depth = id == RENDER_PC ? enabled : !enabled;
+        RenderCommit();
+        surface.n64 = 0;
+        glDisable(GL_SCISSOR_TEST); glDepthMask(GL_TRUE);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        int tint = id == RENDER_PC ? 255 : 128;
+        DepthTriangle(&surface, 0, 100, tint, 0);
+        DepthTriangle(&surface, 0, 150, 0, tint);
+        Flush();
+        float pixel[4], full = 248.0f / 255.0f;
+        glReadPixels(0, 100, 1, 1, GL_RGBA, GL_FLOAT, pixel);
+        assert(fabsf(pixel[0] - (enabled ? full : 0)) < .002f);
+        assert(fabsf(pixel[1] - (enabled ? 0 : full)) < .002f);
+    }
+    portSettings.render.selection = RENDER_PS1;
+    portSettings.render.ps1.depth = 0; portSettings.render.pc.depth = 1; RenderCommit();
     assert(glGetError() == GL_NO_ERROR);
     glDeleteRenderbuffers(1, &depth);
-    puts("Production depth batches: foreground occludes background at both screen edges, with/without a leading effect: OK");
+    puts("PC depth batches occlude correctly; PS1 and PC depth toggles are independent: OK");
+}
+
+/* Shared XL UI and effects must use only the N64 profile, including when filters are off. */
+static void N64SharedMaterials(void)
+{
+    RenderSettings saved = portSettings.render;
+    int savedTrack = n64Track;
+    const float full = 248.0f / 255.0f;
+    RenderMaterial ui = {.textured = 1, .dither = 1, .ui = 1};
+    GpuDrawState effect = {.semi = 1, .dither = 1};
+    words[0] = 31; words[1] = 31 << 5;
+    words[1024] = 31 << 10; words[1025] = 0x7fff;
+    Upload();
+    portSettings.render.selection = RENDER_N64;
+    portSettings.render.n64 = (N64RenderSettings){0};
+    n64Track = 1;
+    for (int other = 0; other < 2; other++) {
+        portSettings.render.ps1 = (Ps1RenderSettings){other, other, other, other, other};
+        portSettings.render.pc = (PcRenderSettings){other, other, other};
+        glDisable(GL_BLEND);
+        glUniform1f(scene->uniformDepthPull, 1);
+        portSettings.render.n64.threePoint = 0; RenderCommit();
+        RenderStyle style = RenderPrepare(RenderCurrent(), &ui);
+        testShade = style.shade;
+        Render(RENDER_N64, style.filter, 2, .5f, .5f, 100, -1, 0, full * 100 / 128, 0, 0, 1);
+        portSettings.render.n64.threePoint = 1; RenderCommit();
+        style = RenderPrepare(RenderCurrent(), &ui);
+        testShade = style.shade;
+        assert(style.filter == 0);
+        Render(RENDER_N64, style.filter, 2, .5f, .5f, 128, -1, 0, full, 0, 0, 1);
+        RenderMaterial world = ui;
+        world.spatial = 1;
+        world.ui = 0;
+        style = RenderPrepare(RenderCurrent(), &world);
+        assert(style.filter == 1);
+        testShade = style.shade;
+        Render(RENDER_N64, style.filter, 2, .5f, .5f, 128, -1, 0, 0, full / 2, full / 2, 1);
+        world.spatial = 0; /* affine world billboards must retain filtering too */
+        style = RenderPrepare(RenderCurrent(), &world);
+        assert(style.filter == 1);
+        testShade = style.shade;
+        Render(RENDER_N64, style.filter, 2, .5f, .5f, 128, -1, 0, 0, full / 2, full / 2, 1);
+        portSettings.render.n64.threePoint = 0; RenderCommit();
+        for (int spatial = 0; spatial < 2; spatial++) {
+            RenderMaterial material = {.spatial = spatial, .dither = 1};
+            GpuVertex v = {.y = 100, .w = spatial ? 100 : 0, .r = 100, .g = 100, .b = 100, .a = 255};
+            float pixels[4 * 4 * 4];
+            style = RenderPrepare(RenderCurrent(), &material);
+            glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT);
+            Begin(&effect, 3);
+            Add(&v, style.shade);
+            v.x += 8; Add(&v, style.shade);
+            v.x -= 8; v.y += 8; Add(&v, style.shade);
+            Flush();
+            glReadPixels(0, 100, 4, 4, GL_RGBA, GL_FLOAT, pixels);
+            for (int i = 0; i < 16; i++) for (int c = 0; c < 3; c++)
+                assert(fabsf(pixels[i * 4 + c] - 100.0f / 255) < .002f);
+        }
+    }
+    portSettings.render = saved; n64Track = savedTrack; RenderCommit();
+    memset(pictureOwners, 0, sizeof(pictureOwners)); testShade = 0;
+    assert(glGetError() == GL_NO_ERROR);
+    puts("N64 shared XL UI filtering and undithered 2D/3D additive effects ignore PS1/PC profiles: OK");
+}
+
+/* Driver dithering must not bypass any profile, or interfere with explicit PS1 shader dithering. */
+static void WorldDithering(void)
+{
+    static const int offsets[16] = {-4,0,-3,1, 2,-2,3,-1, -3,1,-4,0, 3,-1,2,-2};
+    RenderSettings saved = portSettings.render;
+    RenderMaterial material = {.spatial = 1, .dither = 1};
+    GpuDrawState effect = {.semi = 1, .dither = 1};
+    for (int id = RENDER_PS1; id <= RENDER_N64; id++) for (int dither = 0; dither < 2; dither++) {
+        portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+        portSettings.render.selection = (RendererId)id;
+        portSettings.render.ps1.dither = dither;
+        RenderCommit();
+        RenderStyle style = RenderPrepare(RenderCurrent(), &material);
+        GpuVertex v = {.y = 100, .w = 100, .r = 104, .g = 104, .b = 104, .a = 255};
+        float pixels[4 * 4 * 4];
+        glClearColor(0, 0, 0, 0); glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_DITHER); /* simulate the default context state or another GL user's state */
+        Begin(&effect, 3);
+        Add(&v, style.shade);
+        v.x += 8; Add(&v, style.shade);
+        v.x -= 8; v.y += 8; Add(&v, style.shade);
+        Flush();
+        assert(!glIsEnabled(GL_DITHER));
+        glReadPixels(0, 100, 4, 4, GL_RGBA, GL_FLOAT, pixels);
+        for (int i = 0; i < 16; i++) {
+            float expected = (id == RENDER_PS1 && dither && offsets[i] < 0 ? 96.0f : 104.0f) / 255;
+            for (int c = 0; c < 3; c++) assert(fabsf(pixels[i * 4 + c] - expected) < .002f);
+        }
+    }
+    /* Empty batches also reset GL state before direct fills and framebuffer writes. */
+    glEnable(GL_DITHER); Flush(); assert(!glIsEnabled(GL_DITHER));
+    portSettings.render = saved; RenderCommit(); memset(pictureOwners, 0, sizeof(pictureOwners));
+    assert(glGetError() == GL_NO_ERROR);
+    puts("World draws disable driver dithering for all profiles; only the selected PS1 shader dither toggle adds its 4x4 pattern: OK");
+}
+
+/* ShowMenu/InitMenuBox use flat blue/purple option boxes; InitMenuPolys uses
+   Gouraud green shades. UI (w == 0) must keep RGB5 even when ineligible for
+   dithering, and eligible shades use VRAM coordinates in either screen buffer. */
+static void MainMenuColour(void)
+{
+    static const int offsets[16] = {-4,0,-3,1, 2,-2,3,-1, -3,1,-4,0, 3,-1,2,-2};
+    static const struct { int rgb[3], dither; } elements[] = {
+        {{0, 0, 46}, 0}, {{85, 0, 40}, 0}, /* POLY_F4 options */
+        {{24, 66, 11}, 1}, {{85, 0, 40}, 1} /* POLY_G4 shades/selection */
+    };
+    RenderSettings saved = portSettings.render;
+    for (int precision = 0; precision < 2; precision++)
+    for (int dither = 0; dither < 2; dither++)
+    for (int buffer = 0; buffer < 2; buffer++)
+    for (size_t e = 0; e < sizeof(elements) / sizeof(elements[0]); e++) {
+        portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+        portSettings.render.selection = RENDER_PS1;
+        portSettings.render.ps1.colourPrecision = precision;
+        portSettings.render.ps1.dither = dither;
+        RenderCommit();
+        RenderMaterial material = {.ui = 1, .dither = elements[e].dither};
+        RenderStyle style = RenderPrepare(RenderCurrent(), &material);
+        GpuDrawState draw = {.semi = -1, .dither = elements[e].dither};
+        int x = 13, y = 101 + buffer * 256;
+        GpuVertex v = {.x = x, .y = y, .r = elements[e].rgb[0],
+            .g = elements[e].rgb[1], .b = elements[e].rgb[2], .a = 255};
+        float pixels[4 * 4 * 4];
+        glClearColor(1, 1, 1, 1); glClear(GL_COLOR_BUFFER_BIT);
+        Begin(&draw, 3);
+        Add(&v, style.shade);
+        v.x += 8; Add(&v, style.shade);
+        v.x -= 8; v.y += 8; Add(&v, style.shade);
+        Flush();
+        glReadPixels(x, y, 4, 4, GL_RGBA, GL_FLOAT, pixels);
+        for (int py = 0; py < 4; py++) for (int px = 0; px < 4; px++) {
+            for (int c = 0; c < 3; c++) {
+                int value = elements[e].rgb[c];
+                if (precision) {
+                    if (dither && elements[e].dither)
+                        value += offsets[((y + py) & 3) * 4 + ((x + px) & 3)];
+                    value = SDL_clamp(value, 0, 255) / 8 * 8;
+                }
+                assert(fabsf(pixels[(py * 4 + px) * 4 + c] - value / 255.0f) < .002f);
+            }
+        }
+    }
+    portSettings.render = saved; RenderCommit(); memset(pictureOwners, 0, sizeof(pictureOwners));
+    assert(glGetError() == GL_NO_ERROR);
+    puts("PS1 main-menu UI: RGB5 flat boxes, eligible 4x4 dithering, both screen buffers and independent toggles: OK");
+}
+
+/* Unequal depths expose accidental perspective interpolation of lighting and PS1 UVs. */
+static void Interpolation(void)
+{
+    const float full = 248.0f / 255.0f;
+    for (int test = 0; test < 4; test++) {
+        float result[4];
+        TestProgram(test == 0 ? RENDER_N64 : test == 3 ? RENDER_PC : RENDER_PS1);
+        const float expected[4][3] = {{.5f,.25f,.25f}, {full,0,0}, {0,full,0},
+                                     {full * 7 / 11,full * 4 / 11,0}};
+        memset(triangle, 0, sizeof(triangle));
+        triangle[1].x = 2; triangle[2].y = 2;
+        for (int i = 0; i < 3; i++) {
+            BatchVertex *b = &triangle[i];
+            b->w = (float)(1 << i); b->a = 1;
+            b->r = i == 0; b->g = i == 1; b->b = i == 2;
+            b->u = i == 1 ? 2.5f : .5f; b->v = .5f;
+            b->mode[0] = test != 0;
+            b->mode[1] = test == 0 ? SHADE_N64 | SHADE_AFFINE_COLOUR : SHADE_RAW;
+            if (test == 2) b->mode[1] |= SHADE_AFFINE_UV | SHADE_PS1_COLOUR;
+            b->mode[2] = 2;
+            b->mode[3] = test == 3 ? 2 << 1 : 0;
+        }
+        glBufferData(GL_ARRAY_BUFFER, sizeof(triangle), triangle, GL_STREAM_DRAW);
+        glUniform1i(glGetUniformLocation(scene->program, "pass"), 0);
+        glClear(GL_COLOR_BUFFER_BIT); glDrawArrays(GL_TRIANGLES, 0, 3);
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, result);
+        for (int k = 0; k < 3; k++) assert(fabsf(result[k] - expected[test][k]) < .002f);
+    }
+    /* A subpixel triangle misses this pixel on PC, but its PS1 integer corners cover it. */
+    for (int ps1 = 0; ps1 < 4; ps1++) {
+        float result[4];
+        TestProgram(RENDER_PS1);
+        memset(triangle, 0, sizeof(triangle));
+        for (int i = 0; i < 3; i++) {
+            BatchVertex *b = &triangle[i];
+            b->x = .75f + (i == 1 ? 2 : 0);
+            b->y = .75f + (i == 2 ? 2 : 0);
+            b->w = b->r = b->a = 1;
+            b->mode[1] = (ps1 & 1 ? SHADE_PS1_COLOUR : 0) | (ps1 & 2 ? SHADE_SNAP : 0);
+        }
+        glBufferData(GL_ARRAY_BUFFER, sizeof(triangle), triangle, GL_STREAM_DRAW);
+        glClear(GL_COLOR_BUFFER_BIT); glDrawArrays(GL_TRIANGLES, 0, 3);
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, result);
+        assert(fabsf(result[0] - (ps1 & 2 ? (ps1 & 1 ? full : 1.0f) : 0)) < .002f);
+    }
+    assert(glGetError() == GL_NO_ERROR);
+}
+
+/* Gameplay road tint is 128-neutral even though its texture stays N64 encoded. */
+static void N64GameplayLight(void)
+{
+    words[0] = words[1] = words[1024] = words[1025] = 15;
+    Upload();
+    for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
+        RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+        RenderMaterial material = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
+        RenderStyle style = RenderPrepare(&frame, &material);
+        testShade = (uint8_t)style.shade;
+        for (int filtering = 0; filtering < 2; filtering++) {
+            int filter = filtering ? style.filter : 0;
+            /* Authored RGB8 stays half intensity at 128; depleted gameplay pads are neutral. */
+            testPs1Light = 0;
+            float authored = (123.0f * 128 / 255) / 255;
+            if (id == RENDER_PS1) authored = 56.0f / 255;
+            Render(frame.id, filter, 2, .5f, .5f, 128, -1, 0, authored, 0, 0, 1);
+            testPs1Light = 1;
+            Render(frame.id, filter, 2, .5f, .5f, 128, -1, 0, (id == RENDER_PS1 ? 120.0f : 123.0f) / 255, 0, 0, 1);
+            /* Preserve overbright animation rather than saturating an RGB8 conversion. */
+            Render(frame.id, filter, 2, .5f, .5f, 255, -1, 0, id == RENDER_PS1 ? 240.0f / 255 : 123.0f / 128, 0, 0, 1);
+            Render(frame.id, filter, 2, .5f, .5f, 35, -1, 0, id == RENDER_PS1 ? 32.0f / 255 : 123.0f * 35 / (128 * 255), 0, 0, 1);
+            testShade |= SHADE_RAW;
+            Render(frame.id, filter, 2, .5f, .5f, 35, -1, 0, (id == RENDER_PS1 ? 120.0f : 123.0f) / 255, 0, 0, 1);
+            testShade = (uint8_t)style.shade;
+        }
+    }
+    /* Verify transport packs light separately from all three source addressing bits. */
+    GpuDrawState saved = primitiveState;
+    assert(batchCount == 0);
+    primitiveState = (GpuDrawState){.textured = 1, .n64 = 1, .depth = 2, .ps1Light = 1, .textureFlags = 0x70};
+    GpuVertex vertex = {.r = 128, .g = 35, .b = 255, .a = 255};
+    Add(&vertex, SHADE_N64);
+    assert(batch[0].mode[2] == (2 | (0x70 >> 2) | 32));
+    assert(fabsf(batch[0].r - 128.0f / 255) < .0001f && batch[0].b == 1.0f);
+    batchCount = 0;
+    primitiveState = saved;
+    testPs1Light = testShade = 0;
+    puts("All renderers retain neutral, coloured and overbright N64 gameplay road tint with nearest/filtered sampling: OK");
+}
+
+/* Saturate modulation before fade and semi-transparency, regardless of sampler. */
+static void N64SaturatedLight(void)
+{
+    words[0] = words[1] = words[1024] = words[1025] = 31;
+    Upload();
+    testPs1Light = 1;
+    for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
+        RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+        RenderMaterial material = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
+        RenderStyle style = RenderPrepare(&frame, &material);
+        testShade = (uint8_t)style.shade;
+        float full = id == RENDER_PS1 ? 248.0f / 255 : 1.0f;
+        for (int filtering = 0; filtering < 2; filtering++) {
+            int filter = filtering ? style.filter : 0;
+            for (int fade = 0; fade < 3; fade++) {
+                testFade = fade * .5f;
+                Render(frame.id, filter, 2, .5f, .5f, 255, -1, 0, full * testFade, 0, 0, testFade);
+                for (int semi = 0; semi < 4; semi++) {
+                    float weight = semi == 0 ? .5f : semi == 3 ? .25f : 1.0f;
+                    Render(frame.id, filter, 2, .5f, .5f, 255, semi, 0, full * weight * testFade,
+                           0, 0, semi == 0 ? .5f * testFade : 0);
+                }
+            }
+        }
+    }
+    testFade = 1.0f;
+    testPs1Light = testShade = 0;
+    puts("Saturated N64 road lighting clamps before fade and every blend mode in all profiles/samplers: OK");
+}
+
+/* N64 source RGB reaches 255 and bit 15 is ignored, including transparent 0x8000.
+   Sampling and shading must remain independent of the PC switch. */
+static void N64Materials(void)
+{
+    n64Track = 1;
+    testShade = SHADE_N64 | SHADE_AFFINE_COLOUR;
+    words[0] = 31; words[1] = (31 << 5) | 0x8000;
+    words[1024] = 31 << 10; words[1025] = 0x7fff;
+    Upload();
+    for (int pc = 0; pc < 2; pc++) {
+        GpuDrawState material = {.n64 = 1, .textured = 1, .semi = -1, .depth = 2};
+        GpuVertex v = {.w = 7, .r = 137, .g = 137, .b = 137, .a = 255};
+        portSettings.render.selection = RENDER_AUTO;
+        portSettings.render.automaticBase = pc ? RENDER_PC : RENDER_PS1; RenderCommit();
+        RenderMaterial description = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
+        RenderStyle style = RenderPrepare(RenderCurrent(), &description);
+        batchCount = 0; Begin(&material, 3); Add(&v, style.shade);
+        assert(batch[0].mode[1] == (SHADE_N64 | SHADE_AFFINE_COLOUR));
+        assert(batch[0].r == 137 / 255.0f && batch[0].w == 7);
+        batchCount = 0;
+        Render(RENDER_N64, 1, 2, 0, 0, 255, -1, 0, 1, 0, 0, 1);
+        Render(RENDER_N64, 1, 2, 1, 0, 255, -1, 0, 0, 1, 0, 1);
+        Render(RENDER_N64, 1, 2, 1, 0, 255, 0, 0, 0, .5f, 0, .5f); /* primitive alpha */
+        Render(RENDER_N64, 1, 2, 0, 0, 137, -1, 0, 137/255.0f, 0, 0, 1);
+        Render(RENDER_N64, 1, 2, .5f, .5f, 255, -1, 0, 0, .5f, .5f, 1);
+        testWindow[0] = testWindow[2] = 1;
+        Render(RENDER_N64, 0, 2, 0, 0, 255, -1, 0, 1, 0, 0, 1); /* absent bounds: still N64, no PS1 window */
+        memset(testWindow, 0, sizeof(testWindow));
+        testAddress = 0x40;
+        Render(RENDER_N64, 1, 2, 1.5f, 0, 255, -1, 0, .5f, .5f, 0, 1);
+        testAddress = 0x50;
+        Render(RENDER_N64, 1, 2, 1.5f, 0, 255, -1, 0, 0, 1, 0, 1);
+        Render(RENDER_N64, 1, 2, -.5f, 0, 255, -1, 0, 1, 0, 0, 1);
+        testAddress = 0x60;
+        Render(RENDER_N64, 1, 2, 0, 1.5f, 255, -1, 0, 0, 0, 1, 1);
+        testAddress = 0;
+    }
+    words[0] = 0x8000; Upload();
+    Render(RENDER_N64, 1, 2, 0, 0, 255, -1, 0, 0, 0, 0, 0);
+    Render(RENDER_N64, 0, 2, 0, 0, 255, -1, 0, 0, 0, 0, 0);
+    testShade = 0;
+    n64Track = 0; RenderCommit();
+    puts("N64 RGB8 tint, RGB5551 palette semantics, wrap/mirror and PC-independent flags: OK");
+}
+
+static GLuint TestN64Picture(GLuint source, int x, int y, int width, int height,
+                             const N64RenderSettings *settings, int pixelScale)
+{
+    N64ViPasses passes = N64ViStages(settings);
+    return N64Picture(source, x, y, width, height, settings, pixelScale, &passes);
+}
+
+static void ViFiltering(void)
+{
+    GLuint input, output, destination, raw;
+    uint8_t source[16 * 16 * 4], pixels[sizeof(source)], previous[sizeof(source)];
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &input); glBindTexture(GL_TEXTURE_2D, input);
+    memset(source, 100, sizeof(source));
+    for (int i = 3; i < sizeof(source); i += 4) source[i] = 255;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, source);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &raw); glBindFramebuffer(GL_FRAMEBUFFER, raw);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, input, 0);
+    scale = 1;
+    GLuint shown = TestN64Picture(input, 0, 0, 16, 16, &portSettings.render.n64, scale);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, shown);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    /* A 100-grey input dithers to alternating RGB5 12/13, then reconstructs to 100. */
+    for (int y = 1; y < 15; y++) for (int x = 1; x < 15; x++)
+        assert(pixels[(y * 16 + x) * 4] == 100);
+    /* Read the actual quantization stage: all sixteen thresholds and scale invariance. */
+    for (int testScale = 1; testScale <= 2; testScale++) {
+        static const int thresholds[16] = {0,6,1,7,4,2,5,3,3,5,2,4,7,1,6,0};
+        glUseProgram(n64ViProgram); glBindVertexArray(n64ViArray);
+        glBindTexture(GL_TEXTURE_2D, input);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, shown);
+        glUniform4i(glGetUniformLocation(n64ViProgram, "region"), 0, 0, 16, 16);
+        glUniform1i(glGetUniformLocation(n64ViProgram, "pixelScale"), testScale);
+        glUniform1i(glGetUniformLocation(n64ViProgram, "stage"), 0);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) {
+            int threshold = thresholds[((y / testScale) & 3) * 4 + ((x / testScale) & 3)];
+            assert(pixels[(y * 16 + x) * 4] == (threshold < 4 ? 107 : 99));
+        }
+    }
+    /* Precision, dithering and reconstruction have independently observable output. */
+    N64RenderSettings options = portSettings.render.n64;
+    options.dedither = options.divot = options.dither = 0;
+    shown = TestN64Picture(input, 0, 0, 16, 16, &options, scale);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, shown);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(pixels[(8 * 16 + 8) * 4] == 99); /* truncated RGB5 12, expanded */
+    options.dither = 1;
+    shown = TestN64Picture(input, 0, 0, 16, 16, &options, scale);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, shown);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(pixels[(8 * 16 + 8) * 4] == 107 && pixels[(8 * 16 + 9) * 4] == 99);
+    options.colourPrecision = 0; options.dedither = 1;
+    shown = TestN64Picture(input, 0, 0, 16, 16, &options, scale);
+    assert(!shown); /* No applicable VI effects: use the original framebuffer. */
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, raw);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(pixels[(8 * 16 + 8) * 4] == 100); /* precision off also bypasses inapplicable dedither */
+    /* Approximate divot correction removes isolated high-contrast holes. */
+    memset(source, 128, sizeof(source));
+    memset(source + (8 * 16 + 8) * 4, 0, 3);
+    glBindTexture(GL_TEXTURE_2D, input);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, source);
+    shown = TestN64Picture(input, 0, 0, 16, 16, &portSettings.render.n64, scale);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, shown);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(pixels[(8 * 16 + 8) * 4] == 127);
+    options = portSettings.render.n64; options.divot = 0;
+    shown = TestN64Picture(input, 0, 0, 16, 16, &options, scale);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, shown);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(pixels[(8 * 16 + 8) * 4] == 8); /* hole retained without divot correction */
+    /* The display wrapper uses VI for N64 races only and never modifies its source. */
+    memset(source, 128, sizeof(source));
+    for (int y = 0; y < 16; y++) for (int x = 8; x < 16; x++)
+        memset(source + (y * 16 + x) * 4, 220, 3);
+    for (int i = 3; i < sizeof(source); i += 4) source[i] = 255;
+    glBindTexture(GL_TEXTURE_2D, input);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, source);
+    glGenTextures(1, &output); glBindTexture(GL_TEXTURE_2D, output);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 16, 16, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &destination); glBindFramebuffer(GL_FRAMEBUFFER, destination);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, output, 0);
+    PictureChanged(0, VRAM_HEIGHT);
+    colour = input; n64Track = sceneWide = 1; memset(pictureOwners, 0, sizeof(pictureOwners));
+    for (int pc = 0; pc < 2; pc++) {
+        portSettings.render.selection = RENDER_AUTO;
+        portSettings.render.automaticBase = pc ? RENDER_PC : RENDER_PS1; RenderCommit();
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+        glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        if (pc) assert(!memcmp(pixels, previous, sizeof(pixels)));
+        memcpy(previous, pixels, sizeof(pixels));
+        assert(pixels[(8 * 16 + 7) * 4] < 140 && pixels[(8 * 16 + 8) * 4] > 210);
+    }
+    /* A settings commit must not reprocess the already drawn picture with the new profile. */
+    RememberPicture(0, 0, 320, 512);
+    portSettings.render.selection = RENDER_PS1; RenderCommit();
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+    BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(!memcmp(previous, pixels, sizeof(pixels)));
+    memset(pictureOwners, 0, sizeof(pictureOwners));
+    portSettings.render.selection = RENDER_AUTO; RenderCommit();
+    glBindFramebuffer(GL_FRAMEBUFFER, raw);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(!memcmp(source, pixels, sizeof(source)));
+    framebuffer = raw;
+    N64RenderSettings savedN64 = portSettings.render.n64;
+    /* Explicit PS1/PC selection on an N64 track must bypass every N64 display control. */
+    for (int id = RENDER_PS1; id <= RENDER_PC; id++) for (int other = 0; other < 2; other++) {
+        portSettings.render.selection = (RendererId)id;
+        portSettings.render.n64 = (N64RenderSettings){other, other, other, other, other, other};
+        n64Track = sceneWide = 1; RenderCommit();
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+        glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        assert(!memcmp(source, pixels, sizeof(source)));
+    }
+    portSettings.render.n64 = savedN64;
+    portSettings.render.selection = RENDER_AUTO;
+    for (int menu = 0; menu < 2; menu++) {
+        n64Track = menu; RenderCommit(); sceneWide = 0; picturesWithoutScene = 1000;
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+        glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        assert(!memcmp(source, pixels, sizeof(source))); /* PS1 and menus bypass VI */
+    }
+    assert(glGetError() == GL_NO_ERROR);
+    glDeleteTextures(1, &input); glDeleteTextures(1, &output);
+    glDeleteFramebuffers(1, &raw); glDeleteFramebuffers(1, &destination);
+    puts("N64 display: magic-square RGB5, native pixel scale, VI dedither, sharp edges, PC independence and menu/PS1 bypass: OK");
+}
+
+static GLuint ViTarget(GLuint *texture, int width, int height, const uint8_t *pixels)
+{
+    GLuint target;
+    glGenTextures(1, texture); glBindTexture(GL_TEXTURE_2D, *texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &target); glBindFramebuffer(GL_FRAMEBUFFER, target);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texture, 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    return target;
+}
+
+/* Frozen pre-optimization scheduler: three RGBA8 passes, including disabled copy stages.
+   Keep this independent of N64Picture's pass selection and ping-pong bookkeeping. */
+static void ViReference(GLuint source, int x, int y, int width, int height,
+                        GLuint destination, int outWidth, int outHeight, int flip,
+                        const N64RenderSettings *settings)
+{
+    N64ViInit();
+    GLuint textures[2], targets[2];
+    for (int i = 0; i < 2; i++) targets[i] = ViTarget(&textures[i], width, height, NULL);
+    glUseProgram(n64ViProgram); glBindVertexArray(n64ViArray);
+    glDisable(GL_SCISSOR_TEST); glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND);
+    glViewport(0, 0, width, height);
+    glUniform1i(glGetUniformLocation(n64ViProgram, "source"), 0);
+    glUniform1i(glGetUniformLocation(n64ViProgram, "pixelScale"), scale);
+    glUniform1i(glGetUniformLocation(n64ViProgram, "precisionOn"), settings->colourPrecision);
+    glUniform1i(glGetUniformLocation(n64ViProgram, "ditherOn"), settings->dither);
+    for (int pass = 0; pass < 3; pass++) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, targets[pass & 1]);
+        glBindTexture(GL_TEXTURE_2D, pass ? textures[(pass - 1) & 1] : source);
+        glUniform4i(glGetUniformLocation(n64ViProgram, "region"), pass ? 0 : x, pass ? 0 : y, width, height);
+        int stage = pass;
+        if ((pass == 1 && (!settings->dedither || !settings->colourPrecision)) ||
+            (pass == 2 && !settings->divot)) stage = -1;
+        glUniform1i(glGetUniformLocation(n64ViProgram, "stage"), stage);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, targets[0]);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+    glBlitFramebuffer(0, 0, width, height, 0, flip ? outHeight : 0, outWidth, flip ? 0 : outHeight,
+                      GL_COLOR_BUFFER_BIT, settings->resample ? GL_LINEAR : GL_NEAREST);
+    glUseProgram(scene->program);
+    glDeleteFramebuffers(2, targets); glDeleteTextures(2, textures);
+}
+
+static void ViPasses(void)
+{
+    uint8_t source[32 * 24 * 4], pixels[sizeof(source)], expected[sizeof(source)];
+    const int cases[][7] = {
+        /* x, y, width, height, output width, output height, flip */
+        {0, 0, 32, 24, 32, 24, 0},
+        {3, 5, 13, 11, 13, 11, 0},
+        {3, 5, 13, 11, 19, 17, 0},
+        {3, 5, 13, 11, 7, 5, 0},
+        {3, 5, 13, 11, 19, 17, 1}
+    };
+    GLuint input, output;
+    RenderSettings saved = portSettings.render;
+    glActiveTexture(GL_TEXTURE0);
+    for (int y = 0; y < 24; y++) for (int x = 0; x < 32; x++) {
+        int i = (y * 32 + x) * 4;
+        source[i] = (x * 31 + y * 7) & 255;
+        source[i + 1] = (x * 3 + y * 29) & 255;
+        source[i + 2] = y < 12 ? 100 : x == 15 ? 0 : 128;
+        source[i + 3] = 255; /* Scene clears and blend state retain opaque framebuffer alpha. */
+    }
+    GLuint raw = ViTarget(&input, 32, 24, source);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    GLuint destination = ViTarget(&output, 32, 24, NULL);
+    PictureChanged(0, VRAM_HEIGHT);
+    colour = wideColour = input; framebuffer = wideFramebuffer = raw;
+    n64Track = sceneWide = 1; memset(pictureOwners, 0, sizeof(pictureOwners));
+    portSettings.render.selection = RENDER_AUTO;
+    for (int testScale = 1; testScale <= 2; testScale++) {
+        scale = testScale;
+        for (int bits = 0; bits < 64; bits++) {
+            N64RenderSettings options = {bits & 1, (bits >> 1) & 1, (bits >> 2) & 1,
+                                        (bits >> 3) & 1, (bits >> 4) & 1, (bits >> 5) & 1};
+            portSettings.render.n64 = options; RenderCommit();
+            /* Present/readback must use the drawn picture's settings, even after a commit. */
+            RememberPicture(0, 0, 320, 512);
+            portSettings.render.n64.colourPrecision = !options.colourPrecision; RenderCommit();
+            int passes = options.colourPrecision + (options.colourPrecision && options.dedither) + options.divot;
+            for (int c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+                const int *r = cases[c];
+                for (int wide = 0; wide <= 1; wide++) {
+                    int oldWidth = n64ViWidth, oldHeight = n64ViHeight;
+                    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+                    drawCalls = 0;
+                    BlitShown(wide, r[0], r[1], r[0] + r[2], r[1] + r[3],
+                              0, r[6] ? r[5] : 0, r[4], r[6] ? 0 : r[5]);
+                    /* Repeated source crops may be cached even when output size/flip changes. */
+                    assert(drawCalls == 0 || drawCalls == passes + (!passes && options.resample));
+                    if (wide && passes) assert(drawCalls == 0);
+                    if (!passes) assert(n64ViWidth == oldWidth && n64ViHeight == oldHeight);
+                    if (passes) {
+                        assert(n64ViTexture[0] && n64ViFramebuffer[0]);
+                        assert(!!n64ViTexture[1] == (passes > 1));
+                        assert(!!n64ViFramebuffer[1] == (passes > 1));
+                        GLint targetWidth, targetHeight;
+                        for (int i = 0; i < SDL_min(passes, 2); i++) {
+                            glBindTexture(GL_TEXTURE_2D, n64ViTexture[i]);
+                            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &targetWidth);
+                            glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &targetHeight);
+                            assert(targetWidth == r[2] && targetHeight == r[3]);
+                        }
+                    }
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+                    glReadPixels(0, 0, r[4], r[5], GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+                    ViReference(input, r[0], r[1], r[2], r[3], destination, r[4], r[5], r[6], &options);
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+                    glReadPixels(0, 0, r[4], r[5], GL_RGBA, GL_UNSIGNED_BYTE, expected);
+                    if (memcmp(pixels, expected, r[4] * r[5] * 4)) {
+                        fprintf(stderr, "VI mismatch: scale=%d options=%d crop=%d wide=%d\n", testScale, bits, c, wide);
+                        abort();
+                    }
+                }
+            }
+        }
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, raw);
+    glReadPixels(0, 0, 32, 24, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(!memcmp(source, pixels, sizeof(source)));
+    assert(glGetError() == GL_NO_ERROR);
+    glDeleteTextures(1, &input); glDeleteTextures(1, &output);
+    glDeleteFramebuffers(1, &raw); glDeleteFramebuffers(1, &destination);
+    portSettings.render = saved; memset(pictureOwners, 0, sizeof(pictureOwners)); n64Track = sceneWide = 0; RenderCommit();
+    puts("N64 VI: all 64 settings combinations match the old three-pass RGBA output; enabled-pass counts, crops, scaling, flips, wide/readback and snapshots: OK");
+}
+
+static void ViResampling(void)
+{
+    const int sizes[][2] = {{320, 240}, {640, 480}, {960, 720}, {7, 5}};
+    RenderSettings saved = portSettings.render;
+    for (int testScale = 1; testScale <= 2; testScale++) {
+        int width = 1024 * testScale, height = 512 * testScale;
+        size_t bytes = (size_t)width * height * 4;
+        uint8_t *source = malloc(bytes), *pixels = malloc(960 * 720 * 4), *expected = malloc(960 * 720 * 4);
+        assert(source && pixels && expected);
+        for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {
+            size_t i = ((size_t)y * width + x) * 4;
+            source[i] = (x * 31 + y * 7) & 255;
+            source[i + 1] = (x * 3 + y * 29) & 255;
+            source[i + 2] = (x + y * 13) & 255;
+            source[i + 3] = 255;
+        }
+        GLuint input, output;
+        glActiveTexture(GL_TEXTURE0);
+        GLuint raw = ViTarget(&input, width, height, source);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        GLuint destination = ViTarget(&output, 970, 730, NULL);
+        PictureChanged(0, VRAM_HEIGHT);
+        colour = input; framebuffer = raw; scale = testScale;
+        portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+        portSettings.render.n64 = (N64RenderSettings){1, 0, 1, 1, 0, 1};
+        memset(pictureOwners, 0, sizeof(pictureOwners)); n64Track = sceneWide = 1; RenderCommit();
+        for (int c = 0; c < sizeof(sizes) / sizeof(sizes[0]); c++) for (int flip = 0; flip <= 1; flip++) {
+            int x = 53 * scale, y = 240 * scale, w = 320 * scale, h = 240 * scale;
+            int outW = sizes[c][0], outH = sizes[c][1];
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+            drawCalls = 0;
+            BlitShown(0, x, y, x + w, y + h, 3, 5 + (flip ? outH : 0), 3 + outW, 5 + (flip ? 0 : outH));
+            assert(drawCalls == 1); /* Only direct final resampling, no intermediate VI passes. */
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+            glReadPixels(3, 5, outW, outH, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+            ViReference(input, x, y, w, h, destination, outW, outH, flip, &portSettings.render.n64);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+            glReadPixels(0, 0, outW, outH, GL_RGBA, GL_UNSIGNED_BYTE, expected);
+            for (size_t i = 0; i < (size_t)outW * outH * 4; i++) {
+                if (pixels[i] != expected[i]) {
+                    fprintf(stderr, "VI resample mismatch: scale=%d size=%d flip=%d byte=%zu got=%d expected=%d\n",
+                            scale, c, flip, i, pixels[i], expected[i]);
+                    abort();
+                }
+            }
+        }
+        assert(glGetError() == GL_NO_ERROR);
+        glDeleteTextures(1, &input); glDeleteTextures(1, &output);
+        glDeleteFramebuffers(1, &raw); glDeleteFramebuffers(1, &destination);
+        free(source); free(pixels); free(expected);
+    }
+    portSettings.render = saved; n64Track = sceneWide = 0; RenderCommit();
+    puts("N64 VI bypass: native-size scene textures, offset destinations, resized readback and flipped presentation match the old RGBA output: OK");
+}
+
+/* Real ownership transitions and cache invalidation, without shader-test shortcuts. */
+static void RendererLifecycle(void)
+{
+    GLuint input, output;
+    uint8_t source[16 * 16 * 4], before[sizeof(source)], after[sizeof(source)];
+    memset(source, 100, sizeof(source));
+    for (int i = 3; i < sizeof(source); i += 4) source[i] = 255;
+    glActiveTexture(GL_TEXTURE0);
+    GLuint raw = ViTarget(&input, 16, 16, source);
+    GLuint destination = ViTarget(&output, 16, 16, NULL);
+    colour = input; framebuffer = raw; wideFramebuffer = 0; wideMargin = 0; areaWide = 0;
+    scale = 1; PictureChanged(0, VRAM_HEIGHT); memset(pictureOwners, 0, sizeof(pictureOwners)); n64Track = sceneWide = 1;
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    RenderCommit();
+    GpuRendererShutdown();
+    RememberPicture(0, 0, 320, 512);
+    for (int repeat = 0; repeat < 2; repeat++) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        drawCalls = 0;
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        assert(drawCalls == (repeat ? 0 : 3));
+        assert(!pipeline && !scene && !n64Program.program); /* presentation needs only VI */
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, before);
+    /* A real backend clear changes pixels and invalidates the cached VI output. */
+    GpuClearArea(0, 0, 16, 16, 240, 40, 40);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+    drawCalls = 0;
+    BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+    assert(drawCalls == 3);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, after);
+    assert(memcmp(before, after, sizeof(before)));
+    GLuint viTextures[2] = {n64ViTexture[0], n64ViTexture[1]};
+    assert(viTextures[0] && glIsTexture(viTextures[0]));
+    portSettings.render.selection = RENDER_PS1; RenderCommit();
+    /* A commit alone retains the last N64 picture and its cached presentation. */
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+    drawCalls = 0;
+    BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+    assert(drawCalls == 0 && !n64Program.program);
+    /* New geometry takes ownership; retain the last presenter until it switches too. */
+    GpuDrawState state = {.semi = -1};
+    GpuVertex v = {.x = 0, .y = 0, .a = 255, .r = 255};
+    Begin(&state, 3); Add(&v, 0);
+    v.x = 4; Add(&v, 0); v.y = 4; Add(&v, 0);
+    Flush();
+    assert(pipeline == &ps1Pipeline && pictureOwners[0].render.id == RENDER_PS1);
+    assert(n64ViProgram && viCache.valid);
+    GLuint drawingProgram = scene->program;
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+    BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+    assert(scene->program == drawingProgram);
+    assert(!n64Program.program && !n64ViProgram && !n64ViArray && !n64ViTexture[0] && !viCache.valid);
+    assert(!glIsTexture(viTextures[0]) && !glIsTexture(viTextures[1]));
+    for (int cycle = 0; cycle < 4; cycle++) {
+        portSettings.render.selection = RENDER_N64; RenderCommit(); memset(pictureOwners, 0, sizeof(pictureOwners));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        drawCalls = 0;
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        assert(drawCalls == 3 && n64ViProgram && !n64Program.program);
+        UsePipeline(cycle & 1 ? RENDER_PS1 : RENDER_PC);
+        drawingProgram = scene->program;
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        drawCalls = 0;
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        assert(!drawCalls && scene->program == drawingProgram && isProgram(drawingProgram));
+        portSettings.render.selection = cycle & 1 ? RENDER_PS1 : RENDER_PC;
+        RenderCommit();
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        assert(!n64Program.program && !n64ViProgram && !viCache.valid);
+    }
+    GpuRendererShutdown();
+    assert(!pipeline && !scene && !presentPipeline && !isProgram(drawingProgram));
+    assert(glGetError() == GL_NO_ERROR);
+    glDeleteTextures(1, &input); glDeleteTextures(1, &output);
+    glDeleteFramebuffers(1, &raw); glDeleteFramebuffers(1, &destination);
+    puts("Presentation skips scene compilation and retains the drawing program; unused renderer resources are released: OK");
+}
+
+
+/* The displayed and next console screens can have different owners/settings. */
+static void ScreenBufferOwnership(void)
+{
+    GLuint input, output;
+    size_t bytes = VRAM_WIDTH * VRAM_HEIGHT * 4;
+    uint8_t *source = malloc(bytes), before[16*16*4], after[sizeof(before)], rawPixels[sizeof(before)];
+    memset(source, 100, bytes);
+    for (size_t i = 3; i < bytes; i += 4) source[i] = 255;
+    glActiveTexture(GL_TEXTURE0);
+    GLuint raw = ViTarget(&input, VRAM_WIDTH, VRAM_HEIGHT, source);
+    GLuint destination = ViTarget(&output, 16, 16, NULL);
+    colour = input; framebuffer = raw; wideMargin = areaWide = 0; scale = 1;
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    for (int direction = 0; direction < 3; direction++) {
+        n64Track = sceneWide = 1; PictureChanged(0, VRAM_HEIGHT);
+        memset(pictureOwners, 0, sizeof(pictureOwners));
+        portSettings.render.selection = direction ? RENDER_N64 : RENDER_PS1;
+        portSettings.render.n64 = (N64RenderSettings){1,1,1,1,1,1};
+        RenderCommit(); RememberPicture(0, 0, 320, 256);
+        RenderFrame front = pictureOwners[0].render;
+        uint64_t frontRevision = pictureRevision[0];
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+        glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, before);
+        portSettings.render.selection = direction == 1 ? RENDER_PS1 : RENDER_N64;
+        if (direction == 2) portSettings.render.n64.colourPrecision = 0;
+        RenderCommit();
+        areaX = 0; areaY = 256; areaW = 320; areaH = 240;
+        GpuDrawState state = {.semi = -1};
+        GpuVertex v = {.x = 0, .y = 256, .a = 255, .r = 255};
+        Begin(&state, 3); Add(&v, 0); v.x = 4; Add(&v, 0); v.y = 260; Add(&v, 0); Flush();
+        GLuint drawingProgram = scene->program;
+        assert(pictureRevision[0] == frontRevision && pictureRevision[1] > frontRevision);
+        assert(!memcmp(&pictureOwners[0].render, &front, sizeof(front)));
+        assert(pictureOwners[1].render.id == RenderCurrent()->id);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, raw);
+        glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, rawPixels);
+        for (int i = 0; i < sizeof(rawPixels); i++) assert(rawPixels[i] == (i % 4 == 3 ? 255 : 100));
+        /* Even scene/menu state for the next frame must not alter the front picture. */
+        sceneWide = 0; picturesWithoutScene = 1000;
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        drawCalls = 0;
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        assert(!drawCalls && scene->program == drawingProgram);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+        glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, after);
+        assert(!memcmp(before, after, sizeof(before)));
+        /* Image copies carry their source owner, including when the CPU policy differs. */
+        GpuMoveFramebuffer(0, 0, 320, 240, 0, 256);
+        assert(!memcmp(&pictureOwners[1].render, &front, sizeof(front)) && pictureOwners[1].race);
+        GpuClearArea(0, 256, 320, 240, 100, 100, 100);
+        assert(pictureOwners[1].render.id == RenderCurrent()->id && !pictureOwners[1].race);
+        GpuWriteFramebuffer(0, 256, 1, 1);
+        assert(!memcmp(&pictureOwners[0].render, &front, sizeof(front)));
+        assert(pictureRevision[0] == frontRevision);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        drawCalls = 0;
+        BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
+        assert(!drawCalls && scene->program == drawingProgram);
+        GpuWriteFramebuffer(0, 0, 1, 1);
+        assert(!memcmp(&pictureOwners[0].render, RenderCurrent(), sizeof(front)));
+        assert(pictureRevision[0] > frontRevision);
+        uint64_t backRevision = pictureRevision[1];
+        frontRevision = pictureRevision[0];
+        GpuClearArea(0, 255, 1, 2, 100, 100, 100);
+        assert(pictureRevision[0] > frontRevision && pictureRevision[1] > backRevision);
+        /* Restore the test source for the next direction. */
+        glBindTexture(GL_TEXTURE_2D, input);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, VRAM_WIDTH, VRAM_HEIGHT, GL_RGBA, GL_UNSIGNED_BYTE, source);
+    }
+    /* A readback crop straddling both screens must notice a change in either one,
+       even when the other screen previously had the newer revision. */
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    n64Track = sceneWide = 1; RenderCommit();
+    RememberPicture(0, 0, 320, 512); PictureChanged(0, VRAM_HEIGHT);
+    for (int update = 0; update < 3; update++) {
+        if (update) GpuClearArea(0, update == 1 ? 260 : 250, 16, 1, 240, 40, 40);
+        for (int repeat = 0; repeat < 2; repeat++) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+            drawCalls = 0;
+            BlitShown(0, 0, 248, 16, 264, 0, 0, 16, 16);
+            assert(drawCalls == (repeat ? 0 : 3));
+        }
+    }
+    GpuClearDepth(0, 248, 16, 16);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+    drawCalls = 0;
+    BlitShown(0, 0, 248, 16, 264, 0, 0, 16, 16);
+    assert(!drawCalls); /* depth-only writes do not invalidate displayed colour */
+    uint64_t frontRevision = pictureRevision[0], backRevision = pictureRevision[1];
+    SetWideMargin(1);
+    assert(pictureRevision[0] > frontRevision && pictureRevision[1] > backRevision);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+    drawCalls = 0;
+    BlitShown(0, 0, 248, 16, 264, 0, 0, 16, 16);
+    assert(drawCalls == 3);
+    SetWideMargin(0);
+    assert(glGetError() == GL_NO_ERROR);
+    GpuRendererShutdown();
+    glDeleteTextures(1, &input); glDeleteTextures(1, &output);
+    glDeleteFramebuffers(1, &raw); glDeleteFramebuffers(1, &destination); free(source);
+    puts("Screen-buffer ownership and revisions: back-buffer draws/copies/clears/uploads preserve front VI cache and pixels: OK");
+    puts("VI cache: crops spanning both buffers, depth-only clears and framebuffer reallocations: OK");
 }
 
 int main(void)
@@ -198,22 +1282,18 @@ int main(void)
     SDL_Window *window = SDL_CreateWindow("N64 shader regression", 16, 16, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     if (!window) { fprintf(stderr, "%s\n", SDL_GetError()); return 1; }
     SDL_GLContext context = SDL_GL_CreateContext(window);
-    assert(context && SDL_GL_MakeCurrent(window, context) && LoadFunctions());
-    program = glCreateProgram();
-    glAttachShader(program, Compile(GL_VERTEX_SHADER, vertexSource));
-    glAttachShader(program, Compile(GL_FRAGMENT_SHADER, fragmentSource));
-    const char *names[] = {"position", "colour", "texel", "texture", "window", "modeIn", "hdIn", "hdTexelsIn", "filterBoundsIn"};
-    for (int i = 0; i < 9; i++) glBindAttribLocation(program, (GLuint)i, names[i]);
-    glLinkProgram(program);
-    GLint linked; glGetProgramiv(program, GL_LINK_STATUS, &linked); assert(linked);
-    glUseProgram(program);
-    glUniform2f(glGetUniformLocation(program, "target"), 1, 1);
-    glUniform2f(glGetUniformLocation(program, "origin"), 0, 0);
-    glUniform1f(glGetUniformLocation(program, "depthPull"), 1);
-    glUniform1i(glGetUniformLocation(program, "vram"), 0);
-    glUniform1i(glGetUniformLocation(program, "glyphs"), 1);
-    glUniform1i(glGetUniformLocation(program, "hdAtlas"), 1);
-    glUniform1i(glGetUniformLocation(program, "portPages"), 1);
+    assert(context && SDL_GL_MakeCurrent(window, context) && RenderGlLoad());
+    isProgram = (PFNGLISPROGRAMPROC)SDL_GL_GetProcAddress("glIsProgram");
+    assert(isProgram);
+    UsePipeline(RENDER_PS1);
+    glUseProgram(scene->program);
+    glUniform2f(glGetUniformLocation(scene->program, "target"), 1, 1);
+    glUniform2f(glGetUniformLocation(scene->program, "origin"), 0, 0);
+    glUniform1f(glGetUniformLocation(scene->program, "depthPull"), 1);
+    glUniform1i(glGetUniformLocation(scene->program, "vram"), 0);
+    glUniform1i(glGetUniformLocation(scene->program, "glyphs"), 1);
+    testAtlasUnit = 1; glUniform1i(glGetUniformLocation(scene->program, "hdAtlas"), 1);
+    glUniform1i(glGetUniformLocation(scene->program, "portPages"), 1);
     glGenVertexArrays(1, &vertexArray); glBindVertexArray(vertexArray);
     glGenBuffers(1, &vertexBuffer); glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, x));
@@ -248,45 +1328,88 @@ int main(void)
     palette[1] = 31; palette[2] = 31 << 5; palette[3] = 31 << 10; palette[4] = 0x7fff;
     words[0] = 0x21; words[1024] = 0x43; Upload();
     ThreePointSquare(0);
-    Render(0, 0, .5f, .5f, 128, -1, 0, full, 0, 0, 1); /* PS1 remains nearest */
-    Render(0, 0, 1.5f, .5f, 128, -1, 0, 0, full, 0, 1); /* second 4-bit index */
-    Render(0, 0, .5f, .5f, 255, -1, 0, 1, 0, 0, 1); /* PS1 overbright modulation retained */
-    Render(1, 0, .5f, .5f, PortN64Modulation(255), -1, 0, 0, half, half, 1);
-    Render(1, 0, .5f, .5f, PortN64Modulation(128), -1, 0, 0, half / 2, half / 2, 1);
-    Render(1, 0, 1.75f, 0, 128, -1, 0, 0, full, 0, 1); /* no neighbor bleed */
-    Render(1, 0, -.25f, -.25f, 128, -1, 0, full, 0, 0, 1); /* clamp before negative wrap */
+    BilinearSquare(0);
+    Render(RENDER_PS1, 0, 0, .5f, .5f, 128, -1, 0, full, 0, 0, 1); /* PS1 remains nearest */
+    Render(RENDER_PS1, 0, 0, 1.5f, .5f, 128, -1, 0, 0, full, 0, 1); /* second 4-bit index */
+    Render(RENDER_PS1, 0, 0, .5f, .5f, 255, -1, 0, 1, 0, 0, 1); /* PS1 overbright modulation retained */
+    Render(RENDER_N64, 1, 0, .5f, .5f, PortN64Modulation(255), -1, 0, 0, half, half, 1);
+    Render(RENDER_N64, 1, 0, .5f, .5f, PortN64Modulation(128), -1, 0, 0, half / 2, half / 2, 1);
+    Render(RENDER_N64, 1, 0, 1.75f, 0, 128, -1, 0, 0, full, 0, 1); /* no neighbor bleed */
+    Render(RENDER_N64, 1, 0, -.25f, -.25f, 128, -1, 0, full, 0, 0, 1); /* clamp before negative wrap */
     words[0] = 0x0201; words[1024] = 0x0403; Upload();
     ThreePointSquare(1);
-    Render(0, 1, .5f, .5f, 128, -1, 0, full, 0, 0, 1);
-    Render(0, 1, 1.5f, .5f, 128, -1, 0, 0, full, 0, 1); /* second 8-bit index */
+    BilinearSquare(1);
+    Render(RENDER_PS1, 0, 1, .5f, .5f, 128, -1, 0, full, 0, 0, 1);
+    Render(RENDER_PS1, 0, 1, 1.5f, .5f, 128, -1, 0, 0, full, 0, 1); /* second 8-bit index */
     words[0] = 31; words[1] = 31 << 5; words[1024] = 31 << 10; words[1025] = 0x7fff; Upload();
     ThreePointSquare(2);
-    Render(0, 2, .5f, .5f, 128, -1, 0, full, 0, 0, 1);
-    Render(0, 2, 1.5f, .5f, 128, -1, 0, 0, full, 0, 1); /* direct colour */
+    BilinearSquare(2);
+    Interpolation();
+    testShade = SHADE_PC_TINT | SHADE_AFFINE_COLOUR;
+    Render(RENDER_PC, 2, 2, .5f, .5f, 255, -1, 0, full, 0, 0, 1);
+    Render(RENDER_PC, 2, 2, .5f, .5f, 128, -1, 0, full * 128 / 255, 0, 0, 1);
+    testShade = SHADE_PS1_COLOUR | SHADE_AFFINE_COLOUR | SHADE_AFFINE_UV;
+    Render(RENDER_PS1, 0, 2, .5f, .5f, 100, -1, 0, 192.0f / 255, 0, 0, 1);
+    testShade |= SHADE_DITHER;
+    Render(RENDER_PS1, 0, 2, .5f, .5f, 100, -1, 0, 184.0f / 255, 0, 0, 1);
+    testShade = 0;
+    Render(RENDER_PS1, 0, 2, .5f, .5f, 128, -1, 0, full, 0, 0, 1);
+    Render(RENDER_PS1, 0, 2, 1.5f, .5f, 128, -1, 0, 0, full, 0, 1); /* direct colour */
     /* Only top-left is opaque: its triangular weight is 1-u-v, not (1-u)*(1-v). */
     words[0] = 0x01; words[1024] = 0; Upload();
-    Render(1, 0, .25f, .25f, 128, -1, 0, half, 0, 0, .5f);
-    Render(1, 0, .5f, .5f, 128, -1, 0, 0, 0, 0, 0);
+    Render(RENDER_N64, 1, 0, .25f, .25f, 128, -1, 0, half, 0, 0, .5f);
+    Render(RENDER_N64, 1, 0, .5f, .5f, 128, -1, 0, 0, 0, 0, 0);
+    Render(RENDER_PC, 2, 0, 1, 1, 128, -1, 0, full / 4, 0, 0, .25f);
+    Render(RENDER_PC, 2, 0, 1, 1, 255, -1, 0, .25f, 0, 0, .25f); /* no bright transparent fringe */
+    Render(RENDER_PC, 2, 0, 1, 1, 128, -1, 3, 0, 0, 0, 0); /* partial coverage cannot write depth */
     words[0] = words[1024] = 0x01; Upload();
-    Render(0, 0, 1, 0, 128, -1, 0, 0, 0, 0, 0); /* PS1 transparent texel */
-    Render(1, 0, .5f, .5f, 128, -1, 0, half, 0, 0, .5f); /* premultiplied transparent edge */
-    Render(1, 0, .5f, .5f, 128, -1, 3, 0, 0, 0, 0); /* edge must not occlude */
+    Render(RENDER_PS1, 0, 0, 1, 0, 128, -1, 0, 0, 0, 0, 0); /* PS1 transparent texel */
+    Render(RENDER_N64, 1, 0, .5f, .5f, 128, -1, 0, half, 0, 0, .5f); /* premultiplied transparent edge */
+    Render(RENDER_N64, 1, 0, .5f, .5f, 128, -1, 3, 0, 0, 0, 0); /* edge must not occlude */
     words[0] = words[1024] = 0x21; palette[2] |= 0x8000; Upload();
-    Render(0, 0, 1, 0, 128, 0, 0, 0, half, 0, .5f); /* PS1 semi-transparent texel */
-    Render(1, 0, .5f, .5f, 128, 0, 0, half, half / 2, 0, .75f);
-    Render(1, 0, .5f, .5f, 128, 1, 0, half, half, 0, .5f);
-    Render(1, 0, .5f, .5f, 128, 3, 0, half, half / 4, 0, .5f);
-    Render(1, 0, .5f, .5f, 128, 2, 1, half, 0, 0, .5f);
-    Render(1, 0, .5f, .5f, 128, 2, 2, 0, half, 0, 0);
+    Render(RENDER_PS1, 0, 0, 1, 0, 128, 0, 0, 0, half, 0, .5f); /* PS1 semi-transparent texel */
+    Render(RENDER_N64, 1, 0, .5f, .5f, 128, 0, 0, half, half / 2, 0, .75f);
+    Render(RENDER_N64, 1, 0, .5f, .5f, 128, 1, 0, half, half, 0, .5f);
+    Render(RENDER_N64, 1, 0, .5f, .5f, 128, 3, 0, half, half / 4, 0, .5f);
+    Render(RENDER_N64, 1, 0, .5f, .5f, 128, 2, 1, half, 0, 0, .5f);
+    Render(RENDER_N64, 1, 0, .5f, .5f, 128, 2, 2, 0, half, 0, 0);
+    Render(RENDER_PC, 2, 0, 1, 1, 128, 0, 0, half, half / 2, 0, .75f);
+    Render(RENDER_PC, 2, 0, 1, 1, 128, 1, 0, half, half, 0, .5f);
+    Render(RENDER_PC, 2, 0, 1, 1, 128, 3, 0, half, half / 4, 0, .5f);
+    Render(RENDER_PC, 2, 0, 1, 1, 128, 2, 1, half, 0, 0, .5f);
+    Render(RENDER_PC, 2, 0, 1, 1, 128, 2, 2, 0, half, 0, 0);
     palette[2] &= 0x7fff; words[63] = words[1024 + 63] = 0x2100;
     bounds[0] = 254; bounds[2] = 255; Upload();
-    Render(1, 0, 255.5f, 0, 128, -1, 0, 0, full, 0, 1); /* clamp before page wrap */
-    Render(0, 0, 256.5f, 0, 128, -1, 0, full, 0, 0, 1); /* PS1 wraps rather than clamps */
-    Render(0, 0, -.25f, 0, 128, -1, 0, 0, full, 0, 1);
+    Render(RENDER_N64, 1, 0, 255.5f, 0, 128, -1, 0, 0, full, 0, 1); /* clamp before page wrap */
+    Render(RENDER_PS1, 0, 0, 256.5f, 0, 128, -1, 0, full, 0, 0, 1); /* PS1 wraps rather than clamps */
+    Render(RENDER_PS1, 0, 0, -.25f, 0, 128, -1, 0, 0, full, 0, 1);
+    Render(RENDER_PC, 2, 0, 256, .5f, 128, -1, 0, half, half, 0, 1); /* taps wrap independently */
+    Render(RENDER_PC, 2, 0, 0, .5f, 128, -1, 0, half, half, 0, 1);
+    /* A texture window forces bit 3 of each tap; filtering must resolve those texels first. */
+    words[2] = words[1026] = 0x21; Upload();
+    testWindow[0] = testWindow[2] = 1;
+    Render(RENDER_PC, 2, 0, 1, 1, 128, -1, 0, half, half, 0, 1);
+    memset(testWindow, 0, sizeof(testWindow));
     bounds[0] = 0; bounds[2] = 1;
-    HdThreePoint();
+    HdFiltering();
+    GlyphUpload();
+    FullColourProfiles();
+    N64Materials();
+    N64GameplayLight();
+    N64SaturatedLight();
     DepthBatches(fbo, output, dummy);
+    N64SharedMaterials();
+    WorldDithering();
+    MainMenuColour();
+    N64RenderSettings noVi = {.threePoint = 1, .dither = 1, .dedither = 1, .resample = 1};
+    assert(!n64ViProgram && !TestN64Picture(0, 3, 5, 13, 11, &noVi, scale));
+    assert(!n64ViProgram && !n64ViTexture[0] && !n64ViTexture[1]);
+    ViFiltering();
+    ViPasses();
+    ViResampling();
+    RendererLifecycle();
+    ScreenBufferOwnership();
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
-    puts("Production GL shaders: N64 three-point/native/HD/brightness/bounds/coverage/blend passes and unchanged PS1 sampling: OK");
+    puts("Production GL shaders: N64 three-point, optional bilinear native/HD, bounds/wrapping/windows, coverage/blend passes and default PS1 sampling: OK");
     return 0;
 }

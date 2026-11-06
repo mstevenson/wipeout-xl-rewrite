@@ -199,27 +199,6 @@ static int TextureOffset(int type)
     return 0;
 }
 
-/* Rescale textured RGB from N64 to PS1 tint; preserve untextured colours and the fourth byte. */
-static void NormalizeN64Primitive(unsigned char *p, int type)
-{
-    int offset = 0, count = 1;
-    switch (type) {
-    case TypeFT3: offset = offsetof(FT3, colour); break;
-    case TypeFT4: offset = offsetof(FT4, colour); break;
-    case TypeGT3: offset = offsetof(GT3, colour); count = 3; break;
-    case TypeGT4: offset = offsetof(GT4, colour); count = 4; break;
-    case TypeLSFT3: offset = offsetof(LSFT3, colour); break;
-    case TypeLSFT4: offset = offsetof(LSFT4, colour); break;
-    case TypeLSGT3: offset = offsetof(LSGT3, colour); count = 3; break;
-    case TypeLSGT4: offset = offsetof(LSGT4, colour); count = 4; break;
-    case TypeTSPR: case TypeBSPR: offset = offsetof(SPR, colour); break;
-    default: return;
-    }
-    for (int i = 0; i < count; i++)
-        for (int c = 0; c < 3; c++)
-            p[offset + 4 * i + c] = PortN64Modulation(p[offset + 4 * i + c]);
-}
-
 static int ConvertPrm(char *file, int length, int shift, int n64)
 {
     unsigned char *in = (unsigned char *)file;
@@ -249,8 +228,14 @@ static int ConvertPrm(char *file, int length, int shift, int n64)
                 in[end + at] = (unsigned char)(texture >> 8);
                 in[end + at + 1] = (unsigned char)texture;
             }
-            if (n64) NormalizeN64Primitive(in + end, type);
             end += size;
+        }
+        if (n64) {
+            /* Port: preserve authored RGB; tag the imported copy, including untextured faces. */
+            int at = pos + FindField(objectTable, "flags")->fileOffset;
+            int flags = ReadBigShort(in + at) | PORT_OBJECT_N64;
+            in[at] = (unsigned char)(flags >> 8);
+            in[at + 1] = (unsigned char)flags;
         }
         pos = end;
     }
@@ -262,7 +247,7 @@ int PortPrmShiftTextures(char *file, int length, int shift)
     return ConvertPrm(file, length, shift, 0);
 }
 
-int PortPrmNormalizeN64(char *file, int length)
+int PortPrmMarkN64(char *file, int length)
 {
     return ConvertPrm(file, length, 0, 1);
 }

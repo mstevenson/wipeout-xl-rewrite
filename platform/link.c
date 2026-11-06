@@ -16,6 +16,7 @@
 
 #include "link.h"
 #include "platform.h"
+#include "settings.h"
 #ifdef PORT_HAVE_SECOND_GAME
 #include "second/second.h"
 #endif
@@ -40,6 +41,7 @@ typedef struct LinkShared {
     atomic_int split;               /* master: both are racing, the window is split */
     atomic_int bandMargin, bandWidth, bandHeight; /* master: the lower half (widescreen margin, pixels) */
     atomic_int interpolate;         /* master: pictures between the game's frames (the slave draws its own too) */
+    RenderSettings render;         /* complete requested profile snapshot, protected by inputLock */
     SDL_Mutex *inputLock;
     LinkInput input;                /* the second player's controller, written by the master */
     atomic_uint inputSequence;
@@ -78,6 +80,7 @@ static LinkShared *MapShared(int create)
             return NULL;
         }
         memory->magic = LINK_MAGIC;
+        memory->render = portSettings.render;
     }
     return memory;
 }
@@ -286,6 +289,10 @@ int PortLinkField(void)
         return 0;
     }
     atomic_fetch_add(&shared->heartbeat[role == LINK_MASTER ? 0 : 1], 1);
+    SDL_LockMutex(shared->inputLock);
+    if (role == LINK_MASTER) shared->render = portSettings.render;
+    else portSettings.render = shared->render;
+    SDL_UnlockMutex(shared->inputLock);
     return role == LINK_SLAVE && atomic_load(&shared->slaveState) == LINK_SLAVE_BOOTING;
 }
 

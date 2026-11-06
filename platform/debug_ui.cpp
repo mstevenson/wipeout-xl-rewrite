@@ -2,6 +2,7 @@
 // changes the settings (settings.h), which are saved as they change: the frame-rate overlay, the draw
 // distance and its fade, the frame rate, widescreen, the intro movie, full screen, and where the settings and the
 // memory cards live. Not in the tests' hidden runs.
+#include "render/renderer_ui.h"
 #include <SDL3/SDL.h>
 #include "port_gl.h"
 
@@ -1674,7 +1675,7 @@ static void SavesTab(void)
     }
 }
 
-// The resolution: the framebuffer's scale (gpu_gl.c), the window's or the player's.
+// The resolution: the framebuffer's scale (render/gl_backend.c), the window's or the player's.
 // The video standard (region.c): the disc's, or either for both; the game runs to it from its start.
 static void VideoStandard(void)
 {
@@ -1888,8 +1889,9 @@ static void Console(void)
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Graphics", nullptr, FirstTab("graphics"))) {
+            if (RenderSettingsUi(&portSettings.render)) Changed();
+            ImGui::SeparatorText("Display and scene");
             Resolution();
-            ImGui::Separator();
             static const char *const distances[] = {"Console (pop-in at the original distance)", "Full (the whole track)"};
             int distance = portSettings.farView ? 1 : 0;
             if (ImGui::Combo("Draw distance", &distance, distances, IM_ARRAYSIZE(distances))) {
@@ -1909,12 +1911,6 @@ static void Console(void)
             }
             ImGui::TextDisabled("The ships beyond the console's draw distance (it drew no flares there).");
             ImGui::EndDisabled();
-            bool depthBuffer = !portSettings.consoleDepth;
-            if (ImGui::Checkbox("Depth buffer", &depthBuffer)) {
-                portSettings.consoleDepth = !depthBuffer;
-                Changed();
-            }
-            ImGui::TextDisabled("Off: far polygons can be drawn over nearer ones, as on the console.");
             ImGui::Separator();
             const char *const rates[] = {"Uncapped", "Display refresh (VSync)", "Capped",
                                          portPal ? "PS1 original (25 fps)" : "PS1 original (30 fps)"};

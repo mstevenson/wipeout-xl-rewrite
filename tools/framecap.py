@@ -28,6 +28,7 @@ DRAW_FIELDS = ('textured', 'raw', 'semi', 'depth', 'pageX', 'pageY', 'clutX', 'c
                'windowOffsetX', 'windowOffsetY', 'dither', 'fade', 'depthTest')
 KINDS = ('polygon', 'line', 'rectangle', 'fill')
 SKIP0, SKIP1, FAR, PRECISE, DROPPED = 1, 2, 4, 8, 16
+SHADE_AFFINE_COLOUR, SHADE_AFFINE_UV, SHADE_SNAP = 16, 32, 128
 BLENDS = ('B/2+F/2', 'B+F', 'B-F', 'B+F/4')
 
 
@@ -35,11 +36,40 @@ class Prim:
     pass
 
 
+def legacy_policy(folder):
+    """Version 3 from the renderer split has an INI sidecar; older captures do not."""
+    path = os.path.join(folder, 'renderer.ini')
+    if not os.path.exists(path):
+        return None
+    options = {}
+    for line in open(path):
+        if line.startswith('# Active renderer:'):
+            options['active'] = line.split(':', 1)[1].strip()
+        elif '=' in line:
+            key, value = line.split('=', 1)
+            options[key.strip()] = value.strip()
+    return options
+
+
+def legacy_shade(policy):
+    if policy is None:
+        return 0  # historical renderer used perspective UVs and colours
+    ps1 = policy.get('active') == 'PlayStation' or policy.get('renderer') == 'ps1'
+    flags = SHADE_AFFINE_COLOUR
+    if ps1:
+        if policy.get('ps1_affine_textures', '1') != '0':
+            flags |= SHADE_AFFINE_UV
+        if policy.get('ps1_quantize_vertices', '1') != '0':
+            flags |= SHADE_SNAP
+    return flags
+
+
 def load(folder):
     data = open(os.path.join(folder, 'frames.bin'), 'rb').read()
     assert data[:4] == b'XLFC', 'not a frame recording'
     version, count = struct.unpack_from('<ii', data, 4)
     pos = 12
+    default_shade = legacy_shade(legacy_policy(folder))
     frames = []
     for index in range(count):
         game, shown, ox, oy, ax, ay, aw, ah, vram, n = FRAME.unpack_from(data, pos)
@@ -68,6 +98,10 @@ def load(folder):
             p.address, tag = PRIM_TAIL.unpack_from(data, pos)
             pos += PRIM_TAIL.size
             p.tag = tag.split(b'\0')[0].decode('latin-1')
+            p.shade = default_shade
+            if version >= 4:
+                p.shade, = struct.unpack_from('<I', data, pos)
+                pos += 4
             prims.append(p)
         frames.append(dict(index=index, game=game, shown=shown, offset=(ox, oy), area=(ax, ay, aw, ah), vram=vram,
                            prims=prims, folder=folder, picture_x=picture_x, between=between))
@@ -145,14 +179,17 @@ def inside(a, b, c, x, y):
 
 
 def shade(frame, p, t, l):
-    """What gpu_gl.c's fragment shader writes at barycentric l of triangle t."""
+    """Captured interpolation with native single-texel lookup (no HD/VI replay)."""
     ws = [v['w'] if v['w'] > 0 else 1.0 for v in t]
     k = [l[i] / ws[i] for i in range(3)]
     s = sum(k)
     k = [x / s for x in k]
-    u = sum(k[i] * t[i]['u'] for i in range(3))
-    v = sum(k[i] * t[i]['v'] for i in range(3))
-    c = [sum(k[i] * t[i][ch] for i in range(3)) for ch in 'rgba']
+    flags = p.shade
+    uv = l if flags & SHADE_AFFINE_UV else k
+    rgb = l if flags & SHADE_AFFINE_COLOUR else k
+    u = sum(uv[i] * t[i]['u'] for i in range(3))
+    v = sum(uv[i] * t[i]['v'] for i in range(3))
+    c = [sum((k if ch == 'a' else rgb)[i] * t[i][ch] for i in range(3)) for ch in 'rgba']
     out = dict(u=u, v=v, texel=None, alpha=c[3], transparent=False)
     d = p.draw
     mem = vram(frame)
@@ -198,6 +235,8 @@ def hits(frame, x, y):
         triangles = 1 if p.kind == 0 and p.count == 3 else 2
         for k in range(triangles):
             t = p.v[k:k + 3]
+            if p.shade & SHADE_SNAP:
+                t = [dict(v, x=math.floor(v['x']), y=math.floor(v['y'])) for v in t]
             l = inside(t[0], t[1], t[2], px, py)
             if l is None:
                 continue

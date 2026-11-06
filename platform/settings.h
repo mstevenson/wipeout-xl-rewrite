@@ -1,9 +1,10 @@
 /* The player's settings (settings.c): a small INI file in the user's data folder, changed from the
    debug console (debug_ui.cpp, the ~ key). Environment variables still override them for a
    run (WIPEOUT_FAR_VIEW, WIPEOUT_FAR_FLARES, WIPEOUT_FADE, WIPEOUT_WIDESCREEN, WIPEOUT_FRAME_RATE, WIPEOUT_SAVE_DIR, WIPEOUT_RENDER_SCALE,
-   WIPEOUT_HD_PACK, WIPEOUT_MUSIC, WIPEOUT_TOUCH, WIPEOUT_SURROUND); the tests' hidden runs ignore the file. */
+   WIPEOUT_HD_PACK, WIPEOUT_PC_RENDERING, WIPEOUT_MUSIC, WIPEOUT_TOUCH, WIPEOUT_SURROUND); the tests' hidden runs ignore the file. */
 #ifndef PORT_SETTINGS_H
 #define PORT_SETTINGS_H
+#include "render/renderer.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,7 +15,7 @@ typedef struct PortSettings {
     int farView;          /* 0: the console's draw distance; 1: the whole track */
     int fade;             /* distant geometry fades into the sky */
     int fadeNear, fadeFar;
-    int widescreen;       /* the picture fills a wider window: more of the scene at the sides (gpu_gl.c) */
+    int widescreen;       /* the picture fills a wider window: more of the scene at the sides (render/gl_backend.c) */
     int frameRate;        /* the display: FRAME_RATE_*; the game itself keeps its 30 frames a second */
     int frameCap;         /* pictures a second with FRAME_RATE_CAPPED */
     int skipIntro;        /* no intro movie at start-up */
@@ -34,13 +35,12 @@ typedef struct PortSettings {
     int rumbleStrength;   /* ... how hard they shake, in percent (0: 100) */
     int negconPad;        /* which pad is in the first port: 0 whatever its controls look like, 1 a digital
                              pad, 2 a neGcon (psx/pad.h's PsxPadSetType) */
-    int renderScale;      /* the framebuffer's pixels per console pixel; 0: as many as the window shows (gpu_gl.c) */
+    int renderScale;      /* the framebuffer's pixels per console pixel; 0: as many as the window shows (render/gl_backend.c) */
     int hdTextures;       /* the HD texture pack is drawn (hdtex.c) */
     char hdPackPath[1024]; /* ... the player's pack: its .zip or folder */
     int touchControls;    /* the touch controls (touch.h): TOUCH_AUTO, TOUCH_ON or TOUCH_OFF */
     int touchSize;        /* ... their size, in percent (0: 100) */
     int touchOpacity;     /* ... how opaque, in percent (0: 60) */
-    int consoleDepth;     /* no depth buffer: the game's ordering tables alone decide what is in front (gpu_gl.c) */
     int skipLogos;        /* no logo screens at start-up (Sony, the copyright, Dolby, Red Bull) */
     int recordRate;       /* the frame recorder's pictures a second, up to: 30 the game's frames, more the ones between
                              (psx/framecap.h; 0: 60) */
@@ -51,6 +51,7 @@ typedef struct PortSettings {
     int digitalSteering; /* 0: proportional gamepad stick; 1: stick acts as the directional pad */
     int fullscreen;       /* the window was full screen when last left: the next start is too (video.c) */
     int noUpdateCheck;    /* 0: check GitHub once at launch, 1: stay offline */
+    RenderSettings render; /* independent profiles; committed at game-frame boundaries */
 } PortSettings;
 
 /* PortSettings.surround */

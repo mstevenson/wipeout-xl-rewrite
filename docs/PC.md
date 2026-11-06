@@ -6,6 +6,9 @@ arrangement. The port plays from it with the PC version's own front end: its tit
 text, taken from the PC decompilation (`wipeout-xl/decomp-release/pc`). The race underneath is the
 PlayStation code the port runs for every disc.
 
+Choose **Graphics > Global renderer > PC** independently of disc type.
+See [Rendering profiles](RENDERERS.md) for controls and migration.
+
 ## What the PC CD holds
 
 | Folder | Holds | Against the PlayStation disc's `\WIPEOUT2` |
@@ -71,3 +74,30 @@ a track's whole textures `TRACKnn\TRACKTEX.CMP`, 128x128 each, in place of the t
 Redump's BIN/CUE (data and audio tracks), a bare ISO of the data track, CloneCD (`.ccd`/`.img`),
 Alcohol 120% (`.mds`/`.mdf`), CHD, and any of these in a ZIP, 7z or RAR; or a folder with the CD's
 files (an installed copy, or the CD copied). Without the audio tracks the game plays without music.
+
+## Rendering evidence and limits
+
+The reference is the Windows Direct3D renderer in
+[wipeout-xl-decomp, revision 9d0e3bbb](https://github.com/Yash-Singh1/wipeout-xl-decomp/tree/9d0e3bbb10fdcd18c281533c0d9148f9384ca891/pc/src):
+
+- `scene.c` (`LoadPrmCommon`, `ADD_QUAD`): stored GT3/GT4 scenery/sky colours
+  and object triangles 013/032; no invented brightening or smoothed normals.
+- `render.c` (`StartTransformBuffer`): perspective UVs, optional bilinear filtering,
+  Gouraud shading, 255-neutral modulation, depth testing/writes, no specular light.
+- `ships.c` (`AddShipRenderObjects`) and `render.c` (`ADD_VERTEX`): road colour
+  replaces every ship corner's colour, unlike PS1's flat-textured-only override.
+- `trackasm.c` (`TRACK_CORNER`): constant face colour and diagonal 0–2, equivalent
+  to the PS1 packet's 1–2 after its first two corners swap.
+
+The profile targets that filtered RGB path, not every PC driver. Loaded PS1 assets
+cannot supply PC-only textures/scenery; their palette precision, transparency-bit
+classification and blend modes remain. PC colour-key/alpha cases and the port's
+depth bias are not exact retail matches.
+
+PS1 rendering likewise retains precise projection, near clipping and optional
+interpolation/extended distance. Its colour arithmetic follows the
+[PS1 GPU description](https://psx-spx.consoledev.net/graphicsprocessingunitgpu/)
+(128-neutral modulation, signed dithering and five-bit truncation), but OpenGL
+edge rules, destination truncation and mask-bit behaviour differ. Console resolution,
+frame rate, distance and original textures give a closer presentation, not pixel
+equivalence. See the [change record](port-notes/renderer-changes.md) for validation.

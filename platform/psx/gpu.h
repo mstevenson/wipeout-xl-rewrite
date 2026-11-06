@@ -1,4 +1,4 @@
-/* The drawing backend under libgpu (gpu_gl.c): the PlayStation's
+/* The drawing backend under libgpu (render/gl_backend.c): the PlayStation's
    primitives drawn at any resolution with OpenGL, textured straight from a
    copy of the console's video memory. */
 #ifndef PSX_GPU_H
@@ -30,7 +30,7 @@ void GpuVramHighChanged(void);
    primitive reads when its texture page says colour depth 3 (the depth the console's GPU leaves
    reserved; the game never uses it). The button glyphs of the keyboard and of other gamepads
    live here. The page's coordinates are the primitive's UVs (256x256); its texels are four times
-   finer, with smooth coverage, and are sampled filtered. */
+   finer, with smooth coverage, and are sampled according to the renderer's policy. */
 #define GLYPH_PAGE_SIZE 256   /* the glyph page's texture coordinates (a quad's UV bytes) */
 #define GLYPH_ATLAS_SCALE 4   /* ... and its texels per coordinate */
 #define GLYPH_ATLAS_SIZE (GLYPH_PAGE_SIZE * GLYPH_ATLAS_SCALE)
@@ -38,7 +38,7 @@ void GpuSetGlyphMemory(const uint32_t *rgba); /* RGBA8, premultiplied by the cov
 /* ... and its other pages of depth 3, at the other page positions (1-63 by the texture page's number: x / 64, + 16
    for the second row, + 32 for the second half), as many as 63: the PC version's
    texture pages (pc.c), each 256x256 RGBA8 premultiplied, its colours as Direct3D's (modulated by the vertex colour,
-   255 white), sampled filtered, a semi-transparent primitive blending all of it. */
+   255 white), sampled according to the renderer's policy, a semi-transparent primitive blending all of it. */
 #define PORT_PAGES_ACROSS 8
 #define PORT_PAGES_DOWN 8
 void GpuSetPortPage(int page, const uint32_t *rgba);
@@ -55,6 +55,8 @@ typedef struct GpuVertex {
     int backFacing; /* ... of a polygon seen from behind: hidden by anything nearer (the depth buffer's slack is not
                        for it: a model drawn two-sided, its back behind its front) */
     int exactDepth; /* ... tested without the slack too (GteSetExactDepth) */
+    int n64;       /* material ownership, independent of sampler fallback */
+    int world;     /* view-space provenance, even for affine billboards drawn with w == 0 */
 } GpuVertex;
 
 /* How a primitive is drawn. */
@@ -69,10 +71,14 @@ typedef struct GpuDrawState {
     int dither;
     int fade;          /* the port's distance fade: the vertices' alpha (GpuVertex.a) blends it out */
     /* Append new fields here so the frame recorder's first 14 saved fields keep their layout. */
-    int filtered;      /* N64 image: blend neighbouring texture colours to smooth pixel boundaries */
+    int filtered;      /* backend-selected sampler: 0 nearest, 1 three-point, 2 bilinear */
+    int n64;           /* source encoding, independent of the selected sampler */
+    int textureFlags;  /* N64 source flags 0x10/20 mirror S/T, 0x40 wrap */
+    int ps1Light;      /* imported road texture with gameplay-authored 128-neutral tint */
 } GpuDrawState;
 
 int GpuInit(void);
+void GpuRendererShutdown(void);
 /* The framebuffer's scale (its pixels per console pixel), the largest it can be, and the window's (the
    settings' resolution 0: what it follows). */
 int GpuScale(void);
@@ -119,6 +125,7 @@ void GpuWriteFramebuffer(int x, int y, int w, int h);
 void GpuMoveFramebuffer(int x, int y, int w, int h, int toX, int toY);
 /* Finishes the frame's drawing (before presenting). */
 void GpuFlush(void);
+void PsxRendererBoundary(void);
 /* The window's framebuffer, when it is not 0 (iOS: SDL's view draws into one of its own). */
 void GpuSetWindowFramebuffer(unsigned int number);
 /* Clears the window to a colour, its framebuffer bound for drawing over (the start-up's messages, DebugUiSplash). */

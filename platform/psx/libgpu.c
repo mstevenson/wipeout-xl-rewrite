@@ -2,7 +2,7 @@
    drawing and display environments and video-memory transfers. The setters
    are translations of the library's code in the retail executable; drawing
    decodes each GPU packet the way the console's GPU interprets it and hands
-   the geometry to gpu_gl.c.
+   the geometry to render/gl_backend.c.
 
    Ordering tables link packets with 24-bit addresses in each packet's first
    word. On the console those are the low bits of the packet's address; here
@@ -21,6 +21,7 @@
 #include "framecap.h"
 #include "gpu.h"
 #include "../n64_material.h"
+#include "../original.h"
 #include "../link.h"
 #include "../settings.h"
 #include "gte.h"
@@ -923,12 +924,16 @@ static void Vertex(GpuVertex *v, uint32_t xy, const GtePrecise *precise)
         v->a = (uint8_t)(precise->fade * 255.0f + 0.5f);
         v->noDepth = precise->background;
         v->exactDepth = precise->exact;
+        v->n64 = precise->n64;
+        v->world = precise->view[2] != 0.0f;
     } else {
         v->x = (float)(x + state.offsetX) + hudShift;
         v->y = (float)(y + state.offsetY);
         v->w = 0.0f; /* no depth: affine */
         v->noDepth = 0;
         v->exactDepth = 0;
+        v->n64 = 0;
+        v->world = 0;
     }
 }
 
@@ -1071,7 +1076,7 @@ static int HoldShadow(const uint32_t *w, int words)
     float nearest, deepest;
     int box[4];
 
-    if (walkTrack < 0 || (const char *)w < tableTrack[walkTrack].shadows.start ||
+    if (!RenderDepth(RenderCurrent()) || walkTrack < 0 || (const char *)w < tableTrack[walkTrack].shadows.start ||
         (const char *)w >= tableTrack[walkTrack].shadows.end || heldCount == HELD_SHADOWS || !PacketBounds(w, words, box)) {
         return 0;
     }
@@ -1197,8 +1202,15 @@ typedef struct {
     GpuVertex v;
 } CutCorner;
 
+/* An edge crossing the eye plane can extrapolate screen-linear RGB beyond the
+   endpoint range. Saturate before narrowing to the packet's colour representation. */
+static uint8_t CutColour(uint8_t a, uint8_t b, double along)
+{
+    return (uint8_t)SDL_clamp(a + (b - a) * along + 0.5, 0.0, 255.0);
+}
+
 /* back: 1 when the triangle's corners as given wind as a polygon's seen from behind do */
-static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back)
+static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back, unsigned shade)
 {
     CutCorner out[4];
     const double plane = CUT_NEAR;
@@ -1213,6 +1225,11 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back)
         }
         if (aIn != bIn) {
             double t = (plane - in[i].view[2]) / (in[j].view[2] - in[i].view[2]);
+            /* Screen-linear attributes use the projected edge fraction. This form
+               also works with a corner on/behind the eye plane, without projecting it. */
+            double screen = t * in[j].view[2] / plane;
+            double uv = shade & SHADE_AFFINE_UV ? screen : t;
+            double rgb = shade & SHADE_AFFINE_COLOUR ? screen : t;
 
             out[cut] = in[i];
             for (k = 0; k < 3; k++) {
@@ -1220,11 +1237,11 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back)
             }
             out[cut].view[2] = plane;
             out[cut].depth = in[i].depth + (in[j].depth - in[i].depth) * t;
-            out[cut].v.u = (float)(in[i].v.u + (in[j].v.u - in[i].v.u) * t);
-            out[cut].v.v = (float)(in[i].v.v + (in[j].v.v - in[i].v.v) * t);
-            out[cut].v.r = (uint8_t)(in[i].v.r + (in[j].v.r - in[i].v.r) * t + 0.5);
-            out[cut].v.g = (uint8_t)(in[i].v.g + (in[j].v.g - in[i].v.g) * t + 0.5);
-            out[cut].v.b = (uint8_t)(in[i].v.b + (in[j].v.b - in[i].v.b) * t + 0.5);
+            out[cut].v.u = (float)(in[i].v.u + (in[j].v.u - in[i].v.u) * uv);
+            out[cut].v.v = (float)(in[i].v.v + (in[j].v.v - in[i].v.v) * uv);
+            out[cut].v.r = CutColour(in[i].v.r, in[j].v.r, rgb);
+            out[cut].v.g = CutColour(in[i].v.g, in[j].v.g, rgb);
+            out[cut].v.b = CutColour(in[i].v.b, in[j].v.b, rgb);
             out[cut].v.a = (uint8_t)(in[i].v.a + (in[j].v.a - in[i].v.a) * t + 0.5);
             cut++;
         }
@@ -1253,9 +1270,27 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back)
     }
 }
 
-static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count)
+/* Apply the renderer's object diagonal only to object packets. Track packets
+   already permute their corners; imported geometry retains its authored split. */
+static int AlternateQuad(const GpuDrawState *draw, const GpuVertex *v, int count, const uint32_t *w)
+{
+    if (!PortRenderGeometry().alternateQuad || count != 4 || draw->n64 || TrackPacket(w)) {
+        return 0;
+    }
+    /* Untextured imported objects have no page tag; their projections own the provenance. */
+    for (int i = 0; i < count; i++) {
+        if (v[i].n64) return 0;
+    }
+    return 1;
+}
+
+static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count, int alternateQuad)
 {
     CutCorner in[4];
+    /* Clipped geometry is projected world geometry. Ask the renderer for operations,
+       just as the GPU backend does; the adapter never selects a renderer/profile. */
+    RenderMaterial material = {.n64 = draw->n64, .fullColour = draw->depth == 3,
+        .textured = draw->textured, .spatial = 1, .raw = draw->raw, .dither = draw->dither};
     double near = GteNearPlane();
     float along = interpolating ? interpolationAlong : 1.0f;
     int i, behind = 0;
@@ -1269,15 +1304,23 @@ static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count)
         }
         in[i].depth = resolved[i].view[2] != 0.0f ? resolved[i].z / resolved[i].view[2] : 1.0;
         in[i].v = v[i];
+        material.n64 |= v[i].n64;
         /* (what GteInterpolate cannot place: behind the camera in this frame, or nearer than it projects) */
         behind += resolved[i].view[2] < near || in[i].view[2] < near;
     }
     if (!behind) {
         return 0;
     }
-    CutTriangle(draw, &in[0], 0);
-    if (count == 4) {
-        CutTriangle(draw, &in[1], 1); /* (corners 1 2 3 wind the other way round) */
+    RenderStyle style = RenderPrepare(RenderCurrent(), &material);
+    if (alternateQuad) {
+        CutCorner a[3] = {in[0], in[1], in[3]}, b[3] = {in[0], in[3], in[2]};
+        CutTriangle(draw, a, 0, style.shade);
+        CutTriangle(draw, b, 0, style.shade);
+    } else {
+        CutTriangle(draw, &in[0], 0, style.shade);
+    }
+    if (count == 4 && !alternateQuad) {
+        CutTriangle(draw, &in[1], 1, style.shade); /* (corners 1 2 3 wind the other way round) */
     }
     return 1;
 }
@@ -1295,7 +1338,8 @@ static void TextureFromPage(GpuDrawState *draw, uint32_t page)
     draw->pageX = (int)(page & 0xF) * 64;
     draw->pageY = (int)((page >> 4) & 1) * 256 + (int)((page >> 11) & 1) * VRAM_HEIGHT; /* (the second half: gpu.h) */
     draw->depth = (int)((page >> 7) & 3);
-    draw->filtered = (page & PORT_TPAGE_N64) != 0;
+    draw->n64 = (page & PORT_TPAGE_N64) != 0;
+    draw->ps1Light = draw->n64 && (page & PORT_TPAGE_PS1_LIGHT);
 }
 
 static void StateFor(GpuDrawState *draw, int textured, int semi, int raw)
@@ -1310,6 +1354,7 @@ static void StateFor(GpuDrawState *draw, int textured, int semi, int raw)
     draw->windowOffsetY = state.windowOffsetY;
     draw->dither = (state.texpage >> 9) & 1;
     TextureFromPage(draw, state.texpage);
+    if (!textured) draw->n64 = 0;
 }
 
 /* The console's GPU skips triangles wider than 1023 or taller than 511
@@ -1374,7 +1419,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
     const uint32_t *xys[4];
     uint32_t clut = 0, page = 0;
     GpuDrawState draw;
-    int skip0, skip1 = 1, flags;
+    int skip0, skip1 = 1, flags, alternateQuad;
 
     memset(v, 0, sizeof(v));
     for (i = 0; i < count; i++) {
@@ -1404,6 +1449,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
         SetTexpage(page);
     }
     StateFor(&draw, textured, semi, raw);
+    draw.dither &= gouraud || (textured && !raw);
     if (textured) {
         TextureFromPage(&draw, page);
         draw.clutX = (int)(clut & 0x3F) * 16;
@@ -1416,8 +1462,28 @@ static void Polygon(const uint32_t *w, uint32_t code)
             v[i].b = v[0].b;
         }
     }
-    if (NearCut(&draw, v, count)) {
+    alternateQuad = AlternateQuad(&draw, v, count, w);
+    if (NearCut(&draw, v, count, alternateQuad)) {
         Record(FRAMECAP_POLYGON, code, count, ix, iy, v, &draw, flags, w, page, clut);
+        return;
+    }
+    if (alternateQuad) {
+        GpuVertex a[3] = {v[0], v[1], v[3]}, b[3] = {v[0], v[3], v[2]};
+        int32_t ax[3] = {ix[0], ix[1], ix[3]}, ay[3] = {iy[0], iy[1], iy[3]};
+        int32_t bx[3] = {ix[0], ix[3], ix[2]}, by[3] = {iy[0], iy[3], iy[2]};
+        skip0 = Skipped(a, ax, ay);
+        skip1 = Skipped(b, bx, by);
+        /* Record the actual triangles so the inspector uses the same diagonal. */
+        Record(FRAMECAP_POLYGON, code, 3, ax, ay, a, &draw,
+               flags | (skip0 ? FRAMECAP_SKIP0 : 0), w, page, clut);
+        Record(FRAMECAP_POLYGON, code, 3, bx, by, b, &draw,
+               flags | (skip1 ? FRAMECAP_SKIP0 : 0), w, page, clut);
+        if (!skip0) {
+            GpuTriangles(&draw, a, 3);
+        }
+        if (!skip1) {
+            GpuTriangles(&draw, b, 3);
+        }
         return;
     }
     {
@@ -1504,6 +1570,7 @@ static void Rectangle(const uint32_t *w, uint32_t code)
         width = height = size == 1 ? 1 : size == 2 ? 8 : 16;
     }
     StateFor(&draw, textured, semi, raw);
+    draw.dither = 0; /* PS1 rectangles never dither, even when E1 enables it for polygons. */
     if (textured) {
         draw.clutX = (int)((uv >> 16) & 0x3F) * 16;
         draw.clutY = (int)((uv >> 22) & 0x3FF); /* (as a polygon's) */
@@ -1779,7 +1846,7 @@ static int PacketBounds(const uint32_t *w, int words, int box[4])
     return 1;
 }
 
-/* Widescreen (gpu_gl.c): an ordering table drawn with the HUD's elements at the edges of the wide picture. The
+/* Widescreen (render/gl_backend.c): an ordering table drawn with the HUD's elements at the edges of the wide picture. The
    HUD's packets (from hudEntry on, or all of hudTable) are taken apart into elements, runs of packets that
    touch (the letters of a text, the parts of the speedometer), and an element wholly in the left or the right
    part of the console's picture goes to that edge; what reaches the middle (centred messages, the weapon icon,
@@ -2174,6 +2241,19 @@ static __typeof__(upcoming) shownTables;
 static uint32_t shownGteFrame;
 static int shownComplete; /* the frame itself has been handed over (nothing moves until the next) */
 
+/* Apply requested settings only after the previous frame's packets have finished.
+   Presentation keeps its own snapshot until a new frame is actually drawn. */
+void PsxRendererBoundary(void)
+{
+    GpuFlush();
+    if (RenderCommit()) {
+        ForgetDrawnFrame();
+        upcoming.table = NULL;
+        shownTables.table = NULL;
+        FrameCapClear();
+    }
+}
+
 void PsxLinkWaiting(void)
 {
     static uint64_t lastPicture;
@@ -2244,7 +2324,7 @@ void DrawOTag(u_long *p)
     }
     FrameCapTable(state.offsetX, state.offsetY, state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1,
                   state.areaBottom - state.areaTop + 1);
-    /* each table drawn over what is there (the depth buffer: gpu_gl.c) */
+    /* each table drawn over what is there (the depth buffer: render/gl_backend.c) */
     GpuClearDepth(state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1, state.areaBottom - state.areaTop + 1);
     drawnSinceRead = 1;
     if (PortLinkSplit() && !tracing) {

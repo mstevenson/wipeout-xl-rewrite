@@ -1,111 +1,77 @@
 # Wipeout 64 rendering
 
-Imported Wipeout 64 tracks use their own material lighting, brightness and
-three-point texture filtering within XL's renderer. This guide describes
-that pipeline, scenery culling and the shared offscreen projection fix.
-Detailed ROM evidence, implementation notes, imported-track trophy behavior
-and historical validation are in the [port note](port-notes/n64-rendering.md).
+Imported tracks use the N64 profile by default. See [Rendering profiles](RENDERERS.md)
+for selection, controls, architecture and tests, and the
+[ROM investigation](port-notes/n64-pipeline-investigation.md) for source evidence.
 
-## Materials and filtering
+## Materials and geometry
 
-**Material identity and lighting.** Races mix N64 and PS1 assets, so rules
-are selected per image. The importer marks each TIM, including road
-subdivisions, with `PORT_TIM_N64`; `NewLoadTexture` carries that identity
-into `PORT_TPAGE_N64`, which libgpu preserves. Both markers are defined in
-`platform/n64_material.h`. Replacing a texture page also replaces its marker.
-`GouraudTextured` in `game/src/objdraw.c` preserves N64 corner colours across
-plain, lit and fixed-slot passes, including clipping. PS1 materials retain
-their existing shading policy.
+- **Identity:** `PORT_TIM_N64` becomes `PORT_TPAGE_N64` on load. Objects carry
+  `PORT_OBJECT_N64` through precise projections, clipping and billboards, including
+  untextured geometry. Missing bounds disable filtering without losing identity.
+- **Colour:** roads, scenery, skies and signs retain RGB8; modulation is 255-neutral,
+  shade interpolation screen-linear and UVs perspective-correct. Signs blink at
+  255/128. Shared XL ships retain PS1 lighting; `DrawObject` locally converts
+  imported road light. Separate lighting provenance preserves PS1-scale gameplay
+  pad colours, including neutral 128 and overbright values, through near/far and
+  subdivided road packets in all renderers.
+- **Road lighting:** each face has a constant tint, with hard boundaries between
+  differently coloured faces. The ROM emits one primitive colour for both triangles;
+  texture filtering does not smooth face lighting. Scenery retains Gouraud colours.
+- **Palette:** RGB5 expands by bit replication to reach 255. Source bit 15 is
+  ignored; zero RGB (including `0x8000`) is transparent. Other entries are opaque
+  unless the primitive requests translucency. PS1 assets retain PS1 decoding.
+- **Sampling:** three-point filtering uses the top-right/bottom-left diagonal and
+  1/32-texel weights. Texture flags `0x10`/`0x20` mirror S/T; `0x40` enables wrap
+  masks. Masked power-of-two images wrap/mirror each tap; unmasked images clamp.
+  All 21 road subdivisions share full-image bounds. Out-of-range masked UVs can
+  resolve by unique page/palette identity; ambiguous lookup uses nearest sampling.
+  HD taps retain source addressing/mask eligibility but use replacement spacing.
+  N64 addressing ignores PS1 texture-window bits.
+- **World/UI:** projected textures, including affine world billboards and full-colour
+  images, use the filter. Screen-space HUD, menus and glyphs use nearest sampling;
+  glyph coordinates account for actual atlas resolution.
+- **Depth/blending:** depth is always enabled. Filtered edges use premultiplied
+  coverage; only fully opaque, unfaded fragments write depth. Primitive blend
+  modes remain the port's; not every RDP combiner/blender state is reproduced.
 
-**Brightness.** N64 tint uses 255 for full brightness; PS1 uses 128.
-`PortN64Modulation` rounds `value * 128 / 255` to the nearest integer.
-`PortPrmNormalizeN64` in `game/src/port_widen.c` converts copied scenery, sky
-and signs once, changing textured RGB only. `NormalizeN64TrackFaces` in
-`platform/original.c` converts roads before `WADInitFaces` saves `colCopy`,
-keeping road rendering, ship tint and colour restores on the same scale.
-Animated weapon pads already use PS1's scale; native PS1 tints are unchanged.
+`Wipeout64Parts` calls `PortPrmTriangulateN64` after remapping to split bent,
+unlit scenery quads into `(0,1,2)` / `(2,1,3)`, preserving attributes and allowing
+independent culling. This fixes mountain holes without changing PS1 imports,
+skies or signs. Separately, GTE `Rtp` preserves precise corners beyond the console
+screen range, avoiding affine fallback and oversized-triangle rejection at screen
+edges. Integer GTE state and explicitly flat geometry's rejection remain unchanged.
 
-**Image bounds.** `PlaceTims` registers each full image with
-`PortN64TextureRegister` before subdivision. All 21 road pieces share those
-bounds, allowing filtering across internal seams without sampling adjacent
-packed images. Animation frames reuse the bounds; track changes clear them.
-`GpuTriangles` filters only when `PortN64TextureBounds` finds the image.
-Native taps are clamped before and after wrapping/windowing; HD taps are
-clamped to their atlas image. Missing bounds fall back to nearest sampling.
+## VI display processing
 
-**Three-point filtering.** The USA ROM selects `G_TF_BILERP` for its filtered
-3D states and POINT for its orthographic mode. `FilteredTexture` in
-`platform/psx/gpu_gl.c` implements the three-point rule for native and HD
-images: split each texel square along the top-right/bottom-left diagonal,
-then blend the containing triangle's corners with 1/32-texel weight steps.
-At the centre, only the diagonal pair contributes; BILERP does not enable
-`G_TF_AVERAGE`'s four-corner centre average. Native sampling shares palette
-lookup, direct 16-bit colour decoding and texture-window addressing with
-the PS1 path, preserving the semi-transparency bit. PS1 materials retain
-nearest sampling, wrapping, zero-texel rejection, modulation and blend rules.
+`platform/render/n64_gl.c` and `shaders/n64_vi.h` process the blended scene:
 
-**Transparency and depth.** Filter taps decode palette entries before
-blending. Transparent texels contribute no coverage; opaque and
-semi-transparent contributions remain separate for their PS1 blend rules,
-including subtraction. RGB is premultiplied by coverage and tinted colours
-are clamped to it to prevent bright fringes. Filtered polygons enable
-blending even when otherwise opaque. With console-depth disabled, only fully
-opaque, unfaded coverage writes depth. `batchDepth` considers the entire
-batch, so a leading translucent effect cannot disable an opaque road's
-depth writes.
+1. Magic-square thresholds quantize RGB to five bits, anchored to native pixels.
+2. A 3×3 dedither filter reconstructs low colour bits (constant grey 100 reconstructs
+   to 100 in the interior after quantization to alternating RGB5 values 12/13).
+3. An approximate horizontal median filter removes high-contrast divots, followed
+   by optional linear display resampling. Gamma correction stays off.
 
-## Scenery geometry and projection
+Separate buffers preserve VRAM and prevent repeated captures compounding filters.
+Cached output is reused for matching source revision, crop, scale and processing
+settings; destination size/orientation do not require reprocessing. Only enabled
+stages run; one pass needs one target, multiple passes two. Returning to one frees
+the second. With precision and divot off, processing bypasses allocations; final
+resampling still applies and clamps to the source crop. Texture filtering is independent.
 
-### Independent triangle culling
+This approximates VI output: there are no RDP coverage/hidden bits, exact VI scaling
+registers, full fixed-point rounding or per-write RGB5 feedback. Divot eligibility
+uses colour discontinuities. Whole-scene dithering includes XL's HUD rather than
+replaying N64 orthographic dither-disable state. Higher resolutions add geometry
+detail while filter/dither spacing stays at native pixels. XL simulation, ships
+and effects also prevent a whole-frame N64 match.
 
-N64 scenery quads can be bent: one triangle may face away while the other
-remains visible. XL's whole-quad facing test discarded both, causing holes
-in Klies Bridge's snowy mountain. `Wipeout64Parts` calls
-`PortPrmTriangulateN64` after texture remapping and colour normalization to
-convert unlit scenery quads into `(0,1,2)` and `(2,1,3)` triangle pairs.
-The conversion preserves winding, flags, texture references, UVs and corner
-colours so the renderer can cull and clip each half independently. It does
-not apply to PS1 imports or the separate N64 sky and sign models.
+## Evidence and limits
 
-### Shared projection fix
-
-`Rtp` in `platform/psx/gte.c` retains precise corners beyond the console's
-screen-coordinate range. Such polygons can reach libgpu despite IR1/IR2
-saturation; losing a precise corner forced affine drawing and could trigger
-oversized-triangle rejection, leaving screen-edge holes. Integer GTE state
-is unchanged, precise polygons keep perspective geometry, and explicitly
-flat geometry retains the console's rejection rule. This also applies to
-PS1 geometry and addresses a separate issue from bent-quad culling.
-
-## Validation and limitations
-
-Run from the repository root, using an already configured build tree:
-
-```sh
-sh tools/bugtest/run.sh
-sh tools/bugtest/render.sh
-cmake --build build/local --parallel 2
-```
-
-The CPU suite covers tint conversion, markers, image bounds and corner
-colours. The OpenGL suite covers filter geometry and precision, native/HD
-images, edges, transparency, depth batches and PS1 sampling behavior.
-
-Check the ROM's filter commands with a local USA ROM and Python environment
-containing `unicorn`:
-
-```sh
-python tools/bugtest/verify_n64_filter_rom.py "../roms/Wipeout 64 (USA).z64"
-```
-
-Some historically recorded culling and screen-edge tests and the culling ROM
-verifier are absent from this checkout. The recorded MIPS oracle comparison
-failed to compile, and no console lockstep recording was available. See the
-[validation record](port-notes/n64-rendering.md#historical-validation) for
-results and missing checks.
-
-The port matches the filter shape and fractional weights, not the complete
-N64 pixel pipeline: colour decoding and blending use floating-point
-arithmetic rather than every RDP integer rounding step, and the Video
-Interface is not emulated. ROM command-block checks and native replays do
-not establish whole-renderer or console equivalence.
+The [ROM verifier instructions](port-notes/n64-pipeline-investigation.md#reproduction)
+check isolated original routines, not GPU output. Native tests and replays do not
+establish hardware equivalence. Some earlier culling/screen-edge tests and the
+culling ROM verifier are absent; see the
+[historical geometry record](port-notes/n64-rendering.md#historical-validation).
+The [change record](port-notes/renderer-changes.md) retains native results and
+blocked MIPS comparisons.

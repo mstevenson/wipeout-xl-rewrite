@@ -1,0 +1,42 @@
+#include "gl_pipeline.h"
+#include <stdlib.h>
+
+#define RENDER_POSITION "    vec2 pixel = (modeIn.y & 128u) != 0u ? floor(position.xy) : position.xy;\n"
+#define RENDER_TEXCOORD "    vTexel = (modeIn.y & 32u) != 0u ? vec3(texel * w, w) : vec3(texel, 1.0);\n"
+#define RENDER_VERTEX_COLOUR "    return (mode.y & 4) != 0 ? floor(c * 255.0 + 0.0001) / 255.0 : c;\n"
+#define RENDER_TINT "vec3 TextureTint() { return VertexColour() * ((mode.y & 64) != 0 && ps1Light == 0 ? 1.0 : 255.0 / 128.0); }\n"
+#define RENDER_OUTPUT_COLOUR \
+    "vec3 OutputColour(vec3 col) {\n" \
+    "    if ((mode.y & 4) == 0) return col;\n" \
+    "    const int offsets[16] = int[16](-4,0,-3,1, 2,-2,3,-1, -3,1,-4,0, 3,-1,2,-2);\n" \
+    "    ivec2 p = ivec2(floor(vPixel.xy / vPixel.z)) & 3;\n" \
+    "    float d = (mode.y & 8) != 0 ? float(offsets[p.y * 4 + p.x]) : 0.0;\n" \
+    "    return floor(clamp(floor(col * 255.0 + 0.0001) + d, 0.0, 255.0) / 8.0) * (8.0 / 255.0);\n" \
+    "}\n"
+
+static const char *ps1VertexSource =
+#include "shaders/scene_vertex.h"
+;
+static const char *ps1FragmentSource =
+#include "shaders/material_fragment.h"
+;
+static RenderProgram ps1Program;
+
+static RenderProgram *Ps1Scene(void)
+{
+    if (!RenderGlProgramInit(&ps1Program, ps1VertexSource, ps1FragmentSource)) abort();
+    return &ps1Program;
+}
+
+static void Ps1Present(const void *profile, const RenderPresent *p)
+{
+    (void)profile;
+    RenderGlPresentDirect(p, GL_LINEAR);
+}
+
+static void Ps1Destroy(void)
+{
+    RenderGlProgramDestroy(&ps1Program);
+}
+
+const RenderPipeline ps1Pipeline = {Ps1Scene, Ps1Present, Ps1Destroy};

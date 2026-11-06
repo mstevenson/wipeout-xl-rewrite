@@ -5,15 +5,6 @@ int PortSaturnDisc(void) { return 0; }
 
 int main(void)
 {
-    uint8_t faces[FACE_BYTES * 2], saved[sizeof(faces)];
-    memset(faces, 0xab, sizeof(faces));
-    faces[16] = 255; faces[17] = 128; faces[18] = 0;
-    memcpy(saved, faces, sizeof(faces));
-    NormalizeN64TrackFaces(faces, sizeof(faces));
-    assert(faces[16] == 128 && faces[17] == 64 && faces[18] == 0);
-    for (size_t i = 0; i < sizeof(faces); i++)
-        if (i % FACE_BYTES < 16 || i % FACE_BYTES > 18) assert(faces[i] == saved[i]);
-
     /* Two PRM objects; textured flat/Gouraud, untextured Gouraud and a sprite.
        Serialized sizes/offsets are deliberately independent of the host structs. */
     uint8_t model[144 + 28 + 36 + 28 + 144 + 16] = {0}, original[sizeof(model)];
@@ -26,20 +17,19 @@ int main(void)
     memcpy(original, model, sizeof(model));
     assert(PortPrmShiftTextures((char *)model, sizeof(model), 0));
     assert(!memcmp(model, original, sizeof(model))); /* the existing PS1 conversion */
-    assert(PortPrmNormalizeN64((char *)model, sizeof(model)));
-    assert(ft[24] == 128 && ft[25] == 128 && ft[26] == 128 && ft[27] == 255);
-    assert(gt[24] == 128 && gt[28] == 64 && gt[32] == 0);
-    assert(gt[27] == 255 && gt[31] == 255 && gt[35] == 255);
-    assert(!memcmp(g + 12, original + (g - model) + 12, 16));
-    assert(spr[12] == 128 && spr[15] == 255);
-    assert(!PortPrmNormalizeN64((char *)original, sizeof(original) - 1));
+    assert(PortPrmMarkN64((char *)model, sizeof(model)));
+    assert(!memcmp(ft, original + (ft - model), 28 + 36 + 28));
+    assert(!memcmp(spr, original + (spr - model), 16));
+    assert(Be16(model + 56) == PORT_OBJECT_N64 && Be16(second + 56) == PORT_OBJECT_N64);
+    assert(PortPrmMarkN64((char *)model, sizeof(model))); /* marking is idempotent */
+    assert(!PortPrmMarkN64((char *)original, sizeof(original) - 1));
 
     /* A 32x32 4-bit image becomes 21 TIMs, all still marked as N64, while
        filtering uses its full 32x32 footprint even for a tiny near-road piece. */
     TimList tiles = {0}, pieces = {0}; Layout layout = {0};
     uint8_t *tim = SDL_calloc(1, 64 + 8 * 32 * 2), *cmp, *library, *templates;
     size_t size, librarySize, templatesSize;
-    int bounds[4];
+    int bounds[4], flags;
     PutLe32(tim, 16); PutLe32(tim + 4, 0xf8); /* original flags must be replaced */
     PutLe32(tim + 8, 44); PutLe16(tim + 16, 16); PutLe16(tim + 18, 1);
     PutLe32(tim + 52, 12 + 8 * 32 * 2); PutLe16(tim + 60, 8); PutLe16(tim + 62, 32);
@@ -48,14 +38,33 @@ int main(void)
     assert(Unpack(library, librarySize, &pieces) && pieces.count == 21);
     for (int i = 0; i < pieces.count; i++) assert(Le32(pieces.tims[i] + 4) == (PORT_TIM_N64 | 8));
     assert(PortN64TextureBounds(0, 512, 0, 768, 768, 7, 7, bounds));
+    assert(PortN64TextureInfo(0, 512, 0, 768, 768, 7, 7, bounds, &flags) && flags == 0x70);
     assert(bounds[0] == 0 && bounds[1] == 0 && bounds[2] == 31 && bounds[3] == 31);
     assert(!PortN64TextureBounds(0, 0, 0, 768, 768, 7, 7, bounds)); /* original PS1 page */
     assert(!PortN64TextureBounds(0, 512, 0, 784, 768, 7, 7, bounds)); /* different palette */
-    assert(!PortN64TextureBounds(0, 512, 0, 768, 768, 32, 7, bounds)); /* neighbor */
+    assert(PortN64TextureBounds(0, 512, 0, 768, 768, 32, 7, bounds)); /* masked UV beyond edge */
+    assert(PortN64TextureRegister(8, 512, 8, 32, 0, 768, 768, 0x40));
+    assert(!PortN64TextureBounds(0, 512, 0, 768, 768, 80, 7, bounds)); /* ambiguous palette */
     PortN64TexturesReset();
     assert(!PortN64TextureBounds(0, 512, 0, 768, 768, 7, 7, bounds));
+    /* Exercise index growth, collisions, palette separation and reset/re-registration. */
+    for (int i = 0; i < 2500; i++)
+        assert(PortN64TextureRegister((i % 16) * 64, (i % 4) * 256, 2, 8, i % 3,
+                                      (i % 64) * 16, i / 64, 0x40));
+    for (int i = 2499; i >= 0; i--) {
+        assert(PortN64TextureInfo((i % 16) * 64, (i % 4) * 256, i % 3,
+                                 (i % 64) * 16, i / 64, 0, 0, bounds, &flags));
+        assert(bounds[2] == 2 * (4 >> (i % 3)) - 1 && bounds[3] == 7 && flags == 0x40);
+    }
+    PortN64TexturesReset();
+    assert(!PortN64TextureInfo(0, 0, 0, 0, 0, 0, 0, bounds, &flags));
+    assert(PortN64TextureRegister(0, 0, 2, 8, 0, 0, 0, 0));
+    assert(PortN64TextureRegister(0, 0, 4, 16, 0, 0, 0, 0x40));
+    assert(PortN64TextureInfo(0, 0, 0, 0, 0, 0, 0, bounds, &flags) && flags == 0 && bounds[2] == 7);
+    assert(!PortN64TextureInfo(0, 0, 0, 0, 0, 100, 100, bounds, &flags));
+    PortN64TexturesReset();
     SDL_free(cmp); SDL_free(library); SDL_free(templates);
     TimFree(&tiles); TimFree(&pieces); LayoutFree(&layout);
-    puts("N64 import normalizes only textured colours, tags every road window and retains full image bounds: OK");
+    puts("N64 import preserves all colour bytes and addressing flags, tags every road window and retains full image bounds: OK");
     return 0;
 }

@@ -20,7 +20,7 @@ const char *HdTexAbout(void);   /* what the pack says about itself (config.yaml'
 /* The pack is drawn: the setting is on and a pack is open (the settings' pack is opened the first time). */
 int HdTexActive(void);
 
-/* Video memory changed (any way: gpu_gl.c's GpuVramChanged). */
+/* Video memory changed (any way: render/gl_backend.c's GpuVramChanged). */
 void HdTexChanged(int x, int y, int w, int h);
 /* ... by an upload (LoadImage): a texture a replacement may be named after. */
 void HdTexUploaded(int x, int y, int w, int h);

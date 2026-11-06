@@ -28,6 +28,7 @@ HeapBlock *heap, *mainheapcopy;
 void Error(char *text, short level) { fprintf(stderr, "Error: %s\n", text); exit(2); }
 
 short CurrentScreen;
+RenderGeometry PortRenderGeometry(void) { return (RenderGeometry){0, 0, 0, RENDER_LIGHT_PS1}; } /* differential test always uses console packet rules */
 TrackData *track;
 u_long *OT[2];
 POLY_FT4 *TrackLoPolys[2], *TrackMedPolys[2], *TrackHiPolys[2];

@@ -4,6 +4,7 @@ set -eu
 cd "$(dirname "$0")/../.."
 test_build=$(mktemp -d)
 trap 'rm -rf "$test_build"' EXIT HUP INT TERM
+render_sources="platform/render/renderer.c platform/render/ps1_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c"
 case $(uname -s) in Darwin) discard='-Wl,-dead_strip';; *) discard='-Wl,--gc-sections';; esac
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
     -std=gnu11 -include platform/include/port.h -iquote game/include \
@@ -14,12 +15,22 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
     tools/bugtest/test_movie.c $(pkg-config --libs sdl3) -o "$test_build/movie"
 "$test_build/movie"
 
-for test in guest_sky guest_animation; do
+for test in guest_sky guest_animation render_settings; do
+    extra_sources=
+    if [ "$test" = render_settings ]; then extra_sources="$render_sources"; fi
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
         -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) \
-        "tools/bugtest/test_$test.c" $(pkg-config --libs sdl3) -o "$test_build/$test"
+        "tools/bugtest/test_$test.c" $extra_sources $(pkg-config --libs sdl3) -o "$test_build/$test"
     "$test_build/$test"
 done
+
+# Compare live inspection with the Python reader of real serialized captures.
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -DPORT_VERSION='"test"' \
+    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
+    tools/bugtest/test_framecap_render.c $render_sources $(pkg-config --libs sdl3) -lm -o "$test_build/framecap_render"
+mkdir "$test_build/frames"
+"$test_build/framecap_render" "$test_build/frames/frames.bin"
+PYTHONDONTWRITEBYTECODE=1 python3 tools/bugtest/test_framecap_render.py "$test_build/frames"
 
 # Imported N64 materials must not change PS1 colour arithmetic or page state.
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections -Wno-deprecated-declarations \
@@ -32,14 +43,15 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
     $(pkg-config --libs sdl3) -o "$test_build/n64_material"
 "$test_build/n64_material"
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_n64_page.c \
+    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_n64_page.c $render_sources \
+    platform/psx/gte.c platform/psx/gte_tables.c \
     $(pkg-config --libs sdl3) -lm -o "$test_build/n64_page"
 "$test_build/n64_page"
 
 # Port rendering changes must preserve the original effect segments and quad geometry.
-for test in electric near_object; do
+for test in electric near_object track_light; do
     gte_sources=
-    if [ "$test" = near_object ]; then
+    if [ "$test" = near_object ] || [ "$test" = track_light ]; then
         gte_sources="platform/psx/gte.c platform/psx/gte_tables.c"
     fi
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
@@ -50,7 +62,7 @@ done
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -DPORT_VERSION='"0.0.6"' \
     -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
-    tools/bugtest/test_updates.c $(pkg-config --libs sdl3) -o "$test_build/updates"
+    tools/bugtest/test_updates.c $render_sources $(pkg-config --libs sdl3) -o "$test_build/updates"
 "$test_build/updates"
 ${CC:-cc} -O1 -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
     tools/bugtest/test_updates_web.c $(pkg-config --libs sdl3) -o "$test_build/updates_web"
@@ -66,6 +78,18 @@ ${CXX:-c++} -std=c++17 -O1 -ffunction-sections -fdata-sections $discard -DPORT_V
     $(pkg-config --libs sdl3) -o "$test_build/update_navigation"
 "$test_build/update_navigation"
 
+# Exercise the production renderer panels with real keyboard navigation.
+render_objects=
+for source in $render_sources; do
+    object="$test_build/$(basename "$source" .c).o"
+    ${CC:-cc} -O1 -c "$source" -o "$object"
+    render_objects="$render_objects $object"
+done
+${CXX:-c++} -std=c++17 -O1 -Iplatform -I"$imgui" tools/bugtest/test_renderer_ui.cpp $render_objects \
+    "$imgui/imgui.cpp" "$imgui/imgui_draw.cpp" "$imgui/imgui_tables.cpp" "$imgui/imgui_widgets.cpp" \
+    -o "$test_build/renderer_ui"
+"$test_build/renderer_ui"
+
 # Run track reaction on a steep guest descent with the production integer helpers.
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
     -include platform/include/port.h -iquote game/include tools/bugtest/test_guest_descent.c \
@@ -76,7 +100,7 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-decla
 # The input tests drive a real SDL virtual controller and the game's button decoder.
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations -Wno-pointer-sign \
     -include platform/include/port.h -iquote game/include -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
-    tools/bugtest/test_steering.c platform/psx/pad.c game/src/pad.c $(pkg-config --libs sdl3) -o "$test_build/steering"
+    tools/bugtest/test_steering.c $render_sources platform/psx/pad.c game/src/pad.c $(pkg-config --libs sdl3) -o "$test_build/steering"
 "$test_build/steering"
 for test in steering_target steering_ghost guest_motion guest_sign; do
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations -Wno-pointer-sign \

@@ -398,6 +398,7 @@ static FrameCapFrame *NewFrame(void)
     f = &frames[(first + count) % FRAMES];
     count++;
     f->number = ++nextNumber;
+    f->render = *RenderCurrent();
     return f;
 }
 
@@ -483,9 +484,24 @@ FrameCapPrim *FrameCapAdd(void)
     return p;
 }
 
-/* libgpu fills address in; the tag follows from it. */
+/* Derive operations from the captured policy, never the current UI settings. */
+static unsigned PrimitiveShade(const RenderFrame *render, const FrameCapPrim *p)
+{
+    int spatial = 1, world = 0, n64 = p->draw.n64;
+    for (int i = 0; i < p->count; i++) {
+        spatial &= p->v[i].w > 0;
+        world |= p->v[i].world || p->v[i].w > 0;
+        n64 |= p->v[i].n64;
+    }
+    RenderMaterial material = {n64, p->draw.depth == 3, p->draw.textured, spatial,
+                               p->draw.raw, p->draw.dither, 0, !world};
+    return RenderPrepare(render, &material).shade;
+}
+
+/* libgpu fills address in; the tag and captured shading policy follow. */
 void FrameCapTagRecord(FrameCapPrim *p)
 {
+    p->shade = PrimitiveShade(&frames[current].render, p);
     SDL_strlcpy(p->tag, TagOf((const void *)(uintptr_t)p->address), sizeof(p->tag));
 }
 
@@ -634,7 +650,8 @@ static uint16_t Fetch(const uint16_t *vram, int x, int y)
     return vram[(y & (VRAM_HEIGHT - 1)) * VRAM_WIDTH + (x & (VRAM_WIDTH - 1))];
 }
 
-/* What the fragment shader of gpu_gl.c computes at barycentric l. */
+/* Interpolation follows the captured renderer. Texture lookup remains a native,
+   single-texel diagnostic (HD replacements and display postprocessing are not replayed). */
 static void Shade(const FrameCapPrim *p, const GpuVertex *t[3], const float l[3], const uint16_t *vram, FrameCapHit *h)
 {
     float k[3], sum = 0, c[4] = {0, 0, 0, 0};
@@ -647,11 +664,13 @@ static void Shade(const FrameCapPrim *p, const GpuVertex *t[3], const float l[3]
     }
     for (i = 0; i < 3; i++) {
         k[i] /= sum;
-        h->u += k[i] * t[i]->u;
-        h->v += k[i] * t[i]->v;
-        c[0] += k[i] * t[i]->r;
-        c[1] += k[i] * t[i]->g;
-        c[2] += k[i] * t[i]->b;
+        float uv = p->shade & SHADE_AFFINE_UV ? l[i] : k[i];
+        float rgb = p->shade & SHADE_AFFINE_COLOUR ? l[i] : k[i];
+        h->u += uv * t[i]->u;
+        h->v += uv * t[i]->v;
+        c[0] += rgb * t[i]->r;
+        c[1] += rgb * t[i]->g;
+        c[2] += rgb * t[i]->b;
         c[3] += k[i] * t[i]->a;
     }
     h->alpha = c[3];
@@ -721,8 +740,15 @@ int FrameCapHits(int frame, int x, int y, FrameCapHit *hits, int max)
             continue;
         }
         for (k = 0; k < triangles && n < max; k++) {
-            const GpuVertex *t[3] = {&p->v[k], &p->v[k + 1], &p->v[k + 2]};
+            GpuVertex corners[3] = {p->v[k], p->v[k + 1], p->v[k + 2]};
+            const GpuVertex *t[3] = {&corners[0], &corners[1], &corners[2]};
             float l[3];
+            if (p->shade & SHADE_SNAP) {
+                for (int j = 0; j < 3; j++) {
+                    corners[j].x = floorf(corners[j].x);
+                    corners[j].y = floorf(corners[j].y);
+                }
+            }
 
             if (Inside(t[0], t[1], t[2], px, py, l)) {
                 FrameCapHit *h = &hits[n++];
@@ -750,37 +776,12 @@ static void PutI32(FILE *f, int32_t v)
     Put(f, &v, 4);
 }
 
-static void Save(void)
+static void WriteFrames(FILE *file)
 {
-    FinishPictures();
-    char *base = SDL_GetPrefPath("Psygnosis", "WipeoutXL");
-    const char *forced = SDL_getenv("WIPEOUT_FRAMECAP_DIR");
-    char path[1200];
-    time_t now = time(NULL);
-    FILE *file;
     int i, k;
-
-    if (forced) {
-        SDL_strlcpy(savedDir, forced, sizeof(savedDir));
-    } else if (base) {
-        char stamp[64];
-
-        strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", localtime(&now));
-        SDL_snprintf(savedDir, sizeof(savedDir), "%sframes/%s", base, stamp);
-    }
-    SDL_free(base);
-    if (!savedDir[0]) {
-        return;
-    }
-    SDL_CreateDirectory(savedDir);
-    SDL_snprintf(path, sizeof(path), "%s/frames.bin", savedDir);
-    if (!(file = fopen(path, "wb"))) {
-        savedDir[0] = 0;
-        return;
-    }
     /* header: magic, version, frames; per frame its fields, then its primitives (see tools/framecap.py) */
     Put(file, "XLFC", 4);
-    PutI32(file, 3);
+    PutI32(file, 4); /* version 4: per-primitive shading operations */
     PutI32(file, count);
     for (i = 0; i < count; i++) {
         const FrameCapFrame *f = FrameCapFrameAt(i);
@@ -839,8 +840,40 @@ static void Save(void)
             }
             Put(file, &p->address, 8);
             Put(file, p->tag, 48);
+            PutI32(file, (int32_t)p->shade);
         }
     }
+}
+
+static void Save(void)
+{
+    FinishPictures();
+    char *base = SDL_GetPrefPath("Psygnosis", "WipeoutXL");
+    const char *forced = SDL_getenv("WIPEOUT_FRAMECAP_DIR");
+    char path[1200];
+    time_t now = time(NULL);
+    FILE *file;
+    int i;
+
+    if (forced) {
+        SDL_strlcpy(savedDir, forced, sizeof(savedDir));
+    } else if (base) {
+        char stamp[64];
+
+        strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", localtime(&now));
+        SDL_snprintf(savedDir, sizeof(savedDir), "%sframes/%s", base, stamp);
+    }
+    SDL_free(base);
+    if (!savedDir[0]) {
+        return;
+    }
+    SDL_CreateDirectory(savedDir);
+    SDL_snprintf(path, sizeof(path), "%s/frames.bin", savedDir);
+    if (!(file = fopen(path, "wb"))) {
+        savedDir[0] = 0;
+        return;
+    }
+    WriteFrames(file);
     fclose(file);
     for (i = 0; i < SNAPSHOTS; i++) {
         if (snapshots[i].pixels) {
@@ -871,8 +904,15 @@ static void Save(void)
 
         fprintf(file, "{\n  \"version\": \"%s\",\n  %.*s  \"widescreen\": %d,\n  \"frame rate\": %d,\n"
                       "  \"console depth\": %d,\n  \"recorded frames\": %d\n}\n",
-                PORT_VERSION, n, info, portSettings.widescreen, portSettings.frameRate, portSettings.consoleDepth,
+                PORT_VERSION, n, info, portSettings.widescreen, portSettings.frameRate, !RenderDepth(RenderCurrent()),
                 count);
+        fclose(file);
+    }
+    SDL_snprintf(path, sizeof(path), "%s/renderer.ini", savedDir);
+    if ((file = fopen(path, "w"))) {
+        const RenderFrame *render = count ? &FrameCapFrameAt(count - 1)->render : RenderCurrent();
+        fprintf(file, "# Active renderer: %s\n", RenderGet(render->id)->name);
+        RenderSave(file, &render->settings);
         fclose(file);
     }
     PortLog("frame recorder: %d frames saved to %s\n", count, savedDir);

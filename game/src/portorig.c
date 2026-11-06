@@ -699,8 +699,8 @@ int PortOriginalDrawDroid(TrackSection *section, int texture, int mirrored, int 
     TrackSection *position;
     MATRIX *m;
     FT4 *face;
-    /* N64 vertex intensity 255 is unmodulated; the PS1's equivalent is 128. */
-    int heading, colour = tick % 20 < 10 ? 128 : 64;
+    /* Port: imported materials now retain the ROM's eight-bit intensity. */
+    int heading, colour = tick % 20 < 10 ? 255 : 128;
     if (!PortOriginalTrackIs64() || !body) return 0;
     panel = signParts[texture == 0 ? SIGN_START : texture == 1 ? SIGN_FINISH :
                       texture == 2 ? SIGN_CHECKPOINT : mirrored ? SIGN_RIGHT : SIGN_LEFT];

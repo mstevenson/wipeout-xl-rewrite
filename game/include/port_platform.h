@@ -2,6 +2,7 @@
 #define PORT_PLATFORM_H_GAME
 
 #include <stdint.h>
+#include "../../platform/render/geometry.h"
 
 /* What the game needs from the platform beyond the PsyQ libraries.  Implemented by platform/. */
 

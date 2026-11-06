@@ -1,0 +1,56 @@
+#ifndef PORT_RENDERER_H
+#define PORT_RENDERER_H
+#include <stdio.h>
+#include "geometry.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum RendererId { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64 } RendererId;
+typedef struct Ps1RenderSettings {
+    int quantizeVertices, affineTextures, colourPrecision, dither, depth;
+} Ps1RenderSettings;
+typedef struct PcRenderSettings { int bilinear, lighting, depth; } PcRenderSettings;
+typedef struct N64RenderSettings {
+    int threePoint, colourPrecision, dither, dedither, divot, resample;
+} N64RenderSettings;
+typedef struct RenderSettings {
+    RendererId selection, automaticBase;
+    Ps1RenderSettings ps1;
+    PcRenderSettings pc;
+    N64RenderSettings n64;
+} RenderSettings;
+#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, {1,1,1,1,0}, {1,1,1}, {1,1,1,1,1,1} }
+
+/* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
+typedef struct RenderFrame { RenderSettings settings; RendererId id; int n64Track; } RenderFrame;
+/* Operation/material flags shared by CPU clipping and shaders, not renderer selection. */
+enum { SHADE_RAW = 1, SHADE_PC_TINT = 2, SHADE_PS1_COLOUR = 4, SHADE_DITHER = 8,
+       SHADE_AFFINE_COLOUR = 16, SHADE_AFFINE_UV = 32, SHADE_N64 = 64, SHADE_SNAP = 128 };
+/* UI is independent of perspective/depth: affine world billboards are not screen-space UI. */
+typedef struct RenderMaterial { int n64, fullColour, textured, spatial, raw, dither, bounds, ui; } RenderMaterial;
+typedef struct RenderStyle { unsigned shade; int filter; } RenderStyle;
+typedef struct Renderer {
+    RendererId id;
+    const char *name;
+    /* The registry passes only this renderer's profile, never other profiles or mutable settings. */
+    RenderStyle (*prepare)(const void *profile, const RenderMaterial *);
+    int (*depth)(const void *profile);
+    RenderGeometry (*geometry)(const void *profile);
+} Renderer;
+extern const Renderer ps1Renderer, pcRenderer, n64Renderer;
+const Renderer *RenderGet(RendererId id);
+const void *RenderProfile(const RenderFrame *frame);
+int RenderDepth(const RenderFrame *frame);
+RenderGeometry RenderGeometryFor(const RenderFrame *frame);
+RenderStyle RenderPrepare(const RenderFrame *frame, const RenderMaterial *material);
+const RenderFrame *RenderCurrent(void);
+int RenderCommit(void); /* call after flushing the previous frame; returns whether policy changed */
+void RenderInvalidate(void); /* startup/settings reload */
+void RenderDefaults(RenderSettings *settings, RendererId id); /* resets only this profile */
+int RenderSet(RenderSettings *settings, const char *key, const char *value);
+void RenderSave(FILE *file, const RenderSettings *settings);
+#ifdef __cplusplus
+}
+#endif
+#endif

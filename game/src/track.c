@@ -183,6 +183,11 @@ void WADInitFaces(WADFILE *wad)
 
     IntelFace();
 
+    /* Port: initialise the padding byte locally; never trust a disc's padding as metadata. */
+    for (i = 0; i < track->faceCount; i++) {
+        track->faces[i].lightFormat = PortOriginalTrackIs64() ? RENDER_LIGHT_RGB8 : RENDER_LIGHT_PS1;
+    }
+
     /* keep a copy of the face colours */
     track->colCopy = DAlloc(heap, track->faceCount * sizeof(Colors));
     if (!track->faces) { /* checks the faces, not the colour copy */

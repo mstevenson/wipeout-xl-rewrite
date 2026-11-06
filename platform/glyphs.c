@@ -2,7 +2,7 @@
 
    The game draws every glyph through DoButton, as a 16x16 quad of the console's 4-bit icons. For a
    keyboard and for Xbox, Nintendo and Saturn gamepads the platform keeps its own glyphs in a page of texture
-   memory beyond the console's (the glyph page of gpu_gl.c, selected by colour depth 3), and
+   memory beyond the console's (the glyph page of render/gl_backend.c, selected by colour depth 3), and
    PortButtonGlyph rewrites the quad to show one of them:
 
      keyboard    the Windows release's key caps and gold direction arrows (keyglyphs.c, from its HUD2

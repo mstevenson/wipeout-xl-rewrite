@@ -413,6 +413,9 @@ typedef struct Face {
     u_char  red;
     u_char  green;
     u_char  blue;
+    /* Port: use the record's trailing padding for lighting provenance; size stays 20 bytes.
+       The face RGB is also passed as a CVECTOR, where this byte is cd. */
+    u_char  lightFormat;
 } Face;
 
 typedef struct TrackSection {

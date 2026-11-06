@@ -7,8 +7,8 @@
 #include "platform.h"
 #include "settings.h"
 
-PortSettings portSettings = {0, 1, 1, 64000, 96000, 0, FRAME_RATE_UNCAPPED, 144, 0, RECORD_OFF, 0, ""};
-
+PortSettings portSettings = {.farView = 1, .fade = 1, .fadeNear = 64000, .fadeFar = 96000,
+                             .frameRate = FRAME_RATE_UNCAPPED, .frameCap = 144, .render = RENDER_DEFAULTS};
 static char path[1024];
 static char defaultSaveDir[1024];
 
@@ -26,6 +26,7 @@ static void Set(const char *key, const char *value)
 {
     int number = SDL_atoi(value);
 
+    if (RenderSet(&portSettings.render, key, value)) return;
     if (!strcmp(key, "show_fps")) {
         portSettings.showFps = number != 0;
     } else if (!strcmp(key, "far_view")) {
@@ -38,8 +39,6 @@ static void Set(const char *key, const char *value)
         portSettings.fadeNear = number;
     } else if (!strcmp(key, "fade_far") && number > 0) {
         portSettings.fadeFar = number;
-    } else if (!strcmp(key, "depth_buffer")) {
-        portSettings.consoleDepth = number == 0;
     } else if (!strcmp(key, "widescreen")) {
         portSettings.widescreen = number != 0;
     } else if (!strcmp(key, "frame_rate")) {
@@ -112,6 +111,9 @@ void PortSettingsLoad(void)
     char *base = SDL_GetPrefPath("Psygnosis", "WipeoutXL");
     char *text, *line, *next;
     const char *value;
+    int legacyRendering = -1, legacyPc = -1, legacyDepth = -1, havePcDepth = 0, haveAuto = 0;
+    RenderDefaults(&portSettings.render, RENDER_AUTO);
+    RenderInvalidate();
 
     if (base) {
         SDL_snprintf(path, sizeof(path), "%swipeoutxl.ini", base);
@@ -144,9 +146,24 @@ void PortSettingsLoad(void)
             for (end = (char *)value + strlen(value); end > value && (end[-1] == '\r' || end[-1] == ' '); end--) {
                 end[-1] = 0;
             }
-            Set(line, value);
+            if (!strcmp(line, "pc_rendering")) {
+                legacyPc = SDL_atoi(value) != 0;
+            } else if (!strcmp(line, "depth_buffer")) {
+                legacyDepth = SDL_atoi(value) != 0;
+            } else if (!strcmp(line, "smooth_textures")) {
+                legacyRendering = SDL_atoi(value) != 0;
+            } else {
+                havePcDepth |= !strcmp(line, "pc_depth");
+                haveAuto |= !strcmp(line, "automatic_renderer");
+                Set(line, value);
+            }
         }
         SDL_free(text);
+    }
+    if (!haveAuto && (legacyPc >= 0 || legacyRendering >= 0))
+        portSettings.render.automaticBase = (legacyPc >= 0 ? legacyPc : legacyRendering) ? RENDER_PC : RENDER_PS1;
+    if (legacyDepth >= 0) {
+        if (!havePcDepth) portSettings.render.pc.depth = legacyDepth;
     }
     /* the environment overrides the file for this run */
     if ((value = SDL_getenv("WIPEOUT_SKIP_INTRO"))) {
@@ -165,6 +182,13 @@ void PortSettingsLoad(void)
     if ((value = SDL_getenv("WIPEOUT_RENDER_SCALE"))) {
         portSettings.renderScale = SDL_clamp(SDL_atoi(value), 0, 16);
     }
+    /* The old texture-only option migrates to the complete rendering mode. */
+    value = SDL_getenv("WIPEOUT_PC_RENDERING");
+    if (!value) value = SDL_getenv("WIPEOUT_SMOOTH_TEXTURES");
+    if (value) {
+        portSettings.render.automaticBase = SDL_atoi(value) ? RENDER_PC : RENDER_PS1;
+    }
+    if ((value = SDL_getenv("WIPEOUT_RENDERER"))) RenderSet(&portSettings.render, "renderer", value);
     if ((value = SDL_getenv("WIPEOUT_HD_PACK"))) {
         /* a pack's .zip or folder, drawn ("" not) */
         SDL_strlcpy(portSettings.hdPackPath, value, sizeof(portSettings.hdPackPath));
@@ -193,7 +217,7 @@ void PortSettingsLoad(void)
                                 : !strcmp(value, "headphones") ? SURROUND_HEADPHONES : SURROUND_OFF;
     }
     if ((value = SDL_getenv("WIPEOUT_DEPTH_BUFFER"))) {
-        portSettings.consoleDepth = SDL_atoi(value) == 0;
+        portSettings.render.pc.depth = SDL_atoi(value) != 0;
     }
     if ((value = SDL_getenv("WIPEOUT_WIDESCREEN"))) {
         portSettings.widescreen = SDL_atoi(value) != 0;
@@ -243,7 +267,7 @@ int PortSettingsSave(void)
             "widescreen = %d\nframe_rate = %d\nframe_cap = %d\nskip_intro = %d\nrecord_frames = %d\nrecord_replays = %d\nsave_dir = %s\ndisc = %s\noriginal = %s\n"
             "render_scale = %d\nhd_textures = %d\nhd_pack = %s\nwipeout64 = %s\n"
             "custom_music = %d\nmusic_shuffle = %d\nmusic_folder = %s\nsave_slot = %s\nautosave = %d\n"
-            "touch_controls = %d\ntouch_size = %d\ntouch_opacity = %d\ndepth_buffer = %d\nskip_logos = %d\nrecord_rate = %d\n"
+            "touch_controls = %d\ntouch_size = %d\ntouch_opacity = %d\nskip_logos = %d\nrecord_rate = %d\n"
             "video_standard = %d\nvibration = %d\nvibration_strength = %d\nfar_flares = %d\npause_unfocused = %d\n"
             "surround = %d\nfullscreen = %d\ndigital_steering = %d\npad_type = %d\ncheck_updates = %d\n",
             portSettings.showFps, portSettings.farView, portSettings.fade, portSettings.fadeNear, portSettings.fadeFar,
@@ -255,11 +279,12 @@ int PortSettingsSave(void)
             portSettings.hdTextures, portSettings.hdPackPath, portSettings.wipeout64Path, portSettings.customMusic,
             portSettings.musicShuffle, portSettings.musicFolder, portSettings.saveSlot, !portSettings.noAutoSave,
             portSettings.touchControls, portSettings.touchSize ? portSettings.touchSize : 100,
-            portSettings.touchOpacity ? portSettings.touchOpacity : 60, !portSettings.consoleDepth, portSettings.skipLogos,
+            portSettings.touchOpacity ? portSettings.touchOpacity : 60, portSettings.skipLogos,
             portSettings.recordRate ? portSettings.recordRate : 60, portSettings.videoStandard, !portSettings.noRumble,
             portSettings.rumbleStrength ? portSettings.rumbleStrength : 100, portSettings.farFlares,
             !portSettings.noFocusPause, portSettings.surround, portSettings.fullscreen, portSettings.digitalSteering,
             portSettings.negconPad, !portSettings.noUpdateCheck);
+    RenderSave(file, &portSettings.render);
     fclose(file);
     return 1;
 }

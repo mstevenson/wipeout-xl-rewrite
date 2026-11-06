@@ -876,7 +876,7 @@ static int Wipeout64Gates(const uint8_t *sections, int count, const uint8_t *fac
 
 static uint8_t *Relocate(const uint8_t *cmp, size_t length, int *paletteSlot, size_t *size);
 static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes);
-int PortPrmNormalizeN64(char *file, int length);
+int PortPrmMarkN64(char *file, int length);
 int PortPrmTriangulateN64(const char *file, int length, char *destination);
 int PortPrmShiftTextures(char *file, int length, int shift); /* (game/src/port_widen.c) */
 
@@ -1734,6 +1734,7 @@ static int PlaceTims(Layout *l, TimList *list, const int *own)
 
     for (i = 0; i < list->count; i++) {
         uint8_t *image, *clut = TimBlocks(list->tims[i], list->sizes[i], &image);
+        int flags = Le32(list->tims[i] + 4) & 0x70;
 
         if (!clut || !PlaceImage(l, Le16(image + 8), Le16(image + 10), &x, &y)) {
             return 0;
@@ -1749,7 +1750,7 @@ static int PlaceTims(Layout *l, TimList *list, const int *own)
         PutLe16(clut + 6, y);
         /* Register full-image bounds before splitting road tiles. */
         if (!PortN64TextureRegister(Le16(image + 4), Le16(image + 6), Le16(image + 8), Le16(image + 10),
-                                    list->tims[i][4] & 7, x, y)) return 0;
+                                    list->tims[i][4] & 7, x, y, flags)) return 0;
     }
     return 1;
 }
@@ -1991,13 +1992,6 @@ static int Wipeout64Sky(uint8_t *model, size_t size, const TimList *sky)
     return 1;
 }
 
-static void NormalizeN64TrackFaces(uint8_t *faces, size_t size)
-{
-    for (size_t face = 0; face + FACE_BYTES <= size; face += FACE_BYTES)
-        for (int c = 16; c < 19; c++)
-            faces[face + c] = PortN64Modulation(faces[face + c]);
-}
-
 /* XL's ten files of a Wipeout 64 track. */
 static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
 {
@@ -2014,8 +2008,7 @@ static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
         memcpy(parts[i], data, size);
         sizes[i] = size;
     }
-    /* Normalize road/ship tint before WADInitFaces saves colCopy; animated pads already use PS1 colours. */
-    NormalizeN64TrackFaces(parts[1], sizes[1]);
+    /* Keep N64 road colours at full precision. XL ship-light callers convert at draw time. */
     data = WadPart(at, "library.cmp", &size);
     ok = MakeLibrary(data, size, &layout, &parts[4], &sizes[4], &parts[5], &sizes[5]);
     /* the scenery: common, then for one player */
@@ -2045,7 +2038,7 @@ static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
         memcpy(parts[8] + comSize, sin, sinSize);
         sizes[8] = comSize + sinSize;
         ok = PortPrmShiftTextures((char *)parts[8] + comSize, (int)sinSize, comCount);
-        ok = ok && PortPrmNormalizeN64((char *)parts[8], (int)sizes[8]);
+        ok = ok && PortPrmMarkN64((char *)parts[8], (int)sizes[8]);
         if (ok) {
             int bytes = PortPrmTriangulateN64((char *)parts[8], (int)sizes[8], NULL);
             uint8_t *triangles = bytes ? SDL_malloc((size_t)bytes) : NULL;
@@ -2063,7 +2056,7 @@ static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
         memcpy(parts[9], data, size);
         sizes[9] = size;
         ok = ok && Wipeout64Sky(parts[9], sizes[9], &sky);
-        ok = ok && PortPrmNormalizeN64((char *)parts[9], (int)sizes[9]);
+        ok = ok && PortPrmMarkN64((char *)parts[9], (int)sizes[9]);
     }
     if (ok) {
         TimList signs = {0};
@@ -2076,7 +2069,7 @@ static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
             if (ok) {
                 markerModel = SDL_malloc(markerModelSize);
                 memcpy(markerModel, data, markerModelSize);
-                ok = PortPrmNormalizeN64((char *)markerModel, (int)markerModelSize);
+                ok = PortPrmMarkN64((char *)markerModel, (int)markerModelSize);
             }
         }
         TimFree(&signs);

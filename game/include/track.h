@@ -9,7 +9,16 @@
 /* Face.flags: the pit lane repairs ship energy. */
 #define PIT_LANE 0x40
 
-#include "psyq.h"
+#include "wipeout.h"
+
+/* Port: gameplay writes PS1-scale lighting, even on a track with imported RGB8 colours. */
+static inline void PortSetTrackColour(Face *face, u_char red, u_char green, u_char blue)
+{
+    face->red = red;
+    face->green = green;
+    face->blue = blue;
+    face->lightFormat = RENDER_LIGHT_PS1;
+}
 
 /* Automesh output: the automeshed polygons, then the quad and tri counters. */
 struct AutoMeshData {

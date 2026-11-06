@@ -844,6 +844,12 @@ void GteRecordAnchor(uint32_t handle, uint64_t anchor, double dx, double dy, dou
 
 static int backgroundOn; /* (GteSetBackground) */
 static int exactOn;      /* (GteSetExactDepth) */
+static int n64On;
+
+void GteSetN64(int on)
+{
+    n64On = on;
+}
 
 void GteSetBackground(int on)
 {
@@ -874,6 +880,7 @@ static uint32_t RecordPrecise(uint32_t sxy, float x, float y, float z)
     record->value.fade = 1.0f;
     record->value.background = backgroundOn;
     record->value.exact = exactOn;
+    record->value.n64 = n64On;
     record->value.key = 0;
     record->value.view[0] = record->value.view[1] = record->value.view[2] = 0.0f;
     record->value.anchor = 0;
@@ -907,7 +914,7 @@ static int32_t SameCorner(uint32_t sxy, float x, float y, float z, uint64_t key)
             for (index = slot ? slot->latest : -1, n = 0; index >= 0 && n < 8; index = records[index].previous, n++) {
                 const GtePrecise *p = &records[index].value;
 
-                if (p->background == backgroundOn && p->exact == exactOn && fabsf(p->x - x) <= 0.25f &&
+                if (p->background == backgroundOn && p->exact == exactOn && p->n64 == n64On && fabsf(p->x - x) <= 0.25f &&
                     fabsf(p->y - y) <= 0.25f && fabsf(p->z - z) <= z / 1024.0f &&
                     (p->key & GTE_KEY_MOVING) == (key & GTE_KEY_MOVING)) {
                     return index;

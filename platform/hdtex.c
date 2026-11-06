@@ -12,7 +12,7 @@
    DuckStation computes them, one of its quirks included (a palette range's hash covers as many colours from the
    palette's first). config.yaml's Aliases name the files under replacements/.
 
-   gpu_gl.c asks for each textured primitive which replacement covers its texels (HdTexFind) and then samples
+   render/gl_backend.c asks for each textured primitive which replacement covers its texels (HdTexFind) and then samples
    that image instead of video memory there. An image is decoded the first time it is asked for, on a thread of
    its own (meanwhile the console's texture is drawn), and kept at the framebuffer's scale. */
 #include <SDL3/SDL.h>

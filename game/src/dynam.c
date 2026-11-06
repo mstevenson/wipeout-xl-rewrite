@@ -371,9 +371,7 @@ test_left:
 
 color_left:
         {
-            facePtr->red = 255;
-            facePtr->green = 35;
-            facePtr->blue = 117;
+            PortSetTrackColour(facePtr, 255, 35, 117);
         }
 
 skip_left:
@@ -383,23 +381,17 @@ skip_left:
         noWeaponGrids++;
     }
     if (facePtr->flags & SPEED_UP) {
-        facePtr->red = 35;
-        facePtr->green = 35;
-        facePtr->blue = 255;
+        PortSetTrackColour(facePtr, 35, 35, 255);
     }
     if (facePtr->flags & PIT_LANE) {
-        facePtr->red = 128;
-        facePtr->green = 0;
-        facePtr->blue = 0;
+        PortSetTrackColour(facePtr, 128, 0, 0);
     }
     if (facePtr->flags & CHECKPOINT) {
         specialGrid[*specialCount].count = 10;
         specialGrid[*specialCount].section = section->secNo;
         specialGrid[*specialCount].attr = 0;
         if (!PortOriginalLooks()) { /* Port: an original Wipeout track's checkpoint keeps its own look (portorig.c) */
-        facePtr->red = 255;
-        facePtr->green = 255;
-        facePtr->blue = 255;
+        PortSetTrackColour(facePtr, 255, 255, 255);
         }
         (*specialCount)++;
     }
@@ -421,9 +413,7 @@ test_right:
 
 color_right:
         {
-            facePtr->red = 84;
-            facePtr->green = 238;
-            facePtr->blue = 117;
+            PortSetTrackColour(facePtr, 84, 238, 117);
         }
 
 skip_right:
@@ -432,19 +422,13 @@ skip_right:
         weaponGrid[noWeaponGrids].attr = WEAPON_GRID_RIGHT;
         noWeaponGrids++;
     } else if (facePtr->flags & SPEED_UP) {
-        facePtr->red = 35;
-        facePtr->green = 35;
-        facePtr->blue = 255;
+        PortSetTrackColour(facePtr, 35, 35, 255);
     }
     if (facePtr->flags & PIT_LANE) {
-        facePtr->red = 128;
-        facePtr->green = 0;
-        facePtr->blue = 0;
+        PortSetTrackColour(facePtr, 128, 0, 0);
     }
     if ((facePtr->flags & CHECKPOINT) && !PortOriginalLooks()) { /* Port: (as the left face) */
-        facePtr->red = 255;
-        facePtr->green = 255;
-        facePtr->blue = 255;
+        PortSetTrackColour(facePtr, 255, 255, 255);
     }
     return noWeaponGrids;
 }

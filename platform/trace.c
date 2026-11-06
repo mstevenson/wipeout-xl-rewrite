@@ -20,6 +20,7 @@
 #include "platform.h"
 #include "trace.h"
 #include "psx/pad.h"
+#include "psx/gpu.h"
 
 /* The game's globals by name, for the write scripts: the program's own symbol table (on Windows
    the executable exports its symbols for this; the web has no such table and runs no traces). */
@@ -647,6 +648,7 @@ uint64_t PortGameFrames(void)
 
 void PortTraceBoundary(uint32_t marker)
 {
+    PsxRendererBoundary();
     gameFrames++;
     if (marker == TRACE_CALLBACK_SWAP) {
         callbackSwaps++;

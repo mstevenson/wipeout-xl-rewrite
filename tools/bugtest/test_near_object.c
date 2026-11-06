@@ -1,6 +1,8 @@
 /* Near scenery must retain the PS1 quad's corners, diagonal, UVs and ordering depth. */
 #include "../../game/src/objdraw.c"
 #include <assert.h>
+#include "track.h"
+#include <stddef.h>
 #include <string.h>
 
 static union { POLY_GT4 gt; POLY_G4 g; char bytes[1024]; } arena;
@@ -9,6 +11,11 @@ static int linked;
 static void *packet;
 static u_long *packetSlot;
 static int originalLook;
+static int pcRendering;
+RenderGeometry PortRenderGeometry(void)
+{ return (RenderGeometry){pcRendering, pcRendering, pcRendering, pcRendering ? RENDER_LIGHT_RGB8 : RENDER_LIGHT_PS1}; }
+static int n64Track;
+int PortOriginalTrackIs64(void) { return n64Track; }
 int PortOriginalLooks(void) { return originalLook; }
 int PortTracing(void) { return 0; }
 int PortScreenMargin(void) { return 0; }
@@ -34,8 +41,43 @@ static void CheckView(const short *xy, const SVECTOR *expected)
     assert(GtePreciseOf(GteBoundHandle(xy, *(const uint32_t *)xy), &p));
     assert(p.view[0] == expected->vx && p.view[1] == expected->vy && p.view[2] == expected->vz);
 }
+static void RoadLighting(void)
+{
+    _Static_assert(sizeof(Face) == 20 && offsetof(Face, lightFormat) == 19, "preserve disc face layout");
+    _Static_assert(offsetof(Face, lightFormat) - offsetof(Face, red) == offsetof(CVECTOR, cd), "light provenance");
+    Face face = {.red = 255, .green = 128, .blue = 64, .lightFormat = RENDER_LIGHT_RGB8};
+    Object ship = {0};
+    const CVECTOR *light = (const CVECTOR *)&face.red;
+    RenderGeometry geometry = {0, 0, 0, RENDER_LIGHT_PS1};
+    n64Track = 1;
+    CVECTOR result = ObjectLight(&ship, light, geometry);
+    assert(result.r == 128 && result.g == 64 && result.b == 32);
+    /* Both gameplay writers use this path, including the depleted pad's neutral tint. */
+    PortSetTrackColour(&face, 128, 128, 128);
+    result = ObjectLight(&ship, light, geometry);
+    assert(result.r == 128 && result.g == 128 && result.b == 128);
+    PortSetTrackColour(&face, 255, 35, 117);
+    result = ObjectLight(&ship, light, geometry);
+    assert(result.r == 255 && result.g == 35 && result.b == 117);
+    /* Re-entering an imported track restores authored provenance; PC lighting keeps RGB8. */
+    face.lightFormat = RENDER_LIGHT_RGB8;
+    geometry.lightFormat = RENDER_LIGHT_RGB8;
+    result = ObjectLight(&ship, light, geometry);
+    assert(result.r == 255 && result.g == 35 && result.b == 117);
+    geometry.lightFormat = RENDER_LIGHT_PS1;
+    ship.flags = PORT_OBJECT_N64;
+    result = ObjectLight(&ship, light, geometry);
+    assert(result.r == 255 && result.g == 35 && result.b == 117);
+    ship.flags = 0;
+    n64Track = 0;
+    result = ObjectLight(&ship, light, geometry);
+    assert(result.r == 255 && result.g == 35 && result.b == 117);
+    puts("Imported road lighting converts once; depleted and animated gameplay tint retains PS1 intensity: OK");
+}
+
 int main(void)
 {
+    RoadLighting();
     SVECTOR vertices[4] = {{-100,-100,200}, {100,-100,200}, {-100,100,200}, {100,100,-100}};
     FT4 face = {0};
     Object object = {0};
@@ -54,7 +96,16 @@ int main(void)
         projected[i].flag = 1;
         projected[i].depth = vertices[i].vz > 0 ? vertices[i].vz : 0;
     }
+    object.flags = PORT_OBJECT_N64;
+    GteSetN64(1);
     assert(DrawNearPrimitive(&object, 0, ordering, prim));
+    {
+        GtePrecise p;
+        const short *xy = &arena.gt.x0;
+        assert(GtePreciseOf(GteBoundHandle(xy, *(const uint32_t *)xy), &p) && p.n64);
+        GteSetN64(0);
+        object.flags = 0;
+    }
     assert(linked == 1 && packet == &arena.gt);
     assert(arena.gt.code == 0x3e); /* a quad, not a fan on the other diagonal */
     assert(arena.gt.u0 == 130 && arena.gt.u1 == 250 && arena.gt.u2 == 130 && arena.gt.u3 == 250);
@@ -146,6 +197,32 @@ int main(void)
         assert(linked == 1 && packetSlot == ordering + 8191 && ((POLY_GT3 *)arena.bytes)->code == 0x34);
     }
     puts("N64 material preserves near-plane and normal/sky Gouraud policy: OK");
+    {
+        GT4 smooth = {0};
+        CVECTOR light = {40, 80, 120, 0};
+        POLY_GT4 before;
+        smooth.type = TypeGT4;
+        for (int i = 0; i < 4; i++) {
+            smooth.coords[i] = (short)i;
+            smooth.colour[i].r = 10 + i * 20;
+            vertices[i].vz = i == 3 ? -100 : 200;
+            projected[i].flag = 1;
+        }
+        pcRendering = 1;
+        assert(GouraudTextured(DRAW_PLAIN, 0) && GouraudTextured(DRAW_FIXED, 0));
+        prim.gt4 = &smooth;
+        assert(DrawNearPrimitive(&object, 0, ordering, prim));
+        assert(arena.gt.r0 == 10 && arena.gt.r1 == 30 && arena.gt.r2 == 50 && arena.gt.r3 == 70);
+        before = arena.gt;
+        OverrideObjectLight(&arena.gt, &light);
+        assert(arena.gt.r0 == 40 && arena.gt.r1 == 40 && arena.gt.r2 == 40 && arena.gt.r3 == 40);
+        assert(arena.gt.g2 == 80 && arena.gt.b3 == 120);
+        assert(arena.gt.code == before.code && arena.gt.tpage == before.tpage && arena.gt.x3 == before.x3);
+        assert(smooth.colour[0].r == 10 && smooth.colour[3].r == 70); /* shared model was not changed */
+        pcRendering = 0;
+        assert(!GouraudTextured(DRAW_PLAIN, 0));
+        puts("PC scenery retains corner colours; PC ship lighting replaces every emitted corner: OK");
+    }
     puts("near scenery keeps PS1 quad geometry and original vertex positions: OK");
     puts("1995 sky keeps Gouraud corner colours in the fixed background slot: OK");
     return 0;

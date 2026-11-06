@@ -34,9 +34,9 @@ int main(void)
     assert(drawn[0] == &parts[7] && drawn[1] == &parts[6]);
     assert(skeletons[7].relative.t[0] == 1000 && skeletons[7].relative.t[1] == -2300);
     assert(skeletons[6].super == skeletons[7].super && skeletons[6].relative.t[2] == -1200);
-    assert(panels[6].colour.r == 128);
+    assert(panels[6].colour.r == 255);
     drawCount = 0; assert(PortOriginalDrawDroid(&section, 2, 0, 10));
-    assert(panels[6].colour.r == 64);
+    assert(panels[6].colour.r == 128);
     drawCount = 0; assert(PortOriginalDrawDroid(&section, 0, 0, 0)); assert(drawn[1] == &parts[2]);
     drawCount = 0; assert(PortOriginalDrawDroid(&section, 1, 0, 0)); assert(drawn[1] == &parts[4]);
     drawCount = 0; assert(PortOriginalDrawDroid(&section, 3, 1, 0)); assert(drawn[1] == &parts[0]);

@@ -2,6 +2,7 @@
 #include "../../platform/link.c"
 #include <assert.h>
 PortConfig portConfig;
+PortSettings portSettings;
 static int pauseBlocks;
 void PortInputRaceStart(void) { pauseBlocks++; }
 int main(void)
@@ -10,6 +11,15 @@ int main(void)
     role = LINK_MASTER;
     shared = MapShared(1);
     assert(shared);
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.selection = RENDER_N64;
+    portSettings.render.ps1.dither = 0;
+    portSettings.render.n64.divot = 0;
+    RenderSettings expected = portSettings.render;
+    PortLinkField();
+    role = LINK_SLAVE; memset(&portSettings.render, 0, sizeof(portSettings.render)); PortLinkField();
+    assert(!memcmp(&portSettings.render, &expected, sizeof(expected)));
+    role = LINK_MASTER;
     PortLinkSetSplit(1);
     assert(PortLinkRaceActive() && PortLinkSplit() && pauseBlocks == 1);
     PortLinkSetSplit(1); assert(pauseBlocks == 1);

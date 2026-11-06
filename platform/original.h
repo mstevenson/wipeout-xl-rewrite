@@ -23,6 +23,7 @@ int PortWipeout64Open(const char *path, char *message, int messageSize);
 void PortWipeout64Close(void);
 const char *PortWipeout64Source(void); /* "" when none */
 int PortWipeout64TrackCount(void);
+int PortOriginalTrackIs64(void);
 
 /* The games' compression of texture sequences (.cmp): unpacked into out (size bytes at most; returns how many),
    and the same bytes as a stream without back references (the caller frees). */

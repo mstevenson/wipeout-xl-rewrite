@@ -167,12 +167,32 @@ which only the desktop programs hold: on a phone they find no partner, as on the
 
 The ~ key (below Esc) opens a console over the whole game window: frame rates and a
 frame-rate overlay, the draw distance (the console's or the whole track) and
-its fade, the frame rate, widescreen, the resolution, HD textures, skipping the intro movie and the start-up logos, full screen, the
+its fade, the frame rate, widescreen, the resolution, HD textures, PC rendering, skipping the intro movie and the start-up logos, full screen, the
 frame recorder (off by default; up to 240 pictures a second, the ones between the game's frames too; Tab: the last 3 seconds, or from one Tab to the next, with every
 primitive behind any pixel; while recording, its frames come in as they are drawn, `,` and `.` step back and
 forward a frame, and − / + zoom the picture, kept at the resolution it was drawn at), and where the settings and the memory cards are. Changes are saved at once to
 `wipeoutxl.ini` in the user's data folder; a new saves folder takes effect at
 the next start. Dear ImGui (`platform/third_party/imgui`, MIT) draws it.
+
+Graphics > **Global renderer** selects **PlayStation** or **PC**. A separate
+**Use N64 renderer for Wipeout 64 tracks** checkbox is enabled by default; when
+unchecked, those tracks also use the global renderer. The selected PlayStation/PC
+settings and N64 settings appear side by side, stacking in narrow windows.
+N64 settings remain visible, dimmed when the checkbox is off. Each profile has
+independently saved controls and its own restore-defaults button.
+PS1 exposes vertex quantization, affine mapping, colour precision,
+dithering and optional depth buffering; PC exposes filtering, lighting and depth;
+N64 exposes three-point filtering, RGB5 precision, dithering and VI filters;
+its depth buffering is always enabled.
+Resolution, frame rate, draw distance and HD replacements remain shared.
+
+Existing renderer preferences and profile parameters are retained. The former
+explicit N64 selection now enables N64 rendering only for Wipeout 64 tracks.
+`WIPEOUT_RENDERER=ps1|pc|auto|n64` overrides the saved selection; `auto` and `n64`
+enable the track-specific N64 override. Old PC/filter and depth settings are
+migrated. See [rendering profiles](docs/RENDERERS.md) for defaults, controls and migration.
+These are rendering approximations using the loaded assets, not changes of game
+version or pixel-exact emulation.
 
 ## How it is built
 

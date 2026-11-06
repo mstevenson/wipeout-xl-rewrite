@@ -118,6 +118,7 @@ static void ProjectVertices(Object *object)
     int              count = (u_short)object->vertexCount;
     uint64_t         drawing = currentDrawing = DrawingKey(object); /* Port: frame interpolation */
 
+    GteSetN64((object->flags & PORT_OBJECT_N64) != 0); /* Port: projection provenance */
     if (farView) {
         int i;
 
@@ -361,10 +362,11 @@ static char *DrawTexturedQuad(DrawKind kind, char *out, u_long *ordering, int fi
     return out + sizeof(POLY_FT4);
 }
 
-/* The original Wipeout's sky renderer emits GT3/GT4 packets, unlike XL's flat sky. */
+/* Port: the PC loader retains every GT3/GT4 corner colour, including scenery and sky.
+   The original Wipeout's sky renderer also emits GT3/GT4 packets, unlike PS1 XL's flat sky. */
 static int GouraudColours(DrawKind kind)
 {
-    return kind == DRAW_LIT || (kind == DRAW_FIXED && PortOriginalLooks());
+    return PortRenderGeometry().gouraudObjects || kind == DRAW_LIT || (kind == DRAW_FIXED && PortOriginalLooks());
 }
 
 /* N64 materials retain corner lighting in every draw pass. */
@@ -528,6 +530,7 @@ static void BindSpriteCorner(short *corner, const GtePrecise *centre, int x, int
     uint32_t handle;
 
     GteKeyNext(0, GteKeyMix(centre->key, (uint64_t)k + 1));
+    GteSetN64(centre->n64); /* Port: retain imported billboard provenance. */
     handle = GteRecordProjection(*(u_int *)corner, centre->x + (float)dx, centre->y + (float)dy, 0.0f, 1.0f);
     GteRecordView(handle, centre->view[0] + dx * scale, centre->view[1] + dy * scale, centre->view[2]);
     GteBindPrecise(corner, handle);
@@ -788,6 +791,57 @@ static int DrawNearPrimitive(Object *object, int index, u_long *ordering, Poly p
     return 1;
 }
 
+/* Port: apply the renderer's all-corner light override to emitted packets only.
+   Packet layout is the adapter's concern; the renderer decides when to override. */
+static void OverrideObjectLight(void *packet, const CVECTOR *colour)
+{
+    POLY_F3 *first = packet;
+
+    SetRgb(&first->r0, &first->g0, &first->b0, colour);
+    switch (first->code & 0xFC) {
+    case 0x30: {
+        POLY_G3 *p = packet;
+        SetRgb(&p->r1, &p->g1, &p->b1, colour);
+        SetRgb(&p->r2, &p->g2, &p->b2, colour);
+        break;
+    }
+    case 0x38: {
+        POLY_G4 *p = packet;
+        SetRgb(&p->r1, &p->g1, &p->b1, colour);
+        SetRgb(&p->r2, &p->g2, &p->b2, colour);
+        SetRgb(&p->r3, &p->g3, &p->b3, colour);
+        break;
+    }
+    case 0x34: {
+        POLY_GT3 *p = packet;
+        SetRgb(&p->r1, &p->g1, &p->b1, colour);
+        SetRgb(&p->r2, &p->g2, &p->b2, colour);
+        break;
+    }
+    case 0x3C: {
+        POLY_GT4 *p = packet;
+        SetRgb(&p->r1, &p->g1, &p->b1, colour);
+        SetRgb(&p->r2, &p->g2, &p->b2, colour);
+        SetRgb(&p->r3, &p->g3, &p->b3, colour);
+        break;
+    }
+    }
+}
+
+/* Port: only imported road RGB8 needs conversion for PS1-scaled object lighting.
+   Gameplay-authored pad colours already use PS1 tint, even on an imported track. */
+static CVECTOR ObjectLight(const Object *object, const CVECTOR *colour, RenderGeometry geometry)
+{
+    CVECTOR result = *colour;
+    if (geometry.lightFormat == RENDER_LIGHT_PS1 && PortOriginalTrackIs64() &&
+        colour->cd == RENDER_LIGHT_RGB8 && !(object->flags & PORT_OBJECT_N64)) {
+        result.r = PortN64Modulation(colour->r);
+        result.g = PortN64Modulation(colour->g);
+        result.b = PortN64Modulation(colour->b);
+    }
+    return result;
+}
+
 static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *colour, int fixedSlot)
 {
     u_long *ordering;
@@ -796,6 +850,14 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
     int     count, index = 0;
     unsigned char *drawnFlags = NULL;
     const unsigned char *skip = NULL;
+    CVECTOR compatibleLight;
+    const RenderGeometry geometry = PortRenderGeometry();
+
+    /* Port: colour.cd carries the track face's light format, not its texture identity. */
+    if (kind == DRAW_LIT && colour) {
+        compatibleLight = ObjectLight(object, colour, geometry);
+        colour = &compatibleLight;
+    }
 
     if (farView) {
         int complete;
@@ -880,6 +942,9 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         default:
             goto finished;
         }
+        if (out != before && kind == DRAW_LIT && colour && geometry.lightAllVertices) {
+            OverrideObjectLight(before, colour);
+        }
         if (drawnFlags && index < (u_short)object->primitiveCount) {
             drawnFlags[index] = out != before || (culled && CulledForCertain(culledVertex[0], culledVertex[1], culledVertex[2])) ||
                                 (!culled && kind == DRAW_PLAIN && DrawNearPrimitive(object, index, ordering, prim));
@@ -888,6 +953,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         index++;
     } while (--count > 0);
 finished:
+    GteSetN64(0); /* Port: subsequent PS1 projections keep their own material identity. */
     forceReject = 0;
     if (farView) {
         PortFarRelease(out);

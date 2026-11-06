@@ -12,6 +12,7 @@
 #include <stdint.h>
 
 #include "gpu.h"
+#include "../render/renderer.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,6 +33,7 @@ enum {
 #define FRAMECAP_DROPPED 16  /* not drawn at all (a corner behind the camera among corners without depth) */
 
 typedef struct FrameCapPrim {
+    uint32_t shade;      /* immutable renderer operations (SHADE_*), recorded with the primitive */
     uint32_t serial;     /* the order drawn in the frame */
     uint8_t kind, code, flags, count;
     uint16_t tpage, clut;
@@ -43,6 +45,7 @@ typedef struct FrameCapPrim {
 } FrameCapPrim;
 
 typedef struct FrameCapFrame {
+    RenderFrame render;  /* policy used when this frame was drawn */
     uint64_t gameFrame;   /* the game's Swap count (a picture between frames: the frame it moves on from) */
     uint32_t number;      /* the recorded frames' running count (each its own) */
     float between;        /* a picture drawn between two of the game's frames: how far along (0 < between < 1), its

@@ -52,9 +52,8 @@ char *PortWidenPrmImage(HeapBlock *heap, char *file, int *length);
 /* Adds shift to the texture numbers of a prm file's textured primitives (the file as on disc: big-endian), when
    two scenery files are made one (platform/original.c); 0 if the walk does not reach the file's end. */
 int PortPrmShiftTextures(char *file, int length, int shift);
-/* Convert N64 texture tint colours to the PS1 scale before loading scenery, sky or signs.
-   Call once on a copy of the file: calling again would darken the colours a second time. */
-int PortPrmNormalizeN64(char *file, int length);
+/* Mark imported objects while preserving their original eight-bit shading colours. */
+int PortPrmMarkN64(char *file, int length);
 /* Split unlit N64 scenery quads along their original diagonal for independent triangle culling.
    Returns required/written bytes, or 0 for malformed input/count overflow. destination may be
    null to measure; otherwise it must be a separate buffer of the measured size. */
