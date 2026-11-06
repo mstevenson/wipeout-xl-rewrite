@@ -6,6 +6,7 @@
 #include "ships.h"
 #include "pad.h"
 #include "../../platform/controls.h"
+#include "../../platform/pc_cheats.h"
 #include "menus.h"
 #include "include_asm_g8.h"
 
@@ -412,6 +413,8 @@ void UpdateCheatSequence(int inMenu)
     int i;
     u_char toggled;
 
+    /* Port: PC cheats share this frame's menu/race context, including while paused. */
+    PcCheatsSetContext(inMenu ? PC_CHEAT_MENU : PC_CHEAT_RACE);
     if (keysPressed != 0) {
         for (i = 15; i > 0; i--) {
             cheatHistory[i] = cheatHistory[i - 1];

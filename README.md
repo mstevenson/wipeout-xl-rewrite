@@ -17,6 +17,9 @@ The goal of this project is to keep the original behavior as much as possible wh
 
 If you would like to change any of the settings or files for the game press the <kbd>`</kbd> or <kbd>~</kbd> key on your keyboard to toggle the debug UI. It has multiple tabs with many options to configure.
 
+The original [PC cheats](docs/CONTROLS.md#pc-cheats) work too: type `XTEAM`, `XCLASS` or `XTRACK`
+in the menus, or the `PSY...` codes during a single-player race. The PlayStation button cheats remain available.
+
 ## Getting Started
 
 To play this game, you will need a copy of Wipeout XL or Wipeout 2097. Store it somewhere on your computer.

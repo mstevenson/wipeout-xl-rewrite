@@ -102,6 +102,10 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-decla
     -include platform/include/port.h -iquote game/include -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
     tools/bugtest/test_steering.c $render_sources platform/psx/pad.c game/src/pad.c $(pkg-config --libs sdl3) -o "$test_build/steering"
 "$test_build/steering"
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations -Wno-pointer-sign \
+    -include platform/include/port.h -iquote game/include -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
+    tools/bugtest/test_pc_cheats.c platform/psx/pad.c game/src/pad.c $(pkg-config --libs sdl3) -o "$test_build/pc_cheats"
+"$test_build/pc_cheats"
 for test in steering_target steering_ghost guest_motion guest_sign; do
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations -Wno-pointer-sign \
         -include platform/include/port.h -iquote game/include "tools/bugtest/test_$test.c" -lm -o "$test_build/$test"

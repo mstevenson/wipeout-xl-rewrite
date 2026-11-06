@@ -79,6 +79,11 @@ PadDevice PsxPadLastDevice(void);
 void PsxPadNameEntry(int keys);
 int PsxPadNameKey(void);
 
+/* PC cheats (platform/pc_cheats.h): only fresh menu/race contexts accept gameplay codes. */
+void PsxPadSetPcCheatHandler(void (*handler)(int code, int context));
+void PsxPadPcCheatContext(int context);
+void PsxPadResetPcCheats(void);
+
 void PsxPadSetTouchSource(uint16_t (*buttons)(PadContext context));
 void PsxPadTouchChanged(void);
 

@@ -11,6 +11,7 @@
 #include "platform.h"
 #include "psx/gpu.h"
 #include "psx/psx_io.h"
+#include "psx/pad.h"
 #include "settings.h"
 #include "updates.h"
 #include "touch.h"
@@ -393,6 +394,7 @@ int PortPumpEvents(void)
         }
 #endif
         if (DebugUiEvent(&event)) {
+            PsxPadResetPcCheats();
             continue; /* the debug console's (the ~ key) */
         }
         if (TouchEvent(&event)) {

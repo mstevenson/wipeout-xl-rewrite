@@ -3,6 +3,7 @@
 #include "portlink.h" /* Port: two players on one machine */
 #include "pad.h"
 #include "../../platform/controls.h" /* Port: button names for the device in use */
+#include "../../platform/pc_cheats.h"
 #include "ayrace.h"
 extern signed char activateOT2;
 extern int attractCycles;
@@ -116,6 +117,7 @@ int PsxMain(void) { /* Port: was void main(void), noreturn; the platform owns th
     }
     keyDefineThrust = 0;
     frame = 0;
+    PcCheatsInit(); /* Port: RUSH can select the animal ships during the startup screens. */
     InitCDFS(heap);
     InitialiseAmbientColour();
     InitialiseColourMatrix();
@@ -169,6 +171,7 @@ int PsxMain(void) { /* Port: was void main(void), noreturn; the platform owns th
             }
         }
     }
+    PcCheatsSetContext(PC_CHEAT_IDLE); /* Port: models are chosen below; RUSH ends with the logos. */
     frame = 0;
     ShowLoadMessage();
     do {

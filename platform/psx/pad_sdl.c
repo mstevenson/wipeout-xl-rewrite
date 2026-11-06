@@ -37,6 +37,7 @@
 #include "../link.h"
 #include "../platform.h"
 #include "../updates.h"
+#include "../pc_cheats.h"
 #include "internal.h"
 #include "pad.h"
 
@@ -133,8 +134,86 @@ static int NameKeys(void)
     return PsxFieldCount() - nameField <= 4 ? nameKeys : 0;
 }
 
+static void (*pcCheatHandler)(int code, int context);
+static int pcCheatContext;
+static uint64_t pcCheatField;
+static char cheatLetters[11]; /* longest word: PSYPROTECT (10), plus the terminator */
+
+void PsxPadSetPcCheatHandler(void (*handler)(int code, int context))
+{
+    pcCheatHandler = handler;
+    cheatLetters[0] = 0;
+}
+
+void PsxPadPcCheatContext(int context)
+{
+    if (context != pcCheatContext) cheatLetters[0] = 0;
+    pcCheatContext = context;
+    pcCheatField = PsxFieldCount();
+}
+
+/* These are words typed in the player's layout, independent of the race's button bindings.
+   A prefix already being typed consumes its remaining letters, so the P in PSYPROTECT cannot
+   pause/resume a second time. The first P keeps its usual Start action. */
+static bool PcCheatKey(const SDL_KeyboardEvent *event)
+{
+    static const char *words[] = {
+        "PSYMEGA", "PSYPROTECT", "PSYTICKER", "PSYRAPID", "XTEAM", "XCLASS", "XTRACK", "RUSH", "FRAMERATE"
+    };
+    SDL_Keycode key;
+    size_t length, i, n;
+    int context = pcCheatContext;
+    bool consume = false;
+
+    if (!pcCheatHandler || !event->down || event->repeat) return false;
+    if (!PortWindowFocused() || NameKeys() || PortUpdateAvailable() ||
+        (event->mod & (SDL_KMOD_CTRL | SDL_KMOD_ALT | SDL_KMOD_GUI))) {
+        cheatLetters[0] = 0;
+        return false;
+    }
+    if (context != PC_CHEAT_STARTUP && context != PC_CHEAT_IDLE && PsxFieldCount() - pcCheatField > 4) {
+        pcCheatContext = PC_CHEAT_IDLE;
+        context = PC_CHEAT_IDLE;
+        cheatLetters[0] = 0;
+    }
+    key = SDL_GetKeyFromScancode(event->scancode, SDL_KMOD_NONE, false);
+    if (key < 'a' || key > 'z') {
+        cheatLetters[0] = 0;
+        return false;
+    }
+    length = strlen(cheatLetters);
+    if (length == sizeof(cheatLetters) - 1) {
+        memmove(cheatLetters, cheatLetters + 1, --length);
+    }
+    cheatLetters[length++] = (char)(key - 'a' + 'A');
+    cheatLetters[length] = 0;
+    for (i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+        int allowed = i == PC_CHEAT_FPS ||
+            (i <= PC_CHEAT_MINIGUN && context == PC_CHEAT_RACE) ||
+            (i >= PC_CHEAT_TEAM && i <= PC_CHEAT_TRACK && context == PC_CHEAT_MENU) ||
+            (i == PC_CHEAT_RUSH && context == PC_CHEAT_STARTUP);
+        if (!allowed) continue;
+        n = strlen(words[i]);
+        if (length >= n && !memcmp(cheatLetters + length - n, words[i], n)) {
+            pcCheatHandler((int)i, context);
+            cheatLetters[0] = 0;
+            return true;
+        }
+        for (n = 2; n <= length && n < strlen(words[i]); n++) {
+            if (!memcmp(cheatLetters + length - n, words[i], n)) consume = true;
+        }
+    }
+    return consume;
+}
+
+void PsxPadResetPcCheats(void)
+{
+    cheatLetters[0] = 0;
+}
+
 void PsxPadNameEntry(int keys)
 {
+    cheatLetters[0] = 0;
     if (!NameKeys()) {
         typedCount = 0; /* (what was typed before the entry is not its) */
     }
@@ -904,10 +983,12 @@ void PsxInputEvent(const SDL_Event *event)
 {
     size_t i;
     int port;
+    bool cheatKey;
 
     switch (event->type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP:
+        cheatKey = PcCheatKey(&event->key);
         if (event->key.down && typedCount < NAME_KEYS) {
             char key = NameKey(event->key.scancode, NameKeys());
 
@@ -919,6 +1000,7 @@ void PsxInputEvent(const SDL_Event *event)
         for (i = 0; i < KEY_COUNT; i++) {
             if (keyBindings[i].key == event->key.scancode) {
                 keyDown[i] = event->key.down;
+                if (cheatKey) keyHeldOver[i] = true;
                 if (!event->key.down) {
                     keyHeldOver[i] = false;
                 } else if (!event->key.repeat && (!routed || firstDevice == DEVICE_KEYBOARD)) {
@@ -930,6 +1012,7 @@ void PsxInputEvent(const SDL_Event *event)
         update_keyboard();
         break;
     case SDL_EVENT_WINDOW_FOCUS_LOST:
+        cheatLetters[0] = 0;
         memset(keyDown, 0, sizeof(keyDown));
         memset(keyHeldOver, 0, sizeof(keyHeldOver));
         update_keyboard();

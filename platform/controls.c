@@ -17,12 +17,29 @@
 #include <string.h>
 
 #include "controls.h"
+#include "pc_cheats.h"
 #include "platform.h"
 #include "psx/pad.h"
 #include "trace.h"
 #include "settings.h"
 
 /* ---- the game's calls ---- */
+
+void PcCheatsSetHandler(void (*handler)(int code, int context))
+{
+    PsxPadSetPcCheatHandler(handler);
+}
+
+void PcCheatsSetContext(int context)
+{
+    PsxPadPcCheatContext(context);
+}
+
+void PortToggleFps(void)
+{
+    portSettings.showFps = !portSettings.showFps;
+    PortSettingsSave();
+}
 
 int PortAnalogSteeringEnabled(void)
 {

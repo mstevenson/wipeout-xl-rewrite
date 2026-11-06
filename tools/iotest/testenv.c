@@ -16,8 +16,14 @@
 
 static uint64_t fields;
 static char saveDir[256];
+int portPal; /* tests use NTSC timing unless a case selects PAL */
 
 uint64_t test_fields(void)
+{
+    return fields;
+}
+
+uint64_t PsxFieldCount(void)
 {
     return fields;
 }
@@ -38,6 +44,11 @@ void PsxPassFields(void)
 int PortLinkRole(void)
 {
     return LINK_NONE;
+}
+
+int PortLinkRaceActive(void)
+{
+    return 0;
 }
 
 void PortLinkSetInput(const LinkInput *input)

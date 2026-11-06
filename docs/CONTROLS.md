@@ -94,6 +94,31 @@ are not read.
 
 The controller screen's rows are for gamepads; with the keyboard they show the fixed keys.
 
+## PC cheats
+
+The original Windows cheat words also work with either front end and any disc assets. Type the
+word directly, without opening the debug console or holding the PlayStation cheat modifiers.
+
+| Code | Effect | Where to type it |
+|---|---|---|
+| `XTEAM` | Unlock the Piranha team | Menus |
+| `XCLASS` | Unlock Phantom class / its track selection | Menus |
+| `XTRACK` | Unlock tracks | Menus |
+| `PSYMEGA` | Refill weapons after firing or discarding | Single-player race, with weapons enabled |
+| `PSYPROTECT` | No damage | Single-player race |
+| `PSYTICKER` | Unlimited checkpoint time | Single-player race |
+| `PSYRAPID` | Continuous minigun | Single-player race |
+| `RUSH` | Animal ships | Startup logo/copyright screens, before models load |
+| `FRAMERATE` | Toggle the frame-rate overlay | Anywhere |
+
+Repeat a gameplay code to turn it off. As in the Windows version, the typed gameplay codes also
+accept single-player time trials; the PlayStation button sequences keep their original rules.
+The first P retains its usual pause action; subsequent letters belonging to the code do not
+press game buttons. Enter or Escape can resume after typing a code. `RUSH` needs startup logos
+enabled so there is time to type it. `FRAMERATE` saves the same overlay setting as the debug UI.
+Typing in a name field or the debug console does not enter cheats. Losing focus or changing
+between menus and a race clears an incomplete code. The PlayStation button cheats still work.
+
 ## Gamepads
 
 Gamepads are SDL gamepads mapped to the console pad by position, with the console's default
