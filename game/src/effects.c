@@ -724,6 +724,7 @@ void ColourDroidLights(Object *droid)
     int    i;
     Poly   poly;
 
+    PortRaceMaterialTick(); /* Port: this effect runs once per active race update. */
     lightPhase[1] += 140;
     rf = (rsin(lightPhase[1]) >> 5) + 128;
     if (rf > 255) {
@@ -972,6 +973,7 @@ static void DrawDroid(Object *shape, TrackSection *section, int texture, int mir
     GT4 *poly;
     Texture *tex;
     if (PortOriginalDrawDroid(section, texture, mirrored, droidBlinkTick)) return;
+    int bright = droidBlinkTick % 20 < 10;
     previous=section->prevSection.ptr;
     direction.vx=section->centre.vx-previous->centre.vx;
     direction.vy=section->centre.vy-previous->centre.vy;
@@ -985,7 +987,7 @@ static void DrawDroid(Object *shape, TrackSection *section, int texture, int mir
     tex=textureTable[texture+textureBase];
     switch(poly->type) {
     case 8:
-        if (droidBlinkTick%20>=10) {
+        if (!bright) {
         poly->colour[0].r=128;poly->colour[0].g=128;poly->colour[0].b=128;
         poly->colour[1].r=128;poly->colour[1].g=128;poly->colour[1].b=128;
         poly->colour[2].r=128;poly->colour[2].g=128;poly->colour[2].b=128;
@@ -1006,7 +1008,7 @@ static void DrawDroid(Object *shape, TrackSection *section, int texture, int mir
         poly->v3=tex->v3;poly->cba=tex->cba;poly->tsb=tex->tsb;
         break;
     case 4:
-        if (droidBlinkTick%20>=10) {
+        if (!bright) {
         poly->colour[0].r=128;poly->colour[0].g=128;poly->colour[0].b=128;
         } else {
         poly->colour[0].r=255;poly->colour[0].g=255;poly->colour[0].b=255;
@@ -1016,6 +1018,8 @@ static void DrawDroid(Object *shape, TrackSection *section, int texture, int mir
         poly->cba=tex->cba;poly->tsb=tex->tsb;
         break;
     }
+    /* Port: select the same message and blink phase in the object's native artwork. */
+    PortObjectVisualFrame(&shape->scratch, (unsigned)(texture * 2 + bright));
     shape->skeleton->update=1;
     AsmDrawObject(shape, cameraPtr->camPos, 0); /* Port: roll was never passed; 0 stands for the console's stale a2 */
     PortFarObject(shape); /* Port: beyond the console's depth, the far view's (it popped in) */
@@ -1156,6 +1160,8 @@ void InitDroidThings(Object **objects, char *names, Skeleton *parent, Checkpoint
 }
 
 
+enum { LIGHT_OFF, LIGHT_RED, LIGHT_AMBER, LIGHT_GREEN, LIGHT_SWEEP };
+
 void ResetLightStart(void)
 {
     short group;
@@ -1164,6 +1170,7 @@ void ResetLightStart(void)
 
     lightUpdate = 0;
     for (group = 0; group < 3; group++) {
+        PortObjectVisualFrame(&lightGroups[group]->scratch, LIGHT_OFF); /* Port: reset native artwork */
         p = (FT4 *)lightGroups[group]->primitives;
         for (index = 0; index < 8; index++) {
             if (p->type == 4) {
@@ -1209,25 +1216,31 @@ void UpdateLightStart(Object **objects, ShipData *ships, DroidData *droids, shor
             face = (FT4 *)object->primitives;
             for (j = 0; j < 8; j++) {
                 if (face->type == 4) {
+                    int frame = LIGHT_OFF;
                     if (lightUpdate < PAL_TIME(480)) {
                         if (startCountdown >= REGION(34, 42) && startCountdown <= REGION(66, 83)) {
                             face->colour.r = white;
                             face->colour.g = 0;
                             face->colour.b = 0;
+                            frame = LIGHT_RED;
                         } else if (startCountdown >= 1 && startCountdown <= REGION(33, 41)) {
                             face->colour.r = white;
                             face->colour.g = 128;
                             face->colour.b = 0;
+                            frame = LIGHT_AMBER;
                         } else if (startCountdown == 0) {
                             face->colour.r = 0;
                             face->colour.g = white;
                             face->colour.b = 0;
                             lightUpdate++;
+                            frame = LIGHT_GREEN;
                         }
                     } else {
                         lightUpdate++;
                         if (lightUpdate >= PAL_TIME(480)) {
-                            if ((short)(lightChaseStep % 8) == j) {
+                            int chase = lightChaseStep % 8;
+                            frame = LIGHT_SWEEP + chase;
+                            if ((short)chase == j) {
                                 face->colour.r = 0;
                                 face->colour.g = white;
                                 face->colour.b = 0;
@@ -1238,6 +1251,8 @@ void UpdateLightStart(Object **objects, ShipData *ships, DroidData *droids, shor
                             }
                         }
                     }
+                    /* Port: the native artwork shows the whole strip on the first face. */
+                    if (j == 0) PortObjectVisualFrame(&object->scratch, (unsigned)frame);
                     face++;
                 }
             }

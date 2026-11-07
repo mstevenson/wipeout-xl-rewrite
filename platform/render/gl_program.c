@@ -58,6 +58,7 @@ int RenderGlProgramInit(RenderProgram *s, const char *vertexSource, const char *
     s->uniformDepthPull = glGetUniformLocation(s->program, "depthPull");
     s->uniformDepthPass = glGetUniformLocation(s->program, "depthPass");
     s->uniformTarget = glGetUniformLocation(s->program, "target");
+    s->uniformPointSize = glGetUniformLocation(s->program, "pointSize");
     s->uniformOrigin = glGetUniformLocation(s->program, "origin");
     /* each sampler its own unit from the start (an integer and a float texture may not share one) */
     glUseProgram(s->program);

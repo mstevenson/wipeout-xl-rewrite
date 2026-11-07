@@ -10,8 +10,8 @@
    records), the size / 2 - 1, the VDP1 command (2 a distorted sprite, 4 a polygon), 1, then the records; the next
    group 6 + size on; flags 0xffff end them. Flags: 0x0001 textured, 0x0008 lit at run time (4 more bytes a record),
    0x0200 double-sided, 0x4000 SPD (texel 0 drawn). A record: 4 vertex byte offsets (/ 12), VDP1's corners A B C D
-   (a triangle repeats one), then textured CMDSRCA, CMDSIZE, CMDGRDA, CMDCOLR (the address / 8 of a 16-colour LUT:
-   every polygon has its own, its lighting in it), untextured CMDGRDA and an RGB555 colour. The texture (4-bit)
+   (a triangle repeats one), then textured CMDSRCA, CMDSIZE, CMDPMOD, CMDCOLR (the address / 8 of a 16-colour LUT:
+   every polygon has its own, its lighting in it), untextured CMDPMOD and an RGB555 colour. The texture (4-bit)
    lies on A B C D as A (0,0) B (w-1,0) C (w-1,h-1) D (0,h-1); VDP1's A B C D go round the other way from the
    PlayStation's quad (0 1 3 2), so a quad is A D B C. objects.rbh holds the start light (0, its lamps 1-12), the
    rescue droid (13), mine (14), start droid (15, its screens 16-25), wreck (26), low-detail ships (27-31: AG,
@@ -38,6 +38,7 @@
 #include "original.h"
 #include "platform.h"
 #include "saturn.h"
+#include "render/saturn_native.h"
 
 /* the same arithmetic on every machine: no fused multiply-adds */
 #pragma STDC FP_CONTRACT OFF
@@ -142,7 +143,7 @@ static int Round(double v)
 typedef struct Poly {
     int corner[4];
     int flags;
-    uint16_t srca, size, colr; /* (untextured: colr the colour) */
+    uint16_t srca, size, colr, mode; /* original VDP1 command words, retained for native rendering */
 } Poly;
 
 typedef struct Model {
@@ -212,8 +213,10 @@ static int ReadModel(const uint8_t *blk, size_t blkSize, const uint8_t *verts, s
                 q->srca = Be16(r + 8);
                 q->size = Be16(r + 10);
                 q->colr = Be16(r + 14);
+                q->mode = Be16(r + 12);
             } else {
                 q->colr = Be16(r + 10);
+                q->mode = Be16(r + 8);
             }
         }
     }
@@ -993,6 +996,7 @@ typedef struct Spec {
     int uv[4][2];
     uint8_t colour[3];
     int width, height; /* a sprite's */
+    SaturnNativePoly native;
 } Spec;
 
 typedef struct Object {
@@ -1017,18 +1021,46 @@ typedef struct Converter {
     Book book;
     Atlas atlas;
     Region region;
-    int gouraud;
+    int gouraud, regionKind, track;
     Object *object;
     int objectCount, objectCapacity;
     TexturePalette *tex;
     int texCount, texCapacity;
+    SaturnNativePoly frames[SATURN_MODEL_FRAMES - 1];
+    int frameCount;
 } Converter;
+
+/* The original initializer finds these palette slots by their first five words.
+   Match the source values so a relocated palette still animates. */
+static SaturnMaterialAnimation PaletteAnimation(const Converter *cv, const uint16_t palette[16])
+{
+    static const struct {
+        uint16_t signature[5];
+        int region, track;
+        SaturnMaterialAnimation animation;
+    } animated[] = {
+        {{0x8000, 0x8400, 0x9021, 0x9441, 0xb083}, R_SCENE, 20, SATURN_ANIM_NEON},
+        {{0x8000, 0x8401, 0x9045, 0x9869, 0xa8ad}, R_SCENE, 20, SATURN_ANIM_NEON},
+        {{0x8000, 0x8021, 0x84a5, 0x8929, 0x8dad}, R_SCENE, 20, SATURN_ANIM_NEON},
+        {{0x8000, 0xad26, 0xb547, 0xb969, 0xc1aa}, R_SCENE, 13, SATURN_ANIM_WATERFALL},
+        {{0x8000, 0x8001, 0x8421, 0x8c63, 0x94a5}, R_RESCU, 0, SATURN_ANIM_RESCUE_RED},
+        {{0x8000, 0x8000, 0x8421, 0x8842, 0x94a5}, R_RESCU, 0, SATURN_ANIM_RESCUE_RGB},
+    };
+    for (size_t i = 0; i < SDL_arraysize(animated); i++) {
+        if (cv->regionKind == animated[i].region && cv->track == animated[i].track &&
+            !memcmp(palette, animated[i].signature, sizeof(animated[i].signature))) {
+            return animated[i].animation;
+        }
+    }
+    return SATURN_ANIM_NONE;
+}
 
 static void StartConverter(Converter *cv, int region, int gouraud)
 {
     memset(cv, 0, sizeof(*cv));
     MakeRegion(&cv->region, region);
     cv->gouraud = gouraud;
+    cv->regionKind = region;
 }
 
 static void FreeConverter(Converter *cv)
@@ -1037,6 +1069,7 @@ static void FreeConverter(Converter *cv)
 
     for (i = 0; i < cv->objectCount; i++) {
         SDL_free(cv->object[i].vertex);
+        for (int j = 0; j < cv->object[i].specCount; j++) SDL_free(cv->object[i].spec[j].native.pixels);
         SDL_free(cv->object[i].spec);
     }
     for (i = 0; i < cv->atlas.count; i++) {
@@ -1045,6 +1078,7 @@ static void FreeConverter(Converter *cv)
     for (i = 0; i < cv->texCount; i++) {
         SDL_free(cv->tex[i].luts);
     }
+    for (i = 0; i < cv->frameCount; i++) SDL_free(cv->frames[i].pixels);
     SDL_free(cv->object);
     SDL_free(cv->atlas.image);
     SDL_free(cv->book.palette);
@@ -1330,6 +1364,30 @@ static void AddBillboard(Converter *cv, const char *name, const Model *m, Saturn
     o->spec[0].width = x1 - x0;
     o->spec[0].height = y1 - y0;
     memcpy(o->spec[0].colour, rgb, 3);
+
+    /* Port: retain the billboard's original LUT, just as for model faces.
+       Fitting it to a shared palette and multiplying by an 8-bit tint can
+       merge adjacent RGB5 levels and darken the whole sprite. The flattened
+       indices are usable directly when all its parts share one material. */
+    SaturnNativePoly *native = &o->spec[0].native;
+    const Poly *source = &m->poly[first];
+    Lut(v, source->colr, native->palette);
+    for (i = first + 1; i < m->polyCount; i++) {
+        const Poly *p = &m->poly[i];
+        uint16_t paletteWords[16];
+        if (!(p->flags & TEXTURED)) continue;
+        Lut(v, p->colr, paletteWords);
+        if (p->mode != source->mode || memcmp(paletteWords, native->palette, sizeof(paletteWords))) return;
+    }
+    native->textured = 1;
+    native->width = W; native->height = H;
+    native->mode = source->mode & ~0x40; /* the composite's empty pixels are clear */
+    native->corners[0] = 0; native->corners[1] = 1;
+    native->corners[2] = 3; native->corners[3] = 2;
+    for (i = 0; i < 4; i++) native->gouraud[i] = 0x4210;
+    native->pixels = SDL_malloc((size_t)W * H);
+    /* AddImage may deduplicate and free img; the atlas owns the retained copy. */
+    memcpy(native->pixels, cv->atlas.image[o->spec[0].image].px, (size_t)W * H);
 }
 
 /* A model's polygons as an object's primitives; those from `split` on drawn G* (gouraud2 1) or F* (0). */
@@ -1363,6 +1421,12 @@ static void AddModelSplit(Converter *cv, const char *name, const Model *m, Satur
         }
         s = &o->spec[o->specCount++];
         s->flag = flag;
+        s->native.colour = p->colr;
+        /* Port: the source word is CMDPMOD, not CMDGRDA. The extra word in
+           lit records is an offset into the runtime Gouraud table (0 for ships). */
+        s->native.mode = p->mode;
+        s->native.dynamicLight = (p->flags & (TEXTURED | 8)) == (TEXTURED | 8);
+        for (int corner = 0; corner < 4; corner++) s->native.gouraud[corner] = 0x4210;
         s->gouraud = i >= split ? gouraud2 : cv->gouraud;
         if (p->flags & TEXTURED) {
             int w, h, palette = PaletteOf(cv, v, p, s->colour);
@@ -1405,7 +1469,11 @@ static void AddModelSplit(Converter *cv, const char *name, const Model *m, Satur
                 s->uv[1][0] = 0, s->uv[1][1] = H - 1;
                 s->uv[2][0] = W - 1, s->uv[2][1] = 0;
             }
-            SDL_free(tex);
+            s->native.textured = 1;
+            s->native.width = w; s->native.height = h;
+            s->native.pixels = tex;
+            Lut(v, p->colr, s->native.palette);
+            s->native.animation = PaletteAnimation(cv, s->native.palette);
         } else {
             int rgb[3];
 
@@ -1426,6 +1494,11 @@ static void AddModelSplit(Converter *cv, const char *name, const Model *m, Satur
                 s->corner[2] = distinct[1];
             }
         }
+        for (int a = 0; a < 4; a++) {
+            for (int b = 0; b < s->corners; b++) {
+                if (p->corner[a] == s->corner[b]) { s->native.corners[a] = b; break; }
+            }
+        }
     }
 }
 
@@ -1443,7 +1516,7 @@ static void PutColour(Buffer *b, const uint8_t rgb[3])
 
 /* An object: Object (64 bytes) and Skeleton (80, identity, at its position), vertices, primitives; big-endian. */
 static void PutObject(Buffer *b, const char *name, int (*vertex)[3], int vertexCount, const int position[3],
-                      const Buffer *prims, int primCount)
+                      const Buffer *prims, int primCount, uint32_t nativeTag)
 {
     uint8_t head[16] = {0};
     int extent = 0, i, k, t;
@@ -1465,7 +1538,9 @@ static void PutObject(Buffer *b, const char *name, int (*vertex)[3], int vertexC
     PutBe16(b, primCount);
     PutBe16(b, 0);
     PutBe32(b, 0);
-    PutBe32(b, 0); /* scratch, BSP tree, skeleton */
+    /* Port: synthetic PRMs carry the material identity in the scratch word.
+       The loader preserves its bytes and NewInstance copies the word. */
+    PutBe32(b, nativeTag);
     PutBe32(b, 0);
     PutBe32(b, 0);
     PutBe32(b, (uint32_t)extent);
@@ -1516,12 +1591,13 @@ static void PutFlat(Buffer *b, const int *corner, int corners, int flag, const u
 }
 
 /* The objects as a .prm, and their textures (the caller packs them). */
-static uint8_t *BuildPrm(Converter *cv, size_t *size, Buffer *tims, size_t **timSizes, int *timCount)
+static uint8_t *BuildPrm(Converter *cv, size_t *size, Buffer *tims, size_t **timSizes, int *timCount, int wantCmp)
 {
     Buffer out = {0};
     int i, j, k;
 
     BuildAtlas(&cv->atlas, &cv->book, &cv->region, tims, timSizes, timCount);
+    if (wantCmp) return NULL;
     for (i = 0; i < cv->objectCount; i++) {
         Object *o = &cv->object[i];
         Buffer prims = {0};
@@ -1561,7 +1637,31 @@ static uint8_t *BuildPrm(Converter *cv, size_t *size, Buffer *tims, size_t **tim
                 PutColour(&prims, s->colour);
             }
         }
-        PutObject(&out, o->name, o->vertex, o->vertexCount, o->position, &prims, o->specCount);
+        uint32_t nativeTag = 0;
+        if (o->specCount && (o->spec[0].kind != SPEC_SPRITE || o->spec[0].native.pixels)) {
+            SaturnNativePoly *native = SDL_calloc((size_t)o->specCount, sizeof(*native));
+            for (int n = 0; n < o->specCount; n++) native[n] = o->spec[n].native;
+            const SaturnNativePoly *frames = cv->frames;
+            int frameCount = cv->frameCount;
+            if (cv->track == 1) {
+                /* Talon's Reach smoke shares a sprite sequence between its emitters.
+                   Reuse the existing quad and the native object-frame registry. */
+                int slow = !strncmp(o->name, "smokes", 6);
+                int fast = !strncmp(o->name, "smokef", 6);
+                if (o->specCount == 1 && native[0].textured && frameCount > 1 && (slow || fast)) {
+                    SaturnNativePoly first = *frames++;
+                    memcpy(first.corners, native[0].corners, sizeof(first.corners));
+                    first.animation = fast ? SATURN_ANIM_SMOKE_FAST : SATURN_ANIM_SMOKE_SLOW;
+                    native[0] = first;
+                    frameCount--;
+                } else {
+                    frameCount = 0;
+                }
+            }
+            nativeTag = SaturnNativeModel(native, o->specCount, frames, frameCount);
+            SDL_free(native);
+        }
+        PutObject(&out, o->name, o->vertex, o->vertexCount, o->position, &prims, o->specCount, nativeTag);
         SDL_free(prims.data);
     }
     *size = out.size;
@@ -1575,6 +1675,41 @@ typedef struct Part {
     int model, merged; /* merged: a second model after it, -1 none */
     int splitGouraud;  /* the second model's polygons as G* (1), F* (0), or as the file's (-1) */
 } Part;
+
+static void LoadNativeFrame(SaturnNativePoly *frame, SaturnVideo *video, const Poly *p)
+{
+    frame->mode = p->mode;
+    frame->textured = 1;
+    frame->pixels = Texture(video, p, &frame->width, &frame->height);
+    Lut(video, p->colr, frame->palette);
+}
+
+/* Both animated common objects place their screen or light strip at primitive zero.
+   The remaining geometry is shared by all frames. Frame zero is the merged model's first face. */
+static void LoadObjectFrames(Converter *cv, const Models *ms, SaturnVideo *video, int region)
+{
+    static const int screens[] = {21, 17, 22, 18, 23, 19, 24};
+    static const int lights[] = {2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    const int *ids;
+    size_t count;
+
+    if (region == R_SROID) {
+        ids = screens;
+        count = SDL_arraysize(screens);
+    } else if (region == R_LIGHT) {
+        ids = lights;
+        count = SDL_arraysize(lights);
+    } else {
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        int id = ids[i];
+        if (id >= ms->count || ms->model[id].polyCount != 1 ||
+            !(ms->model[id].poly[0].flags & TEXTURED)) break;
+        const Poly *p = &ms->model[id].poly[0];
+        LoadNativeFrame(&cv->frames[cv->frameCount++], video, p);
+    }
+}
 
 /* The models of one file from objects.rbh (or objects2.rbh): its .prm or .cmp. */
 static uint8_t *MakeObjects(const char *container, const char *video, int region, int gouraud, const Part *parts,
@@ -1620,7 +1755,8 @@ static uint8_t *MakeObjects(const char *container, const char *video, int region
             AddModel(&cv, parts[i].name, &ms.model[parts[i].model], v, zero);
         }
     }
-    prm = BuildPrm(&cv, &prmSize, &tims, &timSizes, &timCount);
+    if (!wantCmp) LoadObjectFrames(&cv, &ms, v, region);
+    prm = BuildPrm(&cv, &prmSize, &tims, &timSizes, &timCount, wantCmp);
     if (wantCmp) {
         out = MakeCmp(&tims, timSizes, timCount, size);
         SDL_free(prm);
@@ -1657,7 +1793,7 @@ static uint8_t *StandIn(const char *name, int length, int radius, int r, int g, 
         PutFlat(&prims, up, 3, SINGLE_SIDED, rgb, 1);
         PutFlat(&prims, down, 3, SINGLE_SIDED, rgb, 1);
     }
-    PutObject(&out, name, vertex, 2 + sides, zero, &prims, 2 * sides);
+    PutObject(&out, name, vertex, 2 + sides, zero, &prims, 2 * sides, 0);
     SDL_free(prims.data);
     *size = out.size;
     return out.data;
@@ -1712,7 +1848,7 @@ static uint8_t *MakeMenu(const Part *parts, int count, int half, size_t *size)
             AddModel(&cv, parts[i].name, m, v, zero);
         }
     }
-    prm = BuildPrm(&cv, size, &tims, &timSizes, &timCount);
+    prm = BuildPrm(&cv, size, &tims, &timSizes, &timCount, 0);
     SDL_free(tims.data);
     SDL_free(timSizes);
     FreeConverter(&cv);
@@ -1816,6 +1952,21 @@ static const char *SceneName(int track, int index, char *buffer, size_t size)
     return buffer;
 }
 
+static void LoadSmokeFrames(Converter *cv, SaturnVideo *video, const char *course)
+{
+    size_t size = 0;
+    uint8_t *sprites = SaturnBlock(course, 4, &size);
+    /* The 13 one-part smoke frames are the course's VDP1 sprite table. */
+    for (int i = 0; i < 13; i++) {
+        const uint8_t *entry = SaturnSpriteRecord(sprites, size, i, NULL);
+        if (!entry || Be16(entry) != 1 || ((Be16(entry + 4) >> 3) & 7) != 1) break;
+        Poly p = {.mode = Be16(entry + 4), .colr = Be16(entry + 6),
+                  .srca = Be16(entry + 12), .size = Be16(entry + 14)};
+        LoadNativeFrame(&cv->frames[cv->frameCount++], video, &p);
+    }
+    SDL_free(sprites);
+}
+
 static uint8_t *MakeScene(int track, int wantCmp, size_t *size)
 {
     char path[64], buffer[16];
@@ -1834,6 +1985,11 @@ static uint8_t *MakeScene(int track, int wantCmp, size_t *size)
         return NULL;
     }
     StartConverter(&cv, R_SCENE, 1);
+    cv.track = track;
+    if (track == 1 && !wantCmp) {
+        SDL_snprintf(path, sizeof(path), "art\\track%02d\\course%02d.rbh", track, track);
+        LoadSmokeFrames(&cv, v, path);
+    }
     for (i = 0; i < ms.count; i++) {
         PrepareModel(&cv, &ms.model[i], v);
     }
@@ -1850,7 +2006,7 @@ static uint8_t *MakeScene(int track, int wantCmp, size_t *size)
             AddModel(&cv, name, &ms.model[i], v, ms.model[i].position);
         }
     }
-    prm = BuildPrm(&cv, &prmSize, &tims, &timSizes, &timCount);
+    prm = BuildPrm(&cv, &prmSize, &tims, &timSizes, &timCount, wantCmp);
     if (wantCmp) {
         out = MakeCmp(&tims, timSizes, timCount, size);
         SDL_free(prm);
@@ -1913,6 +2069,15 @@ static uint8_t *SkyPanorama(int track, uint16_t cram[256])
     return img;
 }
 
+void SaturnLoadNativeSky(int track)
+{
+    uint16_t palette[256];
+    uint8_t *image = SkyPanorama(track, palette);
+
+    SaturnNativeSky(image, palette, SKY_W, SKY_H);
+    SDL_free(image);
+}
+
 /* The picture's rows: the longest run of rows of more than one colour (gaps under 16 rows bridged). */
 static void SkyBand(const uint8_t *img, int *top, int *bottom)
 {
@@ -1954,7 +2119,8 @@ static uint8_t *MakeSky(int track, int wantCmp, size_t *size)
     uint16_t cram[256], clut[256];
     uint8_t *img = SkyPanorama(track, cram), *small, *px;
     int top, bottom, W = SKY_W / SKY_SHRINK, Hb, x, y, t, k, timCount = SKY_W / SKY_SHRINK / SKY_TIM_W;
-    /* the Saturn scrolls its sky a pixel per unit of the camera's heading (4096 a turn): the picture goes round twice */
+    /* Legacy compatibility cylinder mapping (twice around). Native Saturn RBG0
+       uses heading/2 and the full panorama registered below, once per turn. */
     double vstep, pxPerDeg = 2 * SKY_W / 360.0, horizon, eTop, eBottom;
     int vertex[4 * SKY_SEGMENTS + 2][3];
     Region r;
@@ -2101,7 +2267,7 @@ static uint8_t *MakeSky(int track, int wantCmp, size_t *size)
         PutFlat(&prims, up, 3, 0, topRgb, 1);
         PutFlat(&prims, down, 3, 0, bottomRgb, 1);
     }
-    PutObject(&out, "sky", vertex, 4 * SKY_SEGMENTS + 2, zero, &prims, 5 * SKY_SEGMENTS);
+    PutObject(&out, "sky", vertex, 4 * SKY_SEGMENTS + 2, zero, &prims, 5 * SKY_SEGMENTS, 0);
     SDL_free(prims.data);
     *size = out.size;
     return out.data;

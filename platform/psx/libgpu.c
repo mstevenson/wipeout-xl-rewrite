@@ -26,7 +26,11 @@
 #include "../settings.h"
 #include "gte.h"
 #include "psyq.h"
+typedef struct Trail Trail;
+#include "trails.h"
 #include "../region.h"
+#include "../render/saturn_native.h"
+#include "../saturn.h"
 
 uint16_t psxVram[VRAM_HEIGHT][VRAM_WIDTH];
 uint16_t psxVramHigh[VRAM_HEIGHT][VRAM_WIDTH];
@@ -128,6 +132,7 @@ void AddPrim(u_long *ot, void *primitive)
 {
     u_long *p = primitive; /* the game passes any POLY_*, LINE_*, TILE or DR_* packet (psyq.h) */
 
+    SaturnNativeForget(p);
     *p = (*p & 0xFF000000u) | (*ot & 0x00FFFFFFu);
     *ot = (*ot & 0xFF000000u) | (LinkId(p) & 0x00FFFFFFu);
 }
@@ -968,6 +973,14 @@ static int hudPackets;
 typedef struct PacketRange {
     const char *start, *end;
 } PacketRange;
+enum { SHIP_EXHAUSTS = 15, PLASMA_EXHAUSTS = 4, FLARE_RAYS = 12, FLARE_ANCHOR_RAY = 4 };
+extern POLY_G4 flare[SHIP_EXHAUSTS + PLASMA_EXHAUSTS][FLARE_RAYS][2];
+extern Trail Plasma[PLASMA_EXHAUSTS];
+
+typedef struct SaturnExhaustOrder {
+    const uint32_t *flare, *after;
+} SaturnExhaustOrder;
+
 /* The game has three shield models and reserves 64 draw modes per model. */
 enum { SHIELD_DRAWS = 3, SHIELD_FACES = 64 };
 typedef struct ShieldPackets {
@@ -986,12 +999,15 @@ typedef struct TrackPackets {
     PacketRange shadows;              /* the shadows' packets */
     PacketRange ranges[TRACK_RANGES]; /* the track's */
     int count;
+    SaturnExhaustOrder exhaust[SDL_arraysize(flare)];
+    int reorderExhaust;
     ShieldPackets shields[SHIELD_DRAWS];
     int shieldCount;
 } TrackPackets;
 static TrackPackets building;      /* the frame being built's */
 static TrackPackets tableTrack[4]; /* ... the tables drawn's (a table is drawn again between frames) */
 static int tableTrackNext, walkTrack = -1;
+static u_long *preparedTrackTable;
 typedef struct HeldShield {
     const ShieldPackets *pending;
     int count;
@@ -1004,9 +1020,7 @@ typedef struct HeldShield {
 static HeldShield heldShields[SHIELD_DRAWS];
 static int heldShieldCount;
 
-
 static int PacketBounds(const uint32_t *w, int words, int box[4]);
-
 static u_long *NodeAfter(u_long *node);
 static u_long *PacketFrom(u_long *node);
 
@@ -1072,6 +1086,51 @@ static void ReleaseShipShields(const u_long *node)
     }
 }
 
+static int FlarePacketOwner(const uint32_t *w, int *ray)
+{
+    uintptr_t offset = (uintptr_t)(w - 1) - (uintptr_t)flare;
+    if (offset >= sizeof(flare) || offset % sizeof(POLY_G4)) return -1;
+    if (ray) *ray = (int)(offset % sizeof(flare[0]) / sizeof(flare[0][0]));
+    return (int)(offset / sizeof(flare[0]));
+}
+
+/* The only linked semi-transparent Gouraud quads in a Trail are its two halves. */
+static int TrailPacketOwner(const uint32_t *w)
+{
+    uintptr_t packet = (uintptr_t)(w - 1);
+    uintptr_t offset = packet - (uintptr_t)shipTrails;
+    if (shipTrails && offset < SHIP_EXHAUSTS * sizeof(*shipTrails)) return (int)(offset / sizeof(*shipTrails));
+    offset = packet - (uintptr_t)Plasma;
+    return offset < sizeof(Plasma) ? SHIP_EXHAUSTS + (int)(offset / sizeof(Plasma[0])) : -1;
+}
+
+/* Cache only flares that would be drawn too early. Interpolated pictures use
+   the same packet links, so the order can be computed once per game frame. */
+static void OrderSaturnExhaust(TrackPackets *table)
+{
+    const uint32_t *seenFlare[SDL_arraysize(flare)] = {0};
+    if (RenderCurrent()->id != RENDER_SATURN || !RenderCurrent()->settings.saturn.affineTextures ||
+        !PortSaturnDisc()) return;
+
+    for (u_long *node = PacketFrom(table->table); node; node = PacketFrom(NodeAfter(node))) {
+        const uint32_t *w = node + 1;
+        unsigned code = w[0] >> 24;
+        if (code == 0x02 || (code >= 0xe3 && code <= 0xe5)) {
+            memset(seenFlare, 0, sizeof(seenFlare)); /* Keep the flare within its draw area. */
+        }
+        if ((*node >> 24) != 8 || code != 0x3a) continue;
+        int ray, owner = FlarePacketOwner(w, &ray);
+        if (owner >= 0 && ray == FLARE_ANCHOR_RAY && SaturnArtFlare(owner >= SHIP_EXHAUSTS)) {
+            seenFlare[owner] = w;
+        }
+        owner = TrailPacketOwner(w);
+        if (owner >= 0 && seenFlare[owner]) {
+            table->exhaust[owner] = (SaturnExhaustOrder){seenFlare[owner], w};
+            table->reorderExhaust = 1;
+        }
+    }
+}
+
 static void SubmitTablePacket(const u_long *node)
 {
     const uint32_t *w = node + 1;
@@ -1080,8 +1139,17 @@ static void SubmitTablePacket(const u_long *node)
     /* Traces keep the original GP0 order. Only the drawing is deferred. */
     if (!interpolating) PortTraceGp0(w, words);
     if (HoldShield(node)) return;
+    const uint32_t *after = NULL;
+    if (walkTrack >= 0 && tableTrack[walkTrack].reorderExhaust && words == 8 && (w[0] >> 24) == 0x3a) {
+        const SaturnExhaustOrder *order = tableTrack[walkTrack].exhaust;
+        int owner = FlarePacketOwner(w, NULL);
+        if (owner >= 0 && order[owner].flare == w) return;
+        owner = TrailPacketOwner(w);
+        if (owner >= 0 && order[owner].after == w) after = order[owner].flare;
+    }
     DrawPacket(w, words);
     ReleaseShipShields(node);
+    if (after) DrawPacket(after, 8);
 }
 
 void PortShadowRange(const void *start, size_t bytes)
@@ -1098,27 +1166,39 @@ void PortTrackPackets(const void *start, const void *end)
     }
 }
 
-/* A table is drawn: the shadows and the track's packets named since the last table drawn are its (none: a menu's);
-   a table drawn again between frames keeps its own. */
+/* Freeze packet ranges before the first interpolated presentation, while they
+   describe this build of the table. Its address is reused every other frame. */
+static int PrepareTrackTable(u_long *table)
+{
+    int slot = -1;
+    for (int i = 0; i < 4; i++) {
+        if (tableTrack[i].table == table) slot = i;
+    }
+    if (slot < 0) {
+        slot = tableTrackNext;
+        tableTrackNext = (tableTrackNext + 1) % 4;
+    }
+    tableTrack[slot] = building;
+    tableTrack[slot].table = table;
+    OrderShields(&tableTrack[slot]);
+    OrderSaturnExhaust(&tableTrack[slot]);
+    memset(&building, 0, sizeof(building));
+    return slot;
+}
+
+/* Direct draws prepare here; Swap's tables were prepared before its VSync waits.
+   Every presentation, including the final DrawOTag, uses that same snapshot. */
 static void WalkTable(u_long *table, int newFrame)
 {
     int i;
 
     walkTrack = -1;
     for (i = 0; i < 4; i++) {
-        if (tableTrack[i].table == table) {
-            walkTrack = i;
-        }
+        if (tableTrack[i].table == table) walkTrack = i;
     }
     if (newFrame) {
-        if (walkTrack < 0) {
-            walkTrack = tableTrackNext;
-            tableTrackNext = (tableTrackNext + 1) % 4;
-        }
-        tableTrack[walkTrack] = building;
-        tableTrack[walkTrack].table = table;
-        OrderShields(&tableTrack[walkTrack]);
-        memset(&building, 0, sizeof(building));
+        if (table != preparedTrackTable) walkTrack = PrepareTrackTable(table);
+        else preparedTrackTable = NULL;
     }
     heldShieldCount = 0;
     if (walkTrack >= 0) {
@@ -1187,13 +1267,17 @@ static int PolygonDepths(const uint32_t *w, int words, int any, float *nearest, 
     return *nearest > 0.0f;
 }
 
+static int ShadowPacket(const uint32_t *w)
+{
+    return walkTrack >= 0 && PacketInRange(w, tableTrack[walkTrack].shadows);
+}
+
 static int HoldShadow(const uint32_t *w, int words)
 {
     float nearest, deepest;
     int box[4];
 
-    if (!RenderDepth(RenderCurrent()) || walkTrack < 0 || (const char *)w < tableTrack[walkTrack].shadows.start ||
-        (const char *)w >= tableTrack[walkTrack].shadows.end || heldCount == HELD_SHADOWS || !PacketBounds(w, words, box)) {
+    if (!RenderDepth(RenderCurrent()) || !ShadowPacket(w) || heldCount == HELD_SHADOWS || !PacketBounds(w, words, box)) {
         return 0;
     }
     if (!heldCount) {
@@ -1344,7 +1428,9 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back,
             /* Screen-linear attributes use the projected edge fraction. This form
                also works with a corner on/behind the eye plane, without projecting it. */
             double screen = t * in[j].view[2] / plane;
-            double uv = shade & SHADE_AFFINE_UV ? screen : t;
+            /* Native road tiles use perspective-correct sampling, including
+               edges cut by the host near plane. */
+            double uv = (shade & SHADE_AFFINE_UV) && !(draw->saturn && draw->saturn->trackTile) ? screen : t;
             double rgb = shade & SHADE_AFFINE_COLOUR ? screen : t;
 
             out[cut] = in[i];
@@ -1358,6 +1444,8 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back,
             out[cut].v.r = CutColour(in[i].v.r, in[j].v.r, rgb);
             out[cut].v.g = CutColour(in[i].v.g, in[j].v.g, rgb);
             out[cut].v.b = CutColour(in[i].v.b, in[j].v.b, rgb);
+            for (k=0;k<3;k++) out[cut].v.saturnShade[k]=(float)(in[i].v.saturnShade[k]+
+                (in[j].v.saturnShade[k]-in[i].v.saturnShade[k])*rgb);
             out[cut].v.a = (uint8_t)(in[i].v.a + (in[j].v.a - in[i].v.a) * t + 0.5);
             cut++;
         }
@@ -1382,7 +1470,15 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back,
     for (i = 1; i + 1 < cut; i++) {
         GpuVertex triangle[3] = {out[0].v, out[i].v, out[i + 1].v};
 
-        GpuTriangles(draw, triangle, 3);
+        if (draw->saturn) {
+            /* A clipped triangle remains a native material: represent it as a
+               collapsed quad, carrying UVs and additive light at the new corners. */
+            SaturnNativePoly native=*draw->saturn;
+            native.corners[0]=0;native.corners[1]=1;native.corners[2]=2;native.corners[3]=0;
+            native.vertexAttributes=1;native.clipped=1;
+            GpuDrawState clipped=*draw;clipped.saturn=&native;
+            GpuTriangles(&clipped,triangle,3);
+        } else GpuTriangles(draw, triangle, 3);
     }
 }
 
@@ -1414,15 +1510,27 @@ static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count, int 
     if (count < 3 || resolvedMask != (1u << count) - 1) {
         return 0;
     }
+    /* Collapsed native model corners share a position, but not UVs or light.
+       Expand them before clipping so A and D cannot overwrite one another. */
+    int nativeModel=draw->saturn && draw->saturn->pixels;
+    if (nativeModel) count=4;
     for (i = 0; i < count; i++) {
-        if (!GteViewAt(&resolved[i], along, in[i].view)) {
+        static const int nativeCorner[4]={0,1,3,2};
+        int corner=nativeCorner[i];
+        int j=nativeModel ? draw->saturn->corners[corner] : i;
+        if (!GteViewAt(&resolved[j], along, in[i].view)) {
             return 0;
         }
-        in[i].depth = resolved[i].view[2] != 0.0f ? resolved[i].z / resolved[i].view[2] : 1.0;
-        in[i].v = v[i];
-        material.n64 |= v[i].n64;
+        in[i].depth = resolved[j].view[2] != 0.0f ? resolved[j].z / resolved[j].view[2] : 1.0;
+        in[i].v = v[j];
+        if (nativeModel) {
+            in[i].v.u=(corner==1 || corner==2) ? draw->saturn->width-0.001f : 0;
+            in[i].v.v=corner>=2 ? draw->saturn->height-0.001f : 0;
+            for(int c=0;c<3;c++) in[i].v.saturnShade[c]=(draw->saturn->gouraud[corner]>>(5*c))&31;
+        }
+        material.n64 |= v[j].n64;
         /* (what GteInterpolate cannot place: behind the camera in this frame, or nearer than it projects) */
-        behind += resolved[i].view[2] < near || in[i].view[2] < near;
+        behind += resolved[j].view[2] < near || in[i].view[2] < near;
     }
     if (!behind) {
         return 0;
@@ -1514,6 +1622,7 @@ static void Record(int kind, uint32_t code, int count, const int32_t *ix, const 
     }
     if (draw) {
         p->draw = *draw;
+        p->draw.saturn = NULL; /* Frame inspection uses the compatibility texture and UVs. */
     }
     p->address = (uint64_t)(uintptr_t)(w - 1);
     for (r = 0; r < regionCount; r++) {
@@ -1523,6 +1632,36 @@ static void Record(int kind, uint32_t code, int count, const int32_t *ix, const 
     }
     p->flags = (uint8_t)flags;
     FrameCapTagRecord(p);
+    if (draw && draw->saturn && draw->saturn->trackTile) {
+        p->shade &= ~(SHADE_AFFINE_UV | SHADE_SNAP);
+    }
+}
+
+/* DrawFlare submits eight ray quads and, up close, four centre quads. On the
+   Saturn one textured sprite supplies both. Replace the group at ray 4, which
+   is always linked and has the projected centre and the full ray extent. */
+static int SaturnFlare(const uint32_t *w, GpuDrawState *draw, GpuVertex v[4], int32_t ix[4], int32_t iy[4])
+{
+    int ray, owner = FlarePacketOwner(w, &ray);
+    if (owner < 0) return 0;
+    const SaturnNativePoly *sprite = SaturnArtFlare(owner >= SHIP_EXHAUSTS);
+    if (!sprite) return 0;
+    if (ray != FLARE_ANCHOR_RAY) return 1;
+
+    GpuVertex centre = v[1];
+    int x = ix[1], y = iy[1];
+    int radius = SDL_max(1, ix[3] - x);
+    for (int i = 0; i < 4; i++) {
+        int dx = i & 1 ? radius : -radius, dy = i & 2 ? radius : -radius;
+        v[i] = centre;
+        v[i].x += dx;
+        v[i].y += dy;
+        ix[i] = x + dx;
+        iy[i] = y + dy;
+    }
+    draw->saturn = sprite;
+    SaturnNativeAttributes(sprite, v);
+    return 1;
 }
 
 static void Polygon(const uint32_t *w, uint32_t code)
@@ -1535,6 +1674,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
     const uint32_t *xys[4];
     uint32_t clut = 0, page = 0;
     GpuDrawState draw;
+    SaturnNativePoly native;
     int skip0, skip1 = 1, flags, alternateQuad;
 
     memset(v, 0, sizeof(v));
@@ -1565,6 +1705,15 @@ static void Polygon(const uint32_t *w, uint32_t code)
         SetTexpage(page);
     }
     StateFor(&draw, textured, semi, raw);
+    if (draw.semi == 2 && RenderCurrent()->id == RENDER_SATURN && ShadowPacket(w)) {
+        /* Use the shadow texture as a mask over the packet's black vertex colour.
+           Half blending lets the Saturn shader apply its usual mesh or alpha coverage. */
+        draw.raw = 0;
+        draw.semi = 0;
+        for (i = 0; i < count; i++) {
+            v[i].world = 1; /* A shadow is world geometry even without precise projections. */
+        }
+    }
     draw.dither &= gouraud || (textured && !raw);
     if (textured) {
         TextureFromPage(&draw, page);
@@ -1578,11 +1727,61 @@ static void Polygon(const uint32_t *w, uint32_t code)
             v[i].b = v[0].b;
         }
     }
+    if (RenderCurrent()->id == RENDER_SATURN && PortSaturnDisc()) {
+        if (quad && gouraud && !textured && RenderCurrent()->settings.saturn.affineTextures &&
+            SaturnFlare(w, &draw, v, ix, iy)) {
+            if (draw.saturn) {
+                Record(FRAMECAP_POLYGON, code, count, ix, iy, v, &draw, flags, w, page, clut);
+                GpuTriangles(&draw, v, count);
+            }
+            return;
+        }
+        draw.saturn = SaturnNativeLookup(w);
+        if (draw.saturn) {
+            for (int corner = 0; corner < 4; corner++) {
+                if (draw.saturn->corners[corner] >= count) { draw.saturn = NULL; break; }
+            }
+        }
+        if (draw.saturn && draw.saturn->corners[0] == draw.saturn->corners[1] &&
+            draw.saturn->corners[0] == draw.saturn->corners[2]) draw.saturn = NULL;
+        if (resolvedMask == (1u << count)-1 && resolved[0].background && PortOriginalTrack() < 0) {
+            const uint16_t *palette; int width, height;
+            if (SaturnNativeSkyData(&palette, &width, &height)) {
+                GtePrecise sky=resolved[0];
+                if (interpolating) GteInterpolateSky(&resolved[0],interpolationAlong,&sky);
+                draw.saturnSky = 1;
+                draw.skyYaw = sky.skyYaw;
+                draw.skyPitch = sky.skyPitch;
+                draw.skyRoll = sky.skyRoll;
+                draw.skyFocal = sky.skyFocal;
+                GpuTriangles(&draw, v, count);
+                return;
+            }
+        }
+    }
+    if (draw.saturn && RenderCurrent()->settings.saturn.affineTextures) {
+        native=*draw.saturn;
+        if (native.animation) SaturnNativeAnimatePalette(&native);
+        if(native.dynamicLight) {
+            SaturnShipLight(SaturnTrackLight(v[0].r,v[0].g,v[0].b),native.gouraud);
+            native.dynamicLight=0;
+        }
+        /* Textured model clipping expands native corners in NearCut. Leave
+           the packet's atlas UVs available to the frame inspector. */
+        if (!native.pixels) SaturnNativeAttributes(&native, v);
+        draw.saturn=&native;
+    } else draw.saturn=NULL;
     alternateQuad = AlternateQuad(&draw, v, count, w);
     if (NearCut(&draw, v, count, alternateQuad)) {
         Record(FRAMECAP_POLYGON, code, count, ix, iy, v, &draw, flags, w, page, clut);
         return;
     }
+    if (draw.saturn && RenderCurrent()->settings.saturn.affineTextures) {
+        Record(FRAMECAP_POLYGON, code, count, ix, iy, v, &draw, flags, w, page, clut);
+        GpuTriangles(&draw, v, count);
+        return;
+    }
+    draw.saturn = NULL;
     if (alternateQuad) {
         GpuVertex a[3] = {v[0], v[1], v[3]}, b[3] = {v[0], v[3], v[2]};
         int32_t ax[3] = {ix[0], ix[1], ix[3]}, ay[3] = {iy[0], iy[1], iy[3]};
@@ -2209,6 +2408,10 @@ static int TableDraws(u_long *table)
 
 void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env)
 {
+    if (table) {
+        PrepareTrackTable(table);
+        preparedTrackTable = table;
+    }
     memcpy(centred[1], centred[0], sizeof(centred[0])); /* (PortHudCentred: the frame's, for its tables) */
     centredCount[1] = centredCount[0];
     centredCount[0] = 0;

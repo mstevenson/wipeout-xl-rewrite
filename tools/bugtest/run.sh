@@ -4,8 +4,16 @@ set -eu
 cd "$(dirname "$0")/../.."
 test_build=$(mktemp -d)
 trap 'rm -rf "$test_build"' EXIT HUP INT TERM
-render_sources="platform/render/renderer.c platform/render/ps1_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c"
+${CC:-cc} -O1 -Iplatform tools/bugtest/test_saturn_native.c platform/render/saturn_native.c -lm -o "$test_build/saturn_native"
+"$test_build/saturn_native"
+render_sources="platform/render/renderer.c platform/render/ps1_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c platform/render/saturn_native.c"
 case $(uname -s) in Darwin) discard='-Wl,-dead_strip';; *) discard='-Wl,--gc-sections';; esac
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform $(pkg-config --cflags sdl3) \
+    tools/bugtest/test_saturn_model.c platform/render/saturn_native.c $(pkg-config --libs sdl3) -lm -o "$test_build/saturn_model"
+"$test_build/saturn_model"
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform $(pkg-config --cflags sdl3) \
+    tools/bugtest/test_saturn_track.c platform/render/saturn_native.c $(pkg-config --libs sdl3) -lm -o "$test_build/saturn_track"
+"$test_build/saturn_track"
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
     -std=gnu11 -include platform/include/port.h -iquote game/include \
     tools/bugtest/test_clearance.c -o "$test_build/clearance"

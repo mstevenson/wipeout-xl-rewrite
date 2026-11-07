@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 
-typedef enum RendererId { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64 } RendererId;
+typedef enum RendererId { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN } RendererId;
 typedef struct Ps1RenderSettings {
     int quantizeVertices, affineTextures, colourPrecision, dither, depth;
 } Ps1RenderSettings;
@@ -14,13 +14,17 @@ typedef struct PcRenderSettings { int bilinear, lighting, depth; } PcRenderSetti
 typedef struct N64RenderSettings {
     int threePoint, colourPrecision, dither, dedither, divot, resample;
 } N64RenderSettings;
+typedef struct SaturnRenderSettings {
+    int quantizeVertices, affineTextures, colourPrecision, mesh, depth, originalSkyScroll;
+} SaturnRenderSettings;
 typedef struct RenderSettings {
     RendererId selection, automaticBase;
     Ps1RenderSettings ps1;
     PcRenderSettings pc;
     N64RenderSettings n64;
+    SaturnRenderSettings saturn;
 } RenderSettings;
-#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, {1,1,1,1,0}, {1,1,1}, {1,1,1,1,1,1} }
+#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, {1,1,1,1,0}, {1,1,1}, {1,1,1,1,1,1}, {1,1,1,1,0,0} }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef struct RenderFrame { RenderSettings settings; RendererId id; int n64Track; } RenderFrame;
@@ -29,6 +33,8 @@ enum { SHADE_RAW = 1, SHADE_PC_TINT = 2, SHADE_PS1_COLOUR = 4, SHADE_DITHER = 8,
        SHADE_AFFINE_COLOUR = 16, SHADE_AFFINE_UV = 32, SHADE_N64 = 64, SHADE_SNAP = 128 };
 /* UI is independent of perspective/depth: affine world billboards are not screen-space UI. */
 typedef struct RenderMaterial { int n64, fullColour, textured, spatial, raw, dither, bounds, ui; } RenderMaterial;
+/* The two sampling bits are profile-specific. Saturn uses nearest sampling in both modes. */
+enum { RENDER_SAMPLE_SATURN_ALPHA = 2, RENDER_SAMPLE_MESH = 3 };
 typedef struct RenderStyle { unsigned shade; int filter; } RenderStyle;
 typedef struct Renderer {
     RendererId id;
@@ -38,7 +44,7 @@ typedef struct Renderer {
     int (*depth)(const void *profile);
     RenderGeometry (*geometry)(const void *profile);
 } Renderer;
-extern const Renderer ps1Renderer, pcRenderer, n64Renderer;
+extern const Renderer ps1Renderer, pcRenderer, n64Renderer, saturnRenderer;
 const Renderer *RenderGet(RendererId id);
 const void *RenderProfile(const RenderFrame *frame);
 int RenderDepth(const RenderFrame *frame);

@@ -39,6 +39,8 @@
 #include "../settings.h"
 
 #include "gl_pipeline.h"
+#include "saturn_native.h"
+#include <math.h>
 
 /* ---- state ---- */
 
@@ -90,7 +92,12 @@ typedef struct BatchVertex {
 } BatchVertex;
 static BatchVertex batch[BATCH_VERTICES];
 static int primitiveFilterBounds[4];
-static int batchCount;
+static int batchCount, batchPoints;
+#define SATURN_WIDTH (SCREEN_COLUMNS + 2*MAX_WIDE_MARGIN)
+static uint8_t saturnPixels[VRAM_HEIGHT][SATURN_WIDTH][4];
+static int saturnLeft=SATURN_WIDTH, saturnTop=VRAM_HEIGHT, saturnRight, saturnBottom;
+static void SaturnFlushPixels(void);
+static void SaturnFlushGpu(void);
 /* The console's two screen buffers occupy rows 0..255 and 256..511.
    Drawing the next buffer must not change presentation of the previous one. */
 typedef struct PictureOwner {
@@ -133,7 +140,7 @@ int GpuMaxScale(void)
         GLint size = 4096;
 
         glGetIntegerv(GL_MAX_TEXTURE_SIZE, &size);
-        largest = SDL_clamp(size / (SCREEN_COLUMNS + 2 * MAX_WIDE_MARGIN), 1, 12);
+        largest = SDL_clamp(size / (SCREEN_COLUMNS + 2 * MAX_WIDE_MARGIN), 1, RENDER_MAX_SCALE);
     }
     return largest;
 }
@@ -217,6 +224,9 @@ void GpuRendererShutdown(void)
     if (presentPipeline && presentPipeline != pipeline) presentPipeline->destroy();
     pipeline = presentPipeline = NULL;
     scene = NULL;
+    SaturnNativeShutdown();
+    memset(saturnPixels, 0, sizeof(saturnPixels));
+    saturnLeft=SATURN_WIDTH;saturnTop=VRAM_HEIGHT;saturnRight=saturnBottom=0;
 }
 
 static void CreateGlyphTexture(void)
@@ -619,7 +629,7 @@ static void DrawBatch(int pass)
 {
     glUniform1i(scene->uniformPass, pass);
     SetBlend(pass == 2);
-    glDrawArrays(GL_TRIANGLES, 0, batchCount);
+    glDrawArrays(batchPoints ? GL_POINTS : GL_TRIANGLES, 0, batchCount);
 }
 
 static void Flush(void)
@@ -627,6 +637,8 @@ static void Flush(void)
     const GpuDrawState *s = &batchState;
 
     /* Only the profile-controlled shaders may dither; GL enables driver dithering by default. */
+    SaturnFlushGpu();
+    SaturnFlushPixels();
     glDisable(GL_DITHER);
     if (!batchCount) {
         return;
@@ -641,6 +653,10 @@ static void Flush(void)
     UploadVram();
     glUseProgram(scene->program);
     BindTarget();
+    glUniform1f(scene->uniformPointSize, batchPoints ? (float)scale : 0.0f);
+#if !defined(__EMSCRIPTEN__) && !defined(PORT_GL_LINKED)
+    if (batchPoints) glEnable(GL_PROGRAM_POINT_SIZE);
+#endif
     glBindVertexArray(vertexArray);
     glBindBuffer(GL_ARRAY_BUFFER, vertexBuffer);
     glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(batchCount * sizeof(BatchVertex)), batch, GL_STREAM_DRAW);
@@ -673,7 +689,7 @@ static void Flush(void)
             glUniform1i(scene->uniformDepthPass, 1);
             glUniform1i(scene->uniformPass, 3);
             glDisable(GL_BLEND);
-            glDrawArrays(GL_TRIANGLES, 0, batchCount);
+            glDrawArrays(batchPoints ? GL_POINTS : GL_TRIANGLES, 0, batchCount);
             glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         }
         glDepthFunc(GL_LEQUAL);
@@ -692,6 +708,9 @@ static void Flush(void)
         DrawBatch(0);
     }
     glDisable(GL_DEPTH_TEST);
+#if !defined(__EMSCRIPTEN__) && !defined(PORT_GL_LINKED)
+    if (batchPoints) glDisable(GL_PROGRAM_POINT_SIZE);
+#endif
     batchCount = 0;
 }
 
@@ -849,17 +868,25 @@ static void FindHd(const GpuDrawState *state, const GpuVertex *vertices, int cou
 }
 
 
-static void Begin(const GpuDrawState *state, int vertices)
+static void BeginMode(const GpuDrawState *state, int vertices, int points)
 {
-    if (batchCount && (!SameState(state, &batchState) || batchCount + vertices > BATCH_VERTICES ||
+    SaturnFlushGpu();
+    SaturnFlushPixels();
+    if (batchCount && (batchPoints != points || !SameState(state, &batchState) || batchCount + vertices > BATCH_VERTICES ||
                        (state->textured && state->semi == 2))) {
         Flush();
     }
     if (!batchCount) {
         batchState = *state;
+        batchPoints = points;
         batchDepth = 0;
     }
     primitiveState = *state;
+}
+
+static void Begin(const GpuDrawState *state, int vertices)
+{
+    BeginMode(state, vertices, 0);
 }
 
 static void Add(const GpuVertex *v, unsigned shade)
@@ -938,8 +965,171 @@ static void ClearDrawn(int x, int y, int w, int h)
     }
 }
 
+static int saturnSkyDrawn;
+typedef struct SaturnDraw {
+    GpuDrawState source;
+    int noDepth;
+} SaturnDraw;
+
+static int SaturnSampleIndex(void *user, float u, float v)
+{
+    SaturnDraw *d = user;
+    /* Stabilize exact texel boundaries across CPU division and shader arithmetic. */
+    int x = (int)floorf(u+0.00001f) & 255, y = (int)floorf(v+0.00001f) & 255;
+    x = (x & ~(d->source.windowMaskX*8)) | ((d->source.windowOffsetX & d->source.windowMaskX)*8);
+    y = (y & ~(d->source.windowMaskY*8)) | ((d->source.windowOffsetY & d->source.windowMaskY)*8);
+    int py = (d->source.pageY + y) & 1023;
+    const uint16_t *row = py >= 512 ? psxVramHigh[py-512] : psxVram[py];
+    return (row[(d->source.pageX + x/4) & 1023] >> ((x&3)*4)) & 15;
+}
+
+static void SaturnEmit(void *user, int x, int y, uint16_t rgb, int blend, float depth, uint8_t alpha)
+{
+    SaturnDraw *d = user;
+    GpuDrawState state = {0};
+    state.semi = blend == -2 ? 0 : blend; state.fade = alpha < 255;
+    if (blend == -2) rgb = 0; /* RGB destination shadow: half the destination. */
+    GpuVertex pixel = {0};
+    pixel.x = (float)x; pixel.y = (float)y; pixel.w = depth;
+    pixel.noDepth = d->noDepth; pixel.world = 1;
+    pixel.r = (uint8_t)((rgb & 31)*8); pixel.g = (uint8_t)(((rgb>>5)&31)*8);
+    pixel.b = (uint8_t)(((rgb>>10)&31)*8); pixel.a = alpha;
+    unsigned shade = SHADE_AFFINE_COLOUR | SHADE_PS1_COLOUR;
+    BeginMode(&state, 1, 1);
+    Add(&pixel, shade);
+}
+
+/* Aggregate ordered native writes as premultiplied colour/coverage. The final
+   overlay blends over prior compatibility draws; flush before the next such draw.
+   Optional depth uses the point path so it still shares the host depth buffer. */
+static void SaturnComposite(void *user, int x, int y, uint16_t rgb, int blend, float depth, uint8_t alpha)
+{
+    (void)user; (void)depth;
+    int px=x+MAX_WIDE_MARGIN;
+    if (px<0 || px>=SATURN_WIDTH || y<0 || y>=VRAM_HEIGHT) return;
+    uint8_t *out=saturnPixels[y][px];
+    unsigned a=blend >= 0 || blend == -2 ? (alpha+1)/2 : alpha;
+    if (a==255) {
+        /* Most road/scenery writes are opaque: avoid reading and blending the
+           previous pixel (including repeated writes along a distorted edge). */
+        out[0]=(uint8_t)((rgb&31)*8);
+        out[1]=(uint8_t)(((rgb>>5)&31)*8);
+        out[2]=(uint8_t)(((rgb>>10)&31)*8);
+        out[3]=255;
+    } else {
+        for(int c=0;c<3;c++) {
+            unsigned src=blend == -2 ? 0 : ((rgb>>(5*c))&31)*8;
+            out[c]=(uint8_t)((src*a+out[c]*(255-a)+127)/255);
+        }
+        out[3]=(uint8_t)(a+(out[3]*(255-a)+127)/255);
+    }
+    if(px<saturnLeft) saturnLeft=px;
+    if(px>=saturnRight) saturnRight=px+1;
+    if(y<saturnTop) saturnTop=y;
+    if(y>=saturnBottom) saturnBottom=y+1;
+}
+
+static void SaturnFlushPixels(void)
+{
+    if(saturnRight<=saturnLeft || saturnBottom<=saturnTop) return;
+    UsePipeline(RENDER_SATURN);
+    glUseProgram(scene->program); BindTarget();
+    int left=saturnLeft-MAX_WIDE_MARGIN, right=saturnRight-MAX_WIDE_MARGIN;
+    RenderSaturnPixels(&saturnPixels[0][0][0], SATURN_WIDTH, VRAM_HEIGHT, MAX_WIDE_MARGIN,
+        left,saturnTop,right,saturnBottom,areaWide ? WideWidth() : VRAM_WIDTH,
+        areaWide ? -wideMargin : 0,scale);
+    glUseProgram(scene->program);
+    PictureChanged(saturnTop,saturnBottom-saturnTop);
+    RememberPicture(left,saturnTop,right-left,saturnBottom-saturnTop);
+    for(int y=saturnTop;y<saturnBottom;y++)
+        memset(saturnPixels[y][saturnLeft],0,(size_t)(saturnRight-saturnLeft)*4);
+    saturnLeft=SATURN_WIDTH;saturnTop=VRAM_HEIGHT;saturnRight=saturnBottom=0;
+}
+
+static void SaturnFlushGpu(void)
+{
+    if(!RenderSaturnQuadsPending()) return;
+    UsePipeline(RENDER_SATURN);
+    glActiveTexture(GL_TEXTURE0);UploadVram();
+    glUseProgram(scene->program);BindTarget();
+    int left=areaWide ? -wideMargin : areaX;
+    int right=areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW;
+    RenderSaturnFlushQuads(vramTexture,areaWide ? WideWidth() : VRAM_WIDTH,VRAM_HEIGHT,
+        areaWide ? -wideMargin : 0,scale,left,areaY,right,areaY+areaH);
+    glUseProgram(scene->program);
+    PictureChanged(areaY,areaH);RememberPicture(left,areaY,right-left,areaH);
+}
+
+/* Explicit reference mode for tests and visual comparisons; GPU is the default. */
+static int SaturnReference(void)
+{
+    const char *value=SDL_getenv("WIPEOUT_SATURN_REFERENCE");
+    return value && SDL_atoi(value)!=0;
+}
+
+static void SaturnBackground(const GpuDrawState *state)
+{
+    if (saturnSkyDrawn) return;
+    const uint16_t *palette; int width, height;
+    const uint8_t *picture = SaturnNativeSkyData(&palette, &width, &height);
+    if (!picture) return;
+    saturnSkyDrawn = 1;
+    Flush();
+    UsePipeline(RENDER_SATURN);
+    glUseProgram(scene->program);
+    BindTarget();
+    int left = areaWide ? -wideMargin : areaX;
+    int right = areaWide ? SCREEN_COLUMNS + wideMargin : areaX + areaW;
+    RenderSaturnBackground(picture, palette, width, height, SaturnNativeSkyRevision(),
+        state, RenderCurrent()->settings.saturn.originalSkyScroll, left, areaY, right, areaY + areaH,
+        areaX + areaW*.5f, areaY + areaH*.5f,
+        areaWide ? WideWidth() : VRAM_WIDTH, VRAM_HEIGHT, areaWide ? -wideMargin : 0, scale);
+    glUseProgram(scene->program);
+    PictureChanged(areaY, areaH);
+    RememberPicture(left, areaY, right-left, areaH);
+    MarkDrawn(areaX,areaY,areaX+areaW,areaY+areaH);
+}
+
 void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int count)
 {
+    if (RenderCurrent()->id == RENDER_SATURN) {
+        if (given->saturnSky) { SaturnBackground(given); return; }
+        if (given->saturn && RenderCurrent()->settings.saturn.affineTextures) {
+            if (batchCount) Flush();
+            SaturnDraw d = {.source = *given, .noDepth = vertices[0].noDepth};
+            SaturnNativePoly poly = *given->saturn;
+            poly.alphaMesh = (poly.mode & 0x100) && !RenderCurrent()->settings.saturn.mesh;
+            if (poly.dynamicLight) {
+                SaturnShipLight(SaturnTrackLight(vertices[0].r, vertices[0].g, vertices[0].b), poly.gouraud);
+            }
+            if(SaturnReference()) {
+                SaturnVdp1Draw(&poly, vertices, areaWide ? -wideMargin : areaX, areaY,
+                              areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW, areaY+areaH,
+                              RenderDepth(RenderCurrent()) ? SaturnEmit : SaturnComposite, SaturnSampleIndex, &d);
+            } else {
+                /* Pipeline creation precedes submission: switching away destroys
+                   its pending commands only after the normal flush boundary. */
+                UsePipeline(RENDER_SATURN);
+                int clipLeft=areaWide ? -wideMargin : areaX;
+                int clipRight=areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW;
+                if(!RenderSaturnQuad(&poly,vertices,given,SaturnNativeMaterialRevision(),RenderDepth(RenderCurrent()),
+                                    scale,clipLeft,areaY,clipRight,areaY+areaH)) {
+                    SaturnFlushGpu();
+                    if(!RenderSaturnQuad(&poly,vertices,given,SaturnNativeMaterialRevision(),RenderDepth(RenderCurrent()),
+                                        scale,clipLeft,areaY,clipRight,areaY+areaH)) abort();
+                }
+            }
+            float left=vertices[0].x,right=left,top=vertices[0].y,bottom=top;
+            for(int k=1;k<count;k++) {
+                left=fminf(left,vertices[k].x);right=fmaxf(right,vertices[k].x);
+                top=fminf(top,vertices[k].y);bottom=fmaxf(bottom,vertices[k].y);
+            }
+            if(isfinite(left) && isfinite(right) && isfinite(top) && isfinite(bottom))
+                MarkDrawn(SDL_clamp(floorf(left),areaX,areaX+areaW),SDL_clamp(floorf(top),areaY,areaY+areaH),
+                          SDL_clamp(ceilf(right),areaX,areaX+areaW),SDL_clamp(ceilf(bottom),areaY,areaY+areaH));
+            return;
+        }
+    }
     GpuDrawState faded = *given;
     const GpuDrawState *state = &faded;
     int i;
@@ -1052,6 +1242,9 @@ void GpuFill(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b)
 static void Clear(int x, int y, int w, int h, GLbitfield buffers, uint8_t r, uint8_t g, uint8_t b)
 {
     Flush();
+    /* Every cleared render pass needs its own sky, including interpolated
+       pictures, which call GpuClearArea rather than GpuClearDepth. */
+    saturnSkyDrawn = 0;
     if (buffers & GL_COLOR_BUFFER_BIT) {
         if (w > 0) PictureChanged(y, h);
         RememberPicture(x, y, SDL_min(x + w, SCREEN_COLUMNS) - x, h);

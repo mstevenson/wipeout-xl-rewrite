@@ -5,6 +5,12 @@
 #include "../port_gl.h"
 #ifndef PORT_GL_LINKED
 #define GL_FUNCTIONS(X) \
+    X(PFNGLBINDBUFFERBASEPROC, glBindBufferBase) \
+    X(PFNGLGETUNIFORMBLOCKINDEXPROC, glGetUniformBlockIndex) \
+    X(PFNGLUNIFORMBLOCKBINDINGPROC, glUniformBlockBinding) \
+    X(PFNGLDRAWARRAYSINSTANCEDPROC, glDrawArraysInstanced) \
+    X(PFNGLVERTEXATTRIBDIVISORPROC, glVertexAttribDivisor) \
+    X(PFNGLDELETEBUFFERSPROC, glDeleteBuffers) \
     X(PFNGLGENBUFFERSPROC, glGenBuffers) \
     X(PFNGLBINDBUFFERPROC, glBindBuffer) \
     X(PFNGLBUFFERDATAPROC, glBufferData) \
@@ -70,7 +76,13 @@ ASYNC_GL_FUNCTIONS(DECLARE_GL)
 #define glDeleteSync p_glDeleteSync
 #define glMapBufferRange p_glMapBufferRange
 #define glUnmapBuffer p_glUnmapBuffer
+#define glDrawArraysInstanced p_glDrawArraysInstanced
+#define glVertexAttribDivisor p_glVertexAttribDivisor
+#define glDeleteBuffers p_glDeleteBuffers
 #define glGenBuffers p_glGenBuffers
+#define glBindBufferBase p_glBindBufferBase
+#define glGetUniformBlockIndex p_glGetUniformBlockIndex
+#define glUniformBlockBinding p_glUniformBlockBinding
 #define glBindBuffer p_glBindBuffer
 #define glBufferData p_glBufferData
 #define glGenVertexArrays p_glGenVertexArrays

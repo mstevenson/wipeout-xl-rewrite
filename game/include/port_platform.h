@@ -182,5 +182,14 @@ int PortFadeRange(int *nearDistance, int *farDistance);
 /* The frame recorder (platform/psx/framecap.h): the packets from start to end were built by `what` (an
    object's name, or NULL) for its item `index`. */
 void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index);
+/* Tag an object's packets with its synthetic PRM material identity and recorder name. */
+void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index);
+/* Select the current artwork frame on a port-created object, if it has native frames. */
+void PortObjectVisualFrame(int *assetTag, unsigned frame);
+/* Advance the renderer's scenery and material animations once per race update. */
+void PortRaceMaterialTick(void);
+
+/* Publish the weapon grid's current visual state. An absent face has index -1. */
+void PortWeaponGridVisual(int leftFace, int rightFace, int angle, int depleted);
 
 #endif

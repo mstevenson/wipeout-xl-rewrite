@@ -1711,6 +1711,7 @@ static void Resolution(void)
     char auto_[64], labels[16][48];
     const char *items[17];
     int count = GpuMaxScale(), choice = SDL_min(portSettings.renderScale, count), i, w = 0, h = 0, columns = 320;
+    bool saturn = RenderCurrent()->id == RENDER_SATURN;
 
     // the console's 240 lines (PAL 256), and its 320 columns or, with widescreen, as many as the window's shape gives
     PortDrawableSize(&w, &h);
@@ -1721,7 +1722,7 @@ static void Resolution(void)
     items[0] = auto_;
     for (i = 1; i <= count && i <= 16; i++) {
         SDL_snprintf(labels[i - 1], sizeof(labels[i - 1]), "%dx%d%s", columns * i, GPU_LINES * i,
-                     i == 1 ? " (PS1 original resolution)" : "");
+                     i == 1 ? (saturn ? " (Saturn native)" : " (PS1 original resolution)") : "");
         items[i] = labels[i - 1];
     }
     if (ImGui::Combo("Resolution", &choice, items, SDL_min(count, 16) + 1)) {

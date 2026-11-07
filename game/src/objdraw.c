@@ -872,7 +872,8 @@ static int DrawNearPrimitive(Object *object, int index, u_long *ordering, Poly p
         AddPrim(slot, poly);
         out += count == 4 ? sizeof(POLY_G4) : sizeof(POLY_G3);
     }
-    PortTagPrims(start, out, "near object", object->name, index); /* the frame recorder */
+    /* Port: tag the emitted packet with the model identity from the synthetic PRM. */
+    PortTagObjectPrims(start, out, "near object", object->name, object->scratch, index);
     return 1;
 }
 
@@ -1041,7 +1042,8 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             drawnFlags[index] = out != before || (culled && CulledForCertain(culledVertex[0], culledVertex[1], culledVertex[2])) ||
                                 (!culled && kind == DRAW_PLAIN && DrawNearPrimitive(object, index, ordering, prim));
         }
-        PortTagPrims(before, out, farView ? "far object" : "object", object->name, index); /* Port: the frame recorder */
+        /* Port: the frame recorder and the Saturn model registry. */
+        PortTagObjectPrims(before, out, farView ? "far object" : "object", object->name, object->scratch, index);
         index++;
     } while (--count > 0);
 finished:

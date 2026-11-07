@@ -19,6 +19,8 @@
 #include "../debug_ui.h"
 #include "../platform.h"
 #include "../settings.h"
+#include "../original.h"
+#include "../render/saturn_native.h"
 
 int PortGameInfo(char *out, int size); /* (game/src/portinfo.c) */
 
@@ -540,7 +542,22 @@ void FrameCapTag(const void *start, const void *end, const char *what, const cha
 
 void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index)
 {
+    if (!name && (strstr(what, "track") || strstr(what, "face")) && PortOriginalTrack() < 0) {
+        SaturnNativeBindTrack(start, end, index);
+    }
     FrameCapTag(start, end, what, name, index);
+}
+
+void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index)
+{
+    /* The synthetic PRM's scratch word is copied byte-for-byte by the loader. */
+    SaturnNativeBind(start, end, SDL_Swap32BE(assetTag), index);
+    FrameCapTag(start, end, what, name, index);
+}
+
+void PortObjectVisualFrame(int *assetTag, unsigned frame)
+{
+    *assetTag = (int)SDL_Swap32BE(SaturnNativeFrameTag(SDL_Swap32BE((uint32_t)*assetTag), frame));
 }
 
 /* The picture at (x, y, w, h) read back for frame f: the console's pixels, and with widescreen the sides as well. */

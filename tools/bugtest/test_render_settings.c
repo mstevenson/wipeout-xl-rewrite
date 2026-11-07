@@ -62,6 +62,43 @@ static void Policies(void)
     }
 }
 
+static void SaturnProfile(void)
+{
+    Load("renderer = saturn\nsaturn_depth = 1\nsaturn_mesh = 0\n");
+    assert(RenderCurrent()->id == RENDER_SATURN && RenderDepth(RenderCurrent()));
+    assert(!RenderCurrent()->settings.saturn.originalSkyScroll);
+    RenderMaterial m = {.textured = 1, .spatial = 1, .dither = 1};
+    RenderStyle style = RenderPrepare(RenderCurrent(), &m);
+    assert(style.filter == RENDER_SAMPLE_SATURN_ALPHA && !(style.shade & SHADE_DITHER));
+    assert((style.shade & (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR)) ==
+           (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR));
+    assert(RenderSet(&portSettings.render, "saturn_original_sky_scroll", "1"));
+    assert(RenderCommit() && RenderCurrent()->settings.saturn.originalSkyScroll);
+    assert(PortSettingsSave());
+    RenderSettings saved = portSettings.render;
+    PortSettingsLoad();
+    assert(!memcmp(&saved, &portSettings.render, sizeof(saved)));
+    RenderCommit();
+    portSettings.render.ps1.dither = 0;
+    assert(!RenderCommit()); /* inactive profile changes do not invalidate a frame */
+    RenderDefaults(&portSettings.render, RENDER_SATURN);
+    assert(!portSettings.render.ps1.dither && RenderCommit());
+    assert(!RenderDepth(RenderCurrent()));
+    assert(!RenderCurrent()->settings.saturn.originalSkyScroll);
+    assert(RenderPrepare(RenderCurrent(), &m).filter == RENDER_SAMPLE_MESH);
+    m.ui = 1;
+    assert(RenderPrepare(RenderCurrent(), &m).filter == 0);
+    m.n64 = 1;
+    assert(RenderPrepare(RenderCurrent(), &m).shade & SHADE_N64);
+    Load("renderer = auto\nautomatic_renderer = saturn\n");
+    n64 = 1; RenderCommit(); assert(RenderCurrent()->id == RENDER_N64);
+    n64 = 0; RenderCommit(); assert(RenderCurrent()->id == RENDER_SATURN);
+    SDL_Environment *env = SDL_GetEnvironment();
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDERER", "saturn", true);
+    Load("renderer = pc\n"); assert(RenderCurrent()->id == RENDER_SATURN);
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDERER");
+}
+
 static void ProfileIsolation(void)
 {
     const char *prefixes[] = {"", "ps1_", "pc_", "n64_"};
@@ -117,11 +154,11 @@ static void ProfileIsolation(void)
             for (n64 = 0; n64 <= 1; n64++) {
                 RenderCommit();
                 assert(RenderCurrent()->id == id);
-                assert(PortRenderGeometry().lightAllVertices == (id == RENDER_PC && enabled));
+                assert(PortRenderGeometry().lightAllVertices == ((id == RENDER_PC && enabled) || id == RENDER_SATURN));
                 RenderGeometry geometry = PortRenderGeometry();
                 assert(geometry.alternateQuad == (id == RENDER_PC));
                 assert(geometry.worldBillboards == (id == RENDER_PC));
-                assert(geometry.gouraudObjects == (id == RENDER_PC && enabled));
+                assert(geometry.gouraudObjects == ((id == RENDER_PC && enabled) || id == RENDER_SATURN));
                 assert(geometry.lightFormat == (id == RENDER_PC && enabled ? RENDER_LIGHT_RGB8 : RENDER_LIGHT_PS1));
             }
         }
@@ -204,6 +241,7 @@ int main(void)
     n64 = 0;
     Load("renderer = bogus\nps1_dither = garbage\npc_depth = -1\n");
     assert(portSettings.render.selection == RENDER_AUTO && portSettings.render.ps1.dither && portSettings.render.pc.depth);
+    SaturnProfile();
     portConfig.hidden = 1; PortSettingsLoad();
     assert(portSettings.render.selection == RENDER_AUTO && !PortSettingsSave());
     unlink(PortSettingsPath()); rmdir(testDir);

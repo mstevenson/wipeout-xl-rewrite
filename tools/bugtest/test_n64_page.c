@@ -1,23 +1,47 @@
 /* Private page metadata survives packet decoding, and is cleared by PS1 pages. */
 #include "../../platform/psx/libgpu.c"
 #include <assert.h>
+#include <math.h>
 #include <stddef.h>
 _Static_assert(offsetof(GpuDrawState, fade) == 13 * sizeof(int), "frame recording layout");
 PortSettings portSettings = {.render = RENDER_DEFAULTS};
 int portPal;
 int PortScreenMargin(void) { return 0; }
+static int testSaturnDisc;
+int PortSaturnDisc(void) { return testSaturnDisc; }
+int PortOriginalTrack(void) { return -1; }
 int PortOriginalTrackIs64(void) { return 0; }
+POLY_G4 flare[SHIP_EXHAUSTS + PLASMA_EXHAUSTS][FLARE_RAYS][2];
+Trail Plasma[PLASMA_EXHAUSTS];
+Trail *shipTrails;
+static const SaturnNativePoly testFlares[2] = {
+    {.width = 64, .height = 64, .corners = {0, 1, 3, 2}},
+    {.width = 64, .height = 64, .corners = {0, 1, 3, 2}}
+};
+static int testFlareArt;
+const SaturnNativePoly *SaturnArtFlare(int alternate) { return testFlareArt ? &testFlares[alternate] : NULL; }
 static int frameClears, flushes;
 void GpuFlush(void) { flushes++; }
 void FrameCapClear(void) { frameClears++; }
+static FrameCapPrim recorded;
+static int recordNative;
+FrameCapPrim *FrameCapAdd(void) { return recordNative ? &recorded : NULL; }
+void FrameCapTagRecord(FrameCapPrim *prim) { (void)prim; }
 static GpuVertex clipped[12];
 static int clippedCount;
+static GpuDrawState lastDraw;
 void GpuTriangles(const GpuDrawState *draw, const GpuVertex *v, int count)
 {
-    (void)draw;
+    if (recordNative) {
+        assert(draw->saturn && !draw->saturn->clipped);
+    } else if(draw->saturn) {
+        assert(draw->saturn->clipped && draw->saturn->vertexAttributes);
+        assert(draw->saturn->corners[0]==0 && draw->saturn->corners[3]==0);
+    }
     assert(count == 3 && clippedCount + count <= 12);
     memcpy(clipped + clippedCount, v, (size_t)count * sizeof(*v));
     clippedCount += count;
+    lastDraw = *draw;
 }
 
 static void ImportedQuad(void)
@@ -64,6 +88,108 @@ static void ImportedQuad(void)
     puts("Untextured N64 vertex provenance preserves authored quad diagonals before and during clipping: OK");
 }
 
+static void SaturnFlarePacket(void)
+{
+    GpuDrawState draw = {0};
+    GpuVertex v[4] = {{0}, {.x = 100.5f, .y = 356.25f, .w = 400, .a = 230, .world = 1}};
+    int32_t x[] = {101, 100, 113, 112}, y[] = {101, 100, 89, 88};
+    const uint32_t *ray = (const uint32_t *)&flare[0][4][1] + 1;
+    assert(!SaturnFlare(ray, &draw, v, x, y)); /* no Saturn art: retain the packet */
+    testFlareArt = 1;
+    assert(SaturnFlare((const uint32_t *)&flare[0][11][1] + 1, &draw, v, x, y) && !draw.saturn);
+    assert(SaturnFlare((const uint32_t *)&flare[0][0][1] + 1, &draw, v, x, y) && !draw.saturn);
+    assert(SaturnFlare(ray, &draw, v, x, y) && draw.saturn == &testFlares[0]);
+    assert(v[0].x == 88.5f && v[0].y == 344.25f && v[3].x == 112.5f && v[3].y == 368.25f);
+    for (int i = 0; i < 4; i++) assert(v[i].w == 400 && v[i].a == 230 && v[i].world);
+    x[1] = 100;
+    assert(SaturnFlare((const uint32_t *)&flare[18][4][0] + 1, &draw, v, x, y) && draw.saturn == &testFlares[1]);
+    testFlareArt = 0;
+    puts("Saturn exhaust replaces the flare quads with one anchored sprite and the appropriate palette: OK");
+}
+
+static void SaturnExhaustOrdering(void)
+{
+    RenderSettings saved = portSettings.render;
+    static Trail trails[SHIP_EXHAUSTS];
+    shipTrails = trails;
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.selection = RENDER_SATURN;
+    RenderCommit();
+    testSaturnDisc = testFlareArt = 1;
+
+    u_long ot[4];
+    ClearOTagR(ot, 4);
+    TrackPackets table = {.table = &ot[3]};
+    POLY_G4 *shipFlare = &flare[0][FLARE_ANCHOR_RAY][0];
+    POLY_G4 *otherFlare = &flare[1][FLARE_ANCHOR_RAY][0];
+    POLY_G4 *plasmaFlare = &flare[SHIP_EXHAUSTS + 1][FLARE_ANCHOR_RAY][0];
+    POLY_G4 *shipTail = &trails[0].segment[0].leftHalf[0];
+    POLY_G4 *shipMiddle = &trails[0].segment[1].rightHalf[0];
+    POLY_G4 *otherTail = &trails[1].segment[0].leftHalf[0];
+    POLY_G4 *plasmaTail = &Plasma[1].segment[0].rightHalf[0];
+    POLY_G4 *packets[] = {shipFlare, otherFlare, plasmaFlare, shipTail, shipMiddle, otherTail, plasmaTail};
+    for (size_t i = 0; i < SDL_arraysize(packets); i++) {
+        SetPolyG4(packets[i]);
+        SetSemiTrans(packets[i], 1);
+    }
+    AddPrim(&ot[3], shipMiddle);
+    AddPrim(&ot[3], shipFlare); /* Drawn before the trail in its own bucket. */
+    AddPrim(&ot[2], plasmaFlare);
+    AddPrim(&ot[1], otherTail);
+    AddPrim(&ot[1], shipTail);
+    AddPrim(&ot[1], plasmaTail);
+    AddPrim(&ot[0], otherFlare); /* Already after its own trail. */
+    OrderSaturnExhaust(&table);
+    assert(table.reorderExhaust);
+    assert(table.exhaust[0].flare == (const uint32_t *)shipFlare + 1);
+    assert(table.exhaust[0].after == (const uint32_t *)shipTail + 1);
+    assert(!table.exhaust[1].after);
+    assert(table.exhaust[SHIP_EXHAUSTS + 1].flare == (const uint32_t *)plasmaFlare + 1);
+    assert(table.exhaust[SHIP_EXHAUSTS + 1].after == (const uint32_t *)plasmaTail + 1);
+    assert(NodeAfter((u_long *)shipFlare) == (u_long *)shipMiddle); /* Original packet links retained. */
+
+    testSaturnDisc = testFlareArt = 0;
+    shipTrails = NULL;
+    portSettings.render = saved;
+    RenderCommit();
+    puts("Saturn flares defer only to the last trail packet of the same exhaust: OK");
+}
+
+static void SaturnShadowPacket(void)
+{
+    POLY_FT4 packets[2] = {0};
+    u_long ot[1];
+    SetPolyFT4(&packets[0]);
+    SetShadeTex(&packets[0], 1);
+    SetSemiTrans(&packets[0], 1);
+    packets[0].tpage = GetTPage(0, 2, 640, 256);
+    packets[0].clut = GetClut(400, 450);
+    packets[0].x1 = packets[0].x3 = 16;
+    packets[0].y2 = packets[0].y3 = 16;
+    packets[1] = packets[0];
+    ClearOTagR(ot, 1);
+    PortShadowRange(packets, sizeof(packets[0]));
+    WalkTable(ot, 1);
+
+    portSettings.render.selection = RENDER_SATURN;
+    RenderCommit();
+    clippedCount = 0;
+    Polygon(&packets[0].tag + 1, packets[0].code);
+    assert(lastDraw.textured && !lastDraw.raw && lastDraw.semi == 0);
+    assert(lastDraw.clutX == 400 && lastDraw.clutY == 450);
+    assert(clippedCount == 6 && clipped[0].world && clipped[0].w == 0);
+    Polygon(&packets[1].tag + 1, packets[1].code);
+    assert(lastDraw.raw && lastDraw.semi == 2);
+
+    portSettings.render.selection = RENDER_PS1;
+    RenderCommit();
+    clippedCount = 0;
+    Polygon(&packets[0].tag + 1, packets[0].code);
+    assert(lastDraw.raw && lastDraw.semi == 2);
+    walkTrack = -1;
+    puts("Saturn ship shadow packets keep their mask and opt into mesh coverage: OK");
+}
+
 static void ShieldOrdering(void)
 {
     u_long ot[4];
@@ -94,6 +220,37 @@ static void ShieldOrdering(void)
     assert(heldShields[0].count == 0 && HoldShield(&shield[0].tag));
     WalkTable(NULL, 0);
     assert(!HoldShield(&shield[0].tag));
+
+    /* Swap presents the newly rebuilt table during VSync, before DrawOTag.
+       The same OT address must not reuse the previous frame's arena ranges. */
+    POLY_G3 nextShield = {0}, nextHull = {0};
+    SetPolyG3(&nextShield);
+    SetSemiTrans(&nextShield, 1);
+    SetPolyG3(&nextHull);
+    ClearOTagR(ot, 4);
+    AddPrim(&ot[3], &nextShield);
+    AddPrim(&ot[1], &nextHull);
+    PortShieldPackets(3, &nextShield, &nextShield + 1);
+    PortShipPackets(3, &nextHull, &nextHull + 1);
+    DRAWENV env = {0};
+    PsxUpcomingTables(&ot[3], NULL, ot, &env);
+    for (int presentation = 0; presentation < 4; presentation++) {
+        WalkTable(&ot[3], presentation == 3);
+        assert(heldShieldCount == 1);
+        assert(heldShields[0].pending->lastHull == &nextHull.tag);
+        assert(!HoldShield(&shield[0].tag));
+        assert(HoldShield(&nextShield.tag));
+        assert(SceneSprite(&nextShield.tag) && SceneSprite(&nextHull.tag));
+    }
+    /* Expiration must also be visible on the very first interpolated picture. */
+    ClearOTagR(ot, 4);
+    AddPrim(&ot[1], &nextHull);
+    PsxUpcomingTables(&ot[3], NULL, ot, &env);
+    WalkTable(&ot[3], 0);
+    assert(!heldShieldCount && !HoldShield(&nextShield.tag));
+    WalkTable(&ot[3], 1);
+    assert(!heldShieldCount);
+    WalkTable(NULL, 0);
     puts("Transparent shield follows its own hull and retains its draw mode during table replay: OK");
 }
 
@@ -153,6 +310,143 @@ static void ClippedInterpolation(void)
     }
     resolvedMask = 0;
     puts("Near clipping respects committed renderer RGB/UV interpolation, perspective fade and eye-plane crossings: OK");
+}
+
+/* A clockwise camera turn moves a world landmark left in the view. The sky
+   must sample farther right in its panorama, moving that landmark left too. */
+static void SaturnSkyAngles(void)
+{
+    const int sine=1567,cosine=3784; /* approximately 22.5 degrees */
+    GteSetBackground(1);
+    GteWriteControl(26,160);
+    for(int direction=-1;direction<=1;direction++) {
+        int sn=direction*sine,cs=direction ? cosine : 4096;
+        GteWriteControl(0,(uint16_t)cs);
+        GteWriteControl(1,(uint16_t)-sn);
+        GteWriteControl(2,4096);
+        GteWriteControl(3,(uint16_t)sn);
+        GteWriteControl(4,cs);
+        GtePrecise p;
+        uint32_t handle=GteRecordProjection(0,0,0,100,1);
+        assert(GtePreciseOf(handle,&p) && p.background);
+        float projectedWorldX=(float)-sn/cs;
+        if(direction) assert(projectedWorldX*p.skyYaw<0);
+        else assert(p.skyYaw==0);
+        assert(SDL_fabsf(p.skyYaw-direction*256)<1);
+        assert(p.skyFocal==160);
+    }
+    for(int direction=-1;direction<=1;direction++) {
+        int sn=direction*sine,cs=direction ? cosine : 4096;
+        GteWriteControl(0,4096);
+        GteWriteControl(1,0);
+        GteWriteControl(2,(uint16_t)cs | ((uint32_t)(uint16_t)-sn<<16));
+        GteWriteControl(3,(uint32_t)(uint16_t)sn<<16);
+        GteWriteControl(4,cs);
+        GtePrecise p;
+        uint32_t handle=GteRecordProjection(0,0,0,100,1);
+        assert(GtePreciseOf(handle,&p) && p.background);
+        /* World Y goes up for positive view pitch. My=120-pitch/3 must
+           increase the source row, moving the sky up as well. */
+        float projectedWorldY=(float)-sn/cs;
+        if(direction) assert(projectedWorldY*(-p.skyPitch/3)<0);
+        assert(SDL_fabsf(p.skyPitch+direction*256)<1);
+    }
+    /* Original European Saturn Phenitia Park demo, captured in Mednafen:
+       camera angles at 0x060734dc = {-303,459,0}; view matrix at
+       0x0607b804. Convert its 16.16 elements to GTE 4.12. This checks the
+       angle convention against the running original, including combined axes. */
+    const int32_t matrix[9]={49951,0,-42424,-19017,58583,-22391,37923,29376,44651};
+    for(int i=0;i<4;i++)
+        GteWriteControl(i,(uint16_t)(matrix[i*2]/16) | ((uint32_t)(uint16_t)(matrix[i*2+1]/16)<<16));
+    GteWriteControl(4,matrix[8]/16);
+    GtePrecise original;
+    assert(GtePreciseOf(GteRecordProjection(0,0,0,100,1),&original));
+    assert(SDL_fabsf(original.skyYaw-459)<1);
+    assert(SDL_fabsf(original.skyPitch+303)<1);
+    assert(original.skyRoll==0);
+    GteSetBackground(0);
+    GteWriteControl(0,4096);GteWriteControl(1,0);GteWriteControl(2,4096);GteWriteControl(3,0);GteWriteControl(4,4096);
+    puts("Saturn panorama yaw/pitch follow world motion and match original Saturn camera angles: OK");
+}
+
+static void SaturnSkyInterpolation(void)
+{
+    GteKeepPast(1);
+    for(int frame=0;frame<3;frame++) {
+        GteClearPrecise();
+        GteSetBackground(0);
+        /* Stable world correspondences allow interpolation; the last frame
+           jumps far enough to exercise the same cut guard as world geometry. */
+        for(int i=0;i<8;i++) {
+            GteKeyNext(0,100+i);
+            uint32_t h=GteRecordProjection(i,0,0,500,1);
+            GteRecordView(h,(i&1)*100+(frame==2 ? 1000000 : 0),((i>>1)&1)*100,500+((i>>2)&1)*100);
+        }
+        float yaw=frame==0 ? 2040 : frame==1 ? -2040 : -2000;
+        int sn=(int)roundf(sinf(yaw*(6.28318530718f/4096))*4096);
+        int cs=(int)roundf(cosf(yaw*(6.28318530718f/4096))*4096);
+        GteWriteControl(0,(uint16_t)cs);GteWriteControl(1,(uint16_t)-sn);
+        GteWriteControl(2,4096);GteWriteControl(3,(uint16_t)sn);GteWriteControl(4,cs);
+        GteSetBackground(1);
+        GtePrecise p,moved;
+        assert(GtePreciseOf(GteRecordProjection(50,0,0,500,1),&p));
+        if(frame==1) {
+            GteInterpolateSky(&p,.5f,&moved);
+            assert(fabsf(fabsf(moved.skyYaw)-2048)<.1f);
+            GteInterpolateSky(&p,1,&moved);assert(moved.skyYaw==p.skyYaw);
+            GteKeepPast(0);GteInterpolateSky(&p,.5f,&moved);assert(moved.skyYaw==p.skyYaw);
+            GteKeepPast(1);
+        } else if(frame==2) {
+            GteInterpolateSky(&p,.5f,&moved);assert(moved.skyYaw==p.skyYaw);
+        }
+    }
+    GteKeepPast(0);GteSetBackground(0);GteClearPrecise();
+    GteWriteControl(0,4096);GteWriteControl(1,0);GteWriteControl(3,0);GteWriteControl(4,4096);
+    puts("Saturn sky interpolates across the yaw seam and respects disabled interpolation and camera cuts: OK");
+}
+
+static void SaturnClip(void)
+{
+    portSettings.render=(RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.selection=RENDER_SATURN;RenderCommit();
+    SaturnNativePoly poly={.mode=0xc4,.corners={0,1,2,0}};
+    GpuDrawState draw={.saturn=&poly};
+    GpuVertex v[3]={0};
+    GteWriteControl(26,32);resolvedMask=7;
+    for(int i=0;i<3;i++) {
+        resolved[i]=(GtePrecise){.z=i?32:8,.view={i==1?32:0,i==2?32:0,i?32:8}};
+        v[i]=(GpuVertex){.w=i?32:8,.a=255,.u=i?24:0,.saturnShade={i?24:0,16,16}};
+    }
+    clippedCount=0;assert(NearCut(&draw,v,3,0) && clippedCount==6);
+    for(int i=0;i<clippedCount;i++) if(clipped[i].w==16) {
+        assert(SDL_fabsf(clipped[i].saturnShade[0]-16)<.001f);
+        assert(SDL_fabsf(clipped[i].u-16)<.001f);
+    }
+    poly.trackTile=1;
+    clippedCount=0;assert(NearCut(&draw,v,3,0) && clippedCount==6);
+    for(int i=0;i<clippedCount;i++) if(clipped[i].w==16) {
+        assert(SDL_fabsf(clipped[i].u-8)<.001f);
+    }
+    resolvedMask=0;
+}
+
+static void SaturnCaptureAtlasUV(void)
+{
+    uint8_t indices[8]={0};
+    SaturnNativePoly material={.textured=1,.width=8,.height=1,.pixels=indices,.corners={0,1,2,0}};
+    POLY_FT3 packet={.tag=7u<<24,.u0=150,.v0=90,.u1=170,.v1=90,.u2=150,.v2=110};
+    const uint32_t *words=(const uint32_t *)&packet+1;
+
+    SaturnNativeBind(&packet,&packet+1,SaturnNativeModel(&material,1,NULL,0),0);
+    testSaturnDisc=recordNative=1;
+    clippedCount=0;
+    Polygon(words,0x24);
+    assert(clippedCount==3 && recorded.count==3 && !recorded.draw.saturn);
+    assert(recorded.v[0].u==150 && recorded.v[0].v==90);
+    assert(recorded.v[1].u==170 && recorded.v[2].v==110);
+    testSaturnDisc=recordNative=0;
+    SaturnNativeShutdown();
+    puts("Saturn frame inspection keeps compatibility atlas UVs: OK");
 }
 
 static void WorldBillboardClip(void)
@@ -276,6 +570,13 @@ int main(void)
     }
     ImportedQuad();
     ClippedInterpolation();
+    SaturnSkyAngles();
+    SaturnSkyInterpolation();
+    SaturnClip();
+    SaturnCaptureAtlasUV();
+    SaturnFlarePacket();
+    SaturnExhaustOrdering();
+    SaturnShadowPacket();
     ShieldOrdering();
     WorldBillboardClip();
     return 0;

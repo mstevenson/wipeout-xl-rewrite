@@ -10,6 +10,7 @@ static int valid;
 const Renderer *RenderGet(RendererId id)
 {
     switch (id) {
+    case RENDER_SATURN: return &saturnRenderer;
     case RENDER_PC: return &pcRenderer;
     case RENDER_N64: return &n64Renderer;
     default: return &ps1Renderer;
@@ -19,6 +20,7 @@ const Renderer *RenderGet(RendererId id)
 const void *RenderProfile(const RenderFrame *f)
 {
     switch (f->id) {
+    case RENDER_SATURN: return &f->settings.saturn;
     case RENDER_PC: return &f->settings.pc;
     case RENDER_N64: return &f->settings.n64;
     default: return &f->settings.ps1;
@@ -41,6 +43,7 @@ void RenderDefaults(RenderSettings *s, RendererId id)
 
     switch (id) {
     case RENDER_PS1: s->ps1 = defaults.ps1; break;
+    case RENDER_SATURN: s->saturn = defaults.saturn; break;
     case RENDER_PC: s->pc = defaults.pc; break;
     case RENDER_N64: s->n64 = defaults.n64; break;
     default: *s = defaults; break;
@@ -63,6 +66,9 @@ int RenderCommit(void)
         /* Preferences for an inactive renderer must not disturb the displayed frame,
            interpolation or the frame recorder. Selection aliases are not policy. */
         switch (next.id) {
+        case RENDER_SATURN:
+            changed = memcmp(&current.settings.saturn, &next.settings.saturn, sizeof(next.settings.saturn)) != 0;
+            break;
         case RENDER_PC:
             changed = memcmp(&current.settings.pc, &next.settings.pc, sizeof(next.settings.pc)) != 0;
             break;
@@ -102,12 +108,15 @@ RenderGeometry PortRenderGeometry(void)
     return RenderGeometryFor(RenderCurrent());
 }
 
-static const char *const names[] = {"auto", "ps1", "pc", "n64"};
+static const char *const names[] = {"auto", "ps1", "pc", "n64", "saturn"};
 static const struct {
     const char *key;
     size_t offset;
 } options[] = {
 #define OPTION(key, field) {key, offsetof(RenderSettings, field)}
+    OPTION("saturn_quantize_vertices", saturn.quantizeVertices), OPTION("saturn_affine_textures", saturn.affineTextures),
+    OPTION("saturn_colour_precision", saturn.colourPrecision), OPTION("saturn_mesh", saturn.mesh),
+    OPTION("saturn_depth", saturn.depth), OPTION("saturn_original_sky_scroll", saturn.originalSkyScroll),
     OPTION("ps1_quantize_vertices", ps1.quantizeVertices), OPTION("ps1_affine_textures", ps1.affineTextures),
     OPTION("ps1_colour_precision", ps1.colourPrecision), OPTION("ps1_dither", ps1.dither), OPTION("ps1_depth", ps1.depth),
     OPTION("pc_bilinear", pc.bilinear), OPTION("pc_lighting", pc.lighting), OPTION("pc_depth", pc.depth),
@@ -120,12 +129,12 @@ static const struct {
 int RenderSet(RenderSettings *s, const char *key, const char *value)
 {
     if (!strcmp(key, "renderer") || !strcmp(key, "automatic_renderer")) {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
             if (!strcmp(value, names[i])) {
                 if (!strcmp(key, "renderer")) {
                     /* The former forced N64 option now applies only to Wipeout 64 tracks. */
                     s->selection = i == RENDER_N64 ? RENDER_AUTO : (RendererId)i;
-                } else if (i == RENDER_PS1 || i == RENDER_PC) {
+                } else if (i == RENDER_PS1 || i == RENDER_PC || i == RENDER_SATURN) {
                     s->automaticBase = (RendererId)i;
                 }
                 return 1;

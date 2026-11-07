@@ -174,12 +174,19 @@ forward a frame, and − / + zoom the picture, kept at the resolution it was dra
 `wipeoutxl.ini` in the user's data folder; a new saves folder takes effect at
 the next start. Dear ImGui (`platform/third_party/imgui`, MIT) draws it.
 
-Graphics > **Global renderer** selects **PlayStation** or **PC**. A separate
+Graphics > **Global renderer** selects **PlayStation**, **PC** or **Sega Saturn**. A separate
 **Use N64 renderer for Wipeout 64 tracks** checkbox is enabled by default; when
-unchecked, those tracks also use the global renderer. The selected PlayStation/PC
+unchecked, those tracks also use the global renderer. The selected global renderer
 settings and N64 settings appear side by side, stacking in narrow windows.
 N64 settings remain visible, dimmed when the checkbox is off. Each profile has
 independently saved controls and its own restore-defaults button.
+Saturn exposes pixel snapping, affine mapping, undithered RGB5 colour and optional depth.
+Turn off **Checkerboard transparency** in the Saturn settings for smooth transparency at half coverage.
+Set `WIPEOUT_SATURN_REFERENCE=1` to use the software quad rasterizer for comparisons.
+With a Saturn disc it draws native model quads with affine mapping and additive Gouraud shading,
+uses perspective-correct track tiles with Saturn palettes,
+and samples the VDP2 race sky at the selected render resolution. Choose **Saturn native** for the 1× console pixel grid.
+see [implementation and fidelity limits](docs/RENDERERS.md#saturn-profile).
 PS1 exposes vertex snapping, affine mapping, colour precision,
 dithering and optional depth buffering; PC exposes filtering, lighting and depth;
 N64 exposes three-point filtering, RGB5 precision, dithering and VI filters;
@@ -188,7 +195,7 @@ Resolution, frame rate, draw distance and HD replacements remain shared.
 
 Existing renderer preferences and profile parameters are retained. The former
 explicit N64 selection now enables N64 rendering only for Wipeout 64 tracks.
-`WIPEOUT_RENDERER=ps1|pc|auto|n64` overrides the saved selection; `auto` and `n64`
+`WIPEOUT_RENDERER=ps1|pc|saturn|auto|n64` overrides the saved selection; `auto` and `n64`
 enable the track-specific N64 override. Old PC/filter and depth settings are
 migrated. See [rendering profiles](docs/RENDERERS.md) for defaults, controls and migration.
 These are rendering approximations using the loaded assets, not changes of game

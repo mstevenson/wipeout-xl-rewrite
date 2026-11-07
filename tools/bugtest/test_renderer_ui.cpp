@@ -114,6 +114,16 @@ int main()
     /* Font scaling also triggers the stacked layout before controls are clipped. */
     io.FontGlobalScale = 2; Frame(); Layout(1);
     io.FontGlobalScale = 1; Frame(); Layout(2);
+    focusSelector = true; Frame();
+    Key(ImGuiKey_Enter); Key(ImGuiKey_DownArrow); Key(ImGuiKey_Enter);
+    assert(portSettings.render.automaticBase == RENDER_SATURN && RenderCurrent()->id == RENDER_SATURN);
+    Activate("Checkerboard transparency", RENDER_SATURN);
+    assert(!RenderCurrent()->settings.saturn.mesh);
+    Activate("Original Saturn sky scrolling", RENDER_SATURN);
+    assert(RenderCurrent()->settings.saturn.originalSkyScroll);
+    Activate("Restore renderer defaults", RENDER_SATURN);
+    assert(portSettings.render.saturn.mesh && !RenderCurrent()->settings.saturn.originalSkyScroll);
+    windowWidth = 360; Frame(); Layout(1);
     ImGui::DestroyContext();
     puts("Renderer UI: global selector, track-specific N64 toggle, independent panels/reset and responsive layout: OK");
 }

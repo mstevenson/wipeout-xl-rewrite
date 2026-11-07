@@ -1990,6 +1990,11 @@ void CycleWeaponGrids(ShipData *ships, struct WeaponGridZone *grids, int noGrids
                 grid->g = 128;
                 grid->b = 128;
             }
+            /* Port: publish the phase and cooldown used for this update's colours. */
+            int faceIndex = (int)(face - track->faces);
+            PortWeaponGridVisual(grid->attr & WEAPON_GRID_LEFT ? faceIndex : -1,
+                                 grid->attr & WEAPON_GRID_RIGHT ? faceIndex + 1 : -1,
+                                 grid->angle, grid->count < 0);
             if (grid->count < 0) {
                 grid->count++;
             }

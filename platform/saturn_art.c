@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "saturn.h"
+#include "render/saturn_native.h"
 
 #define VDP1_RAM 0x25C00000u
 #define CELLS 0x25E20000u /* the HUD's VDP2 characters */
@@ -54,6 +55,48 @@ static int Load(void)
         menuSprites = SaturnBlock("art\\super\\super.rbh", 2, &menuSpritesSize);
     }
     return video && pieces && hudMap && sprites;
+}
+
+const unsigned char *SaturnSpriteRecord(const unsigned char *table, size_t size, int sprite, size_t *available)
+{
+    if (!table || size < 16 || sprite < 0) return NULL;
+    size_t offsets = Be32(table);
+    if (offsets > size - 4) return NULL;
+    size_t end = SDL_min(size, (size_t)Be32(table + offsets));
+    if (end < offsets || (size_t)sprite >= (end - offsets) / 4) return NULL;
+    size_t record = Be32(table + offsets + (size_t)sprite * 4);
+    if (record > size - 16) return NULL;
+    if (available) *available = size - record;
+    return table + record;
+}
+
+const SaturnNativePoly *SaturnArtFlare(int alternate)
+{
+    enum { SIDE = 64 };
+    static SaturnNativePoly flares[2];
+    static uint8_t indices[2][SIDE * SIDE];
+    int variant = alternate != 0;
+    SaturnNativePoly *flare = &flares[variant];
+    if (flare->pixels) return flare;
+    if (!Load()) return NULL;
+
+    /* Race sprite entries 48 and 49 share the 64x64 image. The live VDP1
+       command sets the mesh bit on top of the descriptor's LUT draw mode. */
+    const unsigned char *entry = SaturnSpriteRecord(sprites, spritesSize, 48 + variant, NULL);
+    if (!entry || Be16(entry) != 1 || ((Be16(entry + 4) >> 3) & 7) != 1 ||
+        Be16(entry + 14) != ((SIDE / 8) << 8 | SIDE)) return NULL;
+    const unsigned char *palette = SaturnVideoAt(video, VDP1_RAM + Be16(entry + 6) * 8u, 32);
+    const unsigned char *source = SaturnVideoAt(video, VDP1_RAM + Be16(entry + 12) * 8u, SIDE * SIDE / 2);
+    if (!palette || !source) return NULL;
+
+    *flare = (SaturnNativePoly){.mode = (uint16_t)(Be16(entry + 4) | 0x100),
+        .width = SIDE, .height = SIDE, .textured = 1, .corners = {0, 1, 3, 2}, .pixels = indices[variant]};
+    for (int i = 0; i < 16; i++) flare->palette[i] = (uint16_t)Be16(palette + i * 2);
+    for (int i = 0; i < SIDE * SIDE; i += 2) {
+        flare->pixels[i] = source[i / 2] >> 4;
+        flare->pixels[i + 1] = source[i / 2] & 15;
+    }
+    return flare;
 }
 
 /* An image being drawn: RGBA, alpha 0 see-through, 255 opaque, 128 semi-transparent (the PlayStation's STP). */
@@ -133,27 +176,15 @@ static void MapCells(Canvas *c, int cx, int cy, int cw, int ch, int x, int y)
 static void SpriteOf(Canvas *c, SaturnVideo *v, const unsigned char *table, size_t tableSize, int sprite, int x,
                      int y, unsigned alpha)
 {
-    unsigned at, mode, colours, part, parts;
-
-    unsigned offsets;
-
-    /* the table: where its offsets start (4), the offsets, then the sprites: as many as fit before the first */
-    if (!v || !table || tableSize < 8 || sprite < 0 || (offsets = Be32(table)) + 4 > tableSize ||
-        offsets + (unsigned)sprite * 4 + 4 > SDL_min(tableSize, (size_t)Be32(table + offsets))) {
-        return;
-    }
-    at = Be32(table + offsets + sprite * 4);
-    if (at + 16 > tableSize) {
-        return;
-    }
-    parts = Be16(table + at);
-    mode = (Be16(table + at + 4) >> 3) & 7;
-    colours = Be16(table + at + 6);
-    for (part = 0; part < parts && at + 16 + part * 8 <= tableSize; part++) {
-        const unsigned char *p = table + at + 8 + part * 8;
+    size_t available;
+    const unsigned char *entry = SaturnSpriteRecord(table, tableSize, sprite, &available);
+    if (!v || !entry) return;
+    unsigned parts = Be16(entry), mode = (Be16(entry + 4) >> 3) & 7, colours = Be16(entry + 6);
+    for (unsigned part = 0; part < parts && 16 + part * 8 <= available; part++) {
+        const unsigned char *p = entry + 8 + part * 8;
         /* (the first part's place is the sprite's handle: the others' from it) */
-        int px = x + (int16_t)Be16(p) - (int16_t)Be16(table + at + 8);
-        int py = y + (int16_t)Be16(p + 2) - (int16_t)Be16(table + at + 10);
+        int px = x + (int16_t)Be16(p) - (int16_t)Be16(entry + 8);
+        int py = y + (int16_t)Be16(p + 2) - (int16_t)Be16(entry + 10);
         unsigned source = Be16(p + 4) * 8u, w = (Be16(p + 6) >> 8) * 8, h = Be16(p + 6) & 0xff, i, k;
 
         for (k = 0; k < h; k++) {

@@ -32,6 +32,11 @@ typedef struct SaturnVideo SaturnVideo;
 SaturnVideo *SaturnLoadVideo(const char *path);
 unsigned char *SaturnVideoAt(SaturnVideo *v, unsigned int address, size_t bytes);
 unsigned char *SaturnBlock(const char *path, int block, size_t *size);
+/* One sprite descriptor in a Saturn sprite table, with its remaining byte count. */
+const unsigned char *SaturnSpriteRecord(const unsigned char *table, size_t size, int sprite, size_t *available);
+/* The original VDP1 exhaust sprite and its blue or alternate palette (saturn_art.c). */
+struct SaturnNativePoly;
+const struct SaturnNativePoly *SaturnArtFlare(int alternate);
 /* The Saturn's art for one of the PlayStation's TIMs (saturn_art.c), by its name (of a .cmp, its index): its texels
    (palette indices for depth 0 and 1, colours for 2) and palette. 0 when the Saturn has none. */
 int SaturnArtTim(const char *name, int index, int depth, int w, int h, unsigned short *clut, int clutSize,
@@ -51,6 +56,7 @@ void SaturnDrawFont(unsigned char *page, int pageWidth, int size);
    sky.prm/.cmp. */
 unsigned char *SaturnMakeModel(const char *name, size_t *size);
 unsigned char *SaturnMakeTrackModel(int track, const char *name, size_t *size);
+void SaturnLoadNativeSky(int track);
 /* The names the game looks scenery up by, for each scenery instance of a course in its order
    (saturn_scene_names.c); the list ends with names NULL. */
 typedef struct SaturnSceneNames {

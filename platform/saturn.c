@@ -30,6 +30,7 @@
 #include "original.h"
 #include "platform.h"
 #include "saturn.h"
+#include "render/saturn_native.h"
 #include "saturn_shapes.h"
 #include "psx/disc.h"
 #include "psx/psx_io.h"
@@ -358,12 +359,50 @@ typedef struct Buffer {
 
 static void Put(Buffer *b, const void *data, size_t size)
 {
+    if (!size) return; /* Empty view lists need no allocation or pointer arithmetic. */
     if (b->size + size > b->capacity) {
         b->capacity = (b->size + size) * 2 + 1024;
         b->data = SDL_realloc(b->data, b->capacity);
     }
     memcpy(b->data + b->size, data, size);
     b->size += size;
+}
+
+static void MakeNativeTrack(const Course *c)
+{
+    int count = 0;
+    SaturnNativePoly *native = SDL_calloc(c->facesSize / FACE + 1, sizeof(*native));
+    for (uint32_t i = 0; i < c->sectionCount; i++) {
+        const uint8_t *s = c->sections + SECTIONS_AT + i * SECTION;
+        uint32_t facesAt = Be32(s + 120), n = Be16(s + 158);
+        for (uint32_t k = 0; k < n; k++) {
+            const uint8_t *f = c->faces + facesAt + k * FACE;
+            SaturnNativePoly *p = &native[count++];
+            p->textured = 1;
+            /* Original track commands (0.AAA 060143ba, 0601487c) use
+               0x1488 | SPD: the face LUT already contains its lighting. The
+               separate road shade is for ship lighting, not another track tint. */
+            p->mode = 0x1488 | ((Be16(f + 4) & SPD) ? 0x40 : 0);
+            p->corners[0] = 0; p->corners[1] = 1; p->corners[2] = 3; p->corners[3] = 2;
+            const uint8_t *pal = Vri(c, c->palettes + (uint32_t)Be16(f) * 32, 32);
+            const uint8_t *grd = Vri(c, c->gouraud + (uint32_t)Be16(f + 6) * 8, 8);
+            for (int a = 0; a < 16; a++) p->palette[a] = pal ? Be16(pal + 2*a) : 0;
+            for (int a = 0; a < 4; a++) p->gouraud[a] = grd ? Be16(grd + 2*a) : 0x4210;
+        }
+    }
+
+    /* The first 64 track LUTs animate weapon pads, followed by the depleted LUT. */
+    uint16_t weaponPalettes[SATURN_WEAPON_PAD_PALETTES * 16];
+    const uint8_t *bank = Vri(c, c->palettes, sizeof(weaponPalettes));
+    if (bank && c->paletteCount >= SATURN_WEAPON_PAD_PALETTES) {
+        for (size_t i = 0; i < SDL_arraysize(weaponPalettes); i++) {
+            weaponPalettes[i] = Be16(bank + i * 2);
+        }
+    } else {
+        bank = NULL;
+    }
+    SaturnNativeTrack(native, count, bank ? weaponPalettes : NULL);
+    SDL_free(native);
 }
 
 /* track.trv, .trf, .trs, .vew and .tex */
@@ -1474,13 +1513,14 @@ static int Find(const char *path)
 {
     int i, track;
     char tail[32];
+    int trackFile = SDL_sscanf(path, "\\wipeout2\\track%d\\%31s", &track, tail) == 2;
 
     for (i = 0; i < madeCount; i++) {
         if (!strcmp(made[i].path, path)) {
             return i;
         }
     }
-    if (SDL_sscanf(path, "\\wipeout2\\track%d\\%31s", &track, tail) == 2 && !strncmp(tail, "cpoint", 6)) {
+    if (trackFile && !strncmp(tail, "cpoint", 6)) {
         size_t size = 0;
         uint8_t *chk = MakeCheckpoints(track, tail[6] - '0', &size);
 
@@ -1488,8 +1528,7 @@ static int Find(const char *path)
             return Remember(path, chk, size);
         }
     }
-    if (SDL_sscanf(path, "\\wipeout2\\track%d\\%31s", &track, tail) == 2 &&
-        (!strcmp(tail, "track.wad") || !strcmp(tail, "track.tex"))) {
+    if (trackFile && (!strcmp(tail, "track.wad") || !strcmp(tail, "track.tex"))) {
         size_t wadSize = 0, texSize = 0;
         uint8_t *tex = NULL, *wad = MakeTrackWad(track, &wadSize, &tex, &texSize);
         char other[64];
@@ -1560,6 +1599,21 @@ int PortSaturnFileInfo(const char *pathname, int *loc, int *size)
     if (file < 0) {
         printf("saturn.c: no %s yet\n", path);
         return 0;
+    }
+    int track;
+    char tail[32];
+    if (SDL_sscanf(path, "\\wipeout2\\track%d\\%31s", &track, tail) == 2 && !strcmp(tail, "track.wad")) {
+        /* The cached WAD carries immutable model IDs. Restore the race's
+           mutable palettes and sky on both fresh loads and cache hits. */
+        Course c;
+        if (ReadCourse(track, &c)) {
+            MakeNativeTrack(&c);
+            SaturnLoadNativeSky(track);
+        } else {
+            SaturnNativeTrack(NULL, 0, NULL);
+            SaturnNativeSky(NULL, NULL, 0, 0);
+        }
+        FreeCourse(&c);
     }
     *loc = VIRTUAL_LOC + file * VIRTUAL_SPAN;
     *size = (int)made[file].size;

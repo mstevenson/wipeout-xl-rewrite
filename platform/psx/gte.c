@@ -322,6 +322,8 @@ static PastEntry past[PAST_SLOTS];
 static uint32_t pastFrame;       /* the frame whose projections `past` holds */
 static uint32_t cutCheckedFrame; /* the frame the camera cut test was made for */
 static int cut;
+static GtePrecise pastSky;
+static int pastSkyValid;
 
 uint64_t GteKeyMix(uint64_t a, uint64_t b)
 {
@@ -383,12 +385,17 @@ static void KeepPast(void)
     int i;
 
     pastFrame++;
+    pastSkyValid = 0;
     if (!keepPast) {
         return;
     }
     for (i = 0; i < recordCount; i++) {
         PastEntry *entry;
 
+        if (!pastSkyValid && records[i].value.background) {
+            pastSky = records[i].value;
+            pastSkyValid = 1;
+        }
         if (!records[i].value.key || records[i].value.view[2] <= 0.0f || !(entry = PastSlot(records[i].value.key, 1))) {
             continue;
         }
@@ -782,6 +789,18 @@ int GteInterpolate(const GtePrecise *p, float along, GtePrecise *out)
     return 1;
 }
 
+void GteInterpolateSky(const GtePrecise *p, float along, GtePrecise *out)
+{
+    *out = *p;
+    if (!p->background || !keepPast || !pastSkyValid || along >= 1 ||
+        pastFrame != preciseFrame - 1 || CameraCut()) return;
+    /* Take the short path at the heading/roll seam. Pitch is already in the
+       view matrix's principal interval. Do not alter game camera angles. */
+    out->skyYaw += remainderf(pastSky.skyYaw-p->skyYaw,4096)*(1-along);
+    out->skyPitch += (pastSky.skyPitch-p->skyPitch)*(1-along);
+    out->skyRoll += remainderf(pastSky.skyRoll-p->skyRoll,6.28318530718f)*(1-along);
+}
+
 int GteViewAt(const GtePrecise *p, float along, double view[3])
 {
     PastEntry *entry;
@@ -879,6 +898,17 @@ static uint32_t RecordPrecise(uint32_t sxy, float x, float y, float z)
     record->value.z = z;
     record->value.fade = 1.0f;
     record->value.background = backgroundOn;
+    record->value.skyYaw = record->value.skyPitch = record->value.skyRoll = 0;
+    record->value.skyFocal = (float)(uint16_t)gte.control[H];
+    if (backgroundOn) {
+        /* The view matrix already rotates the world opposite the camera.
+           Positive yaw advances the panorama sample, moving its features left. */
+        record->value.skyYaw = atan2f((float)Low16(gte.control[3]), (float)Low16(gte.control[4])) * (4096.0f / (2.0f * 3.141592654f));
+        record->value.skyRoll = atan2f((float)High16(gte.control[0]), (float)Low16(gte.control[2]));
+        /* Saturn's camera pitch has the opposite sign to this view matrix's
+           elevation. Its VDP2 My=120-pitch/3 must move with the projected world. */
+        record->value.skyPitch = -atan2f((float)High16(gte.control[3]), hypotf((float)Low16(gte.control[3]), (float)Low16(gte.control[4]))) * (4096.0f / (2.0f * 3.141592654f));
+    }
     record->value.exact = exactOn;
     record->value.n64 = n64On;
     record->value.key = 0;

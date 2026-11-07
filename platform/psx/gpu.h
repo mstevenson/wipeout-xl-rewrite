@@ -57,9 +57,11 @@ typedef struct GpuVertex {
     int exactDepth; /* ... tested without the slack too (GteSetExactDepth) */
     int n64;       /* material ownership, independent of sampler fallback */
     int world;     /* view-space provenance, even for affine billboards drawn with w == 0 */
+    float saturnShade[3]; /* additive RGB5 offsets, retained at native clipping intersections */
 } GpuVertex;
 
 /* How a primitive is drawn. */
+struct SaturnNativePoly;
 typedef struct GpuDrawState {
     int textured;
     int raw;           /* texture without colour modulation */
@@ -75,6 +77,11 @@ typedef struct GpuDrawState {
     int n64;           /* source encoding, independent of the selected sampler */
     int textureFlags;  /* N64 source flags 0x10/20 mirror S/T, 0x40 wrap */
     int ps1Light;      /* imported road texture with gameplay-authored 128-neutral tint */
+    const struct SaturnNativePoly *saturn;
+    int saturnSky;
+    float skyYaw, skyPitch, skyRoll;
+    float skyFocal;
+
 } GpuDrawState;
 
 int GpuInit(void);

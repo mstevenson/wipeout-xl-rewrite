@@ -21,8 +21,8 @@ int PortTracing(void) { return 0; }
 int PortScreenMargin(void) { return 0; }
 char *PortNearAlloc(int bytes) { assert(bytes <= sizeof(arena)); return arena.bytes; }
 u_long *PortFarSlot(int entry, double depth) { (void)depth; return ordering + entry; }
-void PortTagPrims(const void *first, const void *end, const char *kind, const char *name, int index)
-{ (void)first; (void)end; (void)kind; (void)name; (void)index; }
+void PortTagObjectPrims(const void *first, const void *end, const char *kind, const char *name, uint32_t assetTag, int index)
+{ (void)first; (void)end; (void)kind; (void)name; (void)assetTag; (void)index; }
 void AddPrim(u_long *slot, void *poly) { linked++; packet = poly; packetSlot = slot; }
 void SetPolyGT3(POLY_GT3 *p) { p->code = 0x34; }
 void SetPolyGT4(POLY_GT4 *p) { p->code = 0x3c; }

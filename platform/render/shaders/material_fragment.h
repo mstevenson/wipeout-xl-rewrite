@@ -45,6 +45,9 @@
     "    }\n"
     "    if (mode.z == 1 && blended) discard;\n"
     "    if (mode.z == 2 && !blended) discard;\n"
+#ifdef RENDER_COVERAGE
+    RENDER_COVERAGE
+#endif
     "    col *= fade;\n"
     "    cov *= fade;\n"
     "    if (!blended) fragment = vec4(col, cov);\n"

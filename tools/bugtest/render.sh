@@ -10,14 +10,14 @@ case $(uname -s) in
 esac
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
     -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_n64_shader.c platform/render/renderer.c platform/render/ps1_renderer.c \
-    platform/render/pc_renderer.c platform/render/n64_renderer.c \
+    platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c platform/render/saturn_native.c \
     platform/render/gl_api.c platform/render/gl_program.c platform/render/gl_pipeline.c \
-    platform/render/ps1_gl.c platform/render/pc_gl.c \
+    platform/render/ps1_gl.c platform/render/pc_gl.c platform/render/saturn_gl.c \
     $(pkg-config --libs sdl3) $gl -lm -o "$test_build/n64_shader"
 "$test_build/n64_shader"
 
 # No dead stripping here: each renderer must link and run without the others.
-for profile in ps1 pc n64; do
+for profile in ps1 pc n64 saturn; do
     ${CC:-cc} -O1 -Wno-deprecated-declarations -Iplatform $(pkg-config --cflags sdl3) \
         -DTEST_PIPELINE="${profile}Pipeline" -DTEST_PROFILE="$profile" \
         tools/bugtest/test_renderer_isolation.c "platform/render/${profile}_gl.c" \

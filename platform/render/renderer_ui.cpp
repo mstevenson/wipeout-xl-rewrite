@@ -47,6 +47,27 @@ static bool Ps1Settings(Ps1RenderSettings *s)
     return changed;
 }
 
+static bool SaturnSettings(SaturnRenderSettings *s)
+{
+    bool changed = Check("Saturn vertex snapping", &s->quantizeVertices,
+        "Snaps compatibility geometry to whole console pixels. Native VDP1 draws snap to the selected render resolution.");
+    changed |= Check("Affine texture mapping", &s->affineTextures,
+        "Uses VDP1 quad drawing for native Saturn models and affine mapping for other assets. "
+        "Native Saturn track tiles use their own palettes and perspective-correct mapping. "
+        "Disable to use the compatibility geometry with perspective correction.");
+    changed |= Check("RGB5 colour precision", &s->colourPrecision,
+        "Uses 32 levels per colour channel without dithering. Native VDP1 pixels always use RGB555.");
+    changed |= Check("Checkerboard transparency", &s->mesh,
+        "Uses a console-pixel checkerboard for Saturn mesh effects, including exhaust flares and trails. "
+        "Turn off for smooth transparency; additive light effects contribute half their intensity.");
+    changed |= Check("Depth buffer (enhancement)", &s->depth,
+        "Uses depth testing to reduce draw-order errors. Disabled by default for ordering-table visibility.");
+    changed |= Check("Original Saturn sky scrolling", &s->originalSkyScroll,
+        "Uses the original Saturn game's faster background scrolling on Saturn tracks. "
+        "Disable to match the sky's motion to the world camera.");
+    return changed;
+}
+
 static bool PcSettings(PcRenderSettings *s)
 {
     bool changed = Check("Bilinear texture filtering", &s->bilinear,
@@ -94,6 +115,7 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
     ImGui::SeparatorText(RenderGet(edit)->name);
     ImGui::PushTextWrapPos(0);
     switch (edit) {
+    case RENDER_SATURN: changed |= SaturnSettings(&s->saturn); break;
     case RENDER_PC: changed |= PcSettings(&s->pc); break;
     case RENDER_N64: changed |= N64Settings(&s->n64); break;
     default: changed |= Ps1Settings(&s->ps1); break;
@@ -110,21 +132,21 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
 
 bool RenderSettingsUi(RenderSettings *s)
 {
-    const char *names[] = {"PlayStation", "PC"};
-    RendererId base = s->selection == RENDER_PS1 || s->selection == RENDER_PC
+    const char *names[] = {"PlayStation", "PC", "Sega Saturn"};
+    RendererId base = s->selection == RENDER_PS1 || s->selection == RENDER_PC || s->selection == RENDER_SATURN
         ? s->selection : s->automaticBase;
     bool n64Tracks = s->selection == RENDER_AUTO || s->selection == RENDER_N64;
-    int choice = base == RENDER_PC;
+    int choice = base == RENDER_SATURN ? 2 : base == RENDER_PC;
 
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
-    bool changed = ImGui::Combo("Global renderer", &choice, names, 2);
-    Tooltip("Selects PlayStation-style or PC-style rendering. The N64 override below takes priority on Wipeout 64 "
+    bool changed = ImGui::Combo("Global renderer", &choice, names, 3);
+    Tooltip("Selects PlayStation, PC or Saturn rendering. The N64 override below takes priority on Wipeout 64 "
         "tracks when enabled. Changes rendering only; the loaded game assets stay the same.");
     changed |= ImGui::Checkbox("Use N64 renderer for Wipeout 64 tracks", &n64Tracks);
     Tooltip("Automatically uses the N64 renderer on imported Wipeout 64 tracks. "
         "Disable to use the global renderer on those tracks too. Each renderer keeps its own settings.");
     if (changed) {
-        base = choice ? RENDER_PC : RENDER_PS1;
+        base = choice == 2 ? RENDER_SATURN : choice == 1 ? RENDER_PC : RENDER_PS1;
         /* Retain the existing INI format: Automatic is the track-specific N64 override. */
         s->automaticBase = base;
         s->selection = n64Tracks ? RENDER_AUTO : base;

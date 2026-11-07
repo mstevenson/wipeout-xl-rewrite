@@ -39,6 +39,17 @@ PortSettings portSettings = {.render = RENDER_DEFAULTS};
 static int n64Track;
 int PortOriginalTrackIs64(void) { return n64Track; }
 
+int PortN64TextureInfo(int px,int py,int depth,int cx,int cy,float u,float v,int bounds[4],int *flags)
+{ (void)px;(void)py;(void)depth;(void)cx;(void)cy;(void)u;(void)v;(void)bounds;(void)flags;return 0; }
+
+/* No replacement pack or imported texture registry in this synthetic scene. */
+int HdTexActive(void) { return 0; }
+unsigned HdTexEpoch(void) { return 0; }
+int HdTexImageCount(void) { return 0; }
+const uint8_t *HdTexImage(int image, int *w, int *h) { (void)image;*w=*h=0;return NULL; }
+int HdTexFind(int px,int py,int depth,int cx,int cy,float u0,float v0,float u1,float v1,HdTexHit *hit)
+{ (void)px;(void)py;(void)depth;(void)cx;(void)cy;(void)u0;(void)v0;(void)u1;(void)v1;(void)hit;return 0; }
+
 uint16_t psxVram[VRAM_HEIGHT][VRAM_WIDTH];
 uint16_t psxVramHigh[VRAM_HEIGHT][VRAM_WIDTH];
 
@@ -53,6 +64,7 @@ static uint8_t testAddress;
 static int testPs1Light;
 static float testFade = 1.0f;
 static int testPageX;
+static int testPixelX;
 
 static void Upload(void)
 {
@@ -66,10 +78,12 @@ static void Render(RendererId renderer, int filtered, int depth, float u, float 
 {
     float result[4], expected[4] = {red, green, blue, alpha};
     TestProgram(renderer);
+    glUniform2f(scene->uniformOrigin, testPixelX, 0);
     memset(triangle, 0, sizeof(triangle));
     triangle[1].x = 2; triangle[2].y = 2;
     for (int i = 0; i < 3; i++) {
         BatchVertex *b = &triangle[i];
+        b->x += testPixelX;
         b->w = 1; b->r = b->g = b->b = tint / 255.0f; b->a = testFade;
         b->u = u; b->v = v;
         b->texture[2] = 32; b->texture[3] = 16;
@@ -543,7 +557,474 @@ static void DepthBatches(GLuint fbo, GLuint output, GLuint dummy)
     puts("PC depth batches occlude correctly; PS1 and PC depth toggles are independent: OK");
 }
 
-/* Shared XL UI and effects must use only the N64 profile, including when filters are off. */
+/* Native Saturn pixels use the production batch and scene shader. */
+static void NativeSaturn(void)
+{
+    unsetenv("WIPEOUT_SATURN_VDP2_REFERENCE");
+    RenderSettings saved = portSettings.render;
+    int oldX=areaX,oldY=areaY,oldW=areaW,oldH=areaH;
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.selection = RENDER_SATURN;
+    portSettings.render.saturn.originalSkyScroll = 1; RenderCommit();
+    areaX=0;areaY=100;areaW=8;areaH=8;
+    glDisable(GL_SCISSOR_TEST);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);
+    SaturnNativePoly poly = {.mode=0xc4, .colour=0x800a, .corners={0,1,2,3},
+                            .gouraud={0x4215,0x4215,0x4215,0x4215}};
+    GpuVertex v[4] = {{.x=0,.y=100,.a=255},{.x=7,.y=100,.a=255},
+                     {.x=7,.y=107,.a=255},{.x=0,.y=107,.a=255}};
+    SaturnDraw draw = {.noDepth=1};
+    SaturnVdp1Draw(&poly,v,0,100,8,108,SaturnEmit,NULL,&draw);Flush();
+    float pixels[8*8*4];
+    glReadPixels(0,100,8,8,GL_RGBA,GL_FLOAT,pixels);
+    for(int i=0;i<64;i++) {
+        assert(fabsf(pixels[i*4]-15.0f*(8.0f/255))<.002f);
+        assert(pixels[i*4+1]<.002f && pixels[i*4+2]<.002f);
+    }
+    /* Production composite transport: one overlay instead of a vertex per write.
+       Native/compatibility/native ordering and repeated half blends must survive flushes. */
+    GpuDrawState native={.saturn=&poly};
+    poly.mode=0xc0;poly.colour=0x801f;
+    GpuTriangles(&native,v,4);Flush();
+    glReadPixels(0,100,8,8,GL_RGBA,GL_FLOAT,pixels);
+    for(int i=0;i<64;i++) assert(fabsf(pixels[i*4]-248.0f/255)<.002f && pixels[i*4+1]<.002f);
+    SaturnComposite(NULL,2,102,0xfc00,0,0,255);
+    SaturnComposite(NULL,2,102,0xfc00,0,0,255);
+    Flush();glReadPixels(0,100,8,8,GL_RGBA,GL_FLOAT,pixels);
+    assert(fabsf(pixels[(2*8+2)*4]-62.0f/255)<.01f && fabsf(pixels[(2*8+2)*4+2]-186.0f/255)<.01f);
+    GpuDrawState flat={.semi=-1};
+    GpuVertex cover[3]={{.x=0,.y=100,.g=248,.a=255},{.x=8,.y=100,.g=248,.a=255},
+                       {.x=0,.y=108,.g=248,.a=255}};
+    GpuTriangles(&flat,cover,3);Flush();
+    SaturnComposite(NULL,1,101,0xffff,-2,0,255);Flush();
+    glReadPixels(0,100,8,8,GL_RGBA,GL_FLOAT,pixels);
+    assert(pixels[(1*8+1)*4]<.01f && fabsf(pixels[(1*8+1)*4+1]-124.0f/255)<.01f);
+    assert(saturnRight==0 && saturnBottom==0);
+    uint8_t plane[4]={0,1,2,3};uint16_t palette[256]={0x801f,0x83e0,0xfc00,0xffff};
+    SaturnNativeSky(plane,palette,2,2);
+    for(int screen=0;screen<2;screen++) {
+    areaY=100+256*screen;
+    for(int heading=-3;heading<=3;heading++) for(int pitch=0;pitch<=3;pitch+=3) for(int roll=0;roll<2;roll++) {
+        GpuDrawState sky = {.skyYaw=(float)heading, .skyPitch=(float)pitch, .skyRoll=roll*1.57079632679f};
+        /* Interpolated pictures clear colour/depth without calling GpuClearDepth.
+           Replay several into each screen buffer: each needs a fresh sky. */
+        GpuClearArea(0,areaY,8,8,0,0,0);
+        SaturnBackground(&sky);Flush();
+        glReadPixels(0,areaY,8,8,GL_RGBA,GL_FLOAT,pixels);
+        for(int y=0;y<8;y++) for(int x=0;x<8;x++) {
+            float dx=(x-4)*(352.0f/320),dy=(float)y-4;
+            int sx=(int)floorf((roll ? dy : dx)+176+heading/2)&1;
+            int sy=(int)floorf((roll ? -dx : dy)+240-pitch/3)&1;
+            uint16_t expected=palette[sy*2+sx];
+            for(int c=0;c<3;c++) assert(fabsf(pixels[(y*8+x)*4+c]-((expected>>(5*c))&31)*(8.0f/255))<.002f);
+        }
+    }
+    }
+    /* A non-symmetric panorama catches a reversed yaw (a two-colour wrap cannot).
+       Positive camera yaw must advance the panorama sample, moving it left. */
+    areaY=100;
+    uint8_t ramp[32];uint16_t rampPalette[256]={0};
+    for(int x=0;x<32;x++) { ramp[x]=(uint8_t)x;rampPalette[x]=(uint16_t)(0x8000|x); }
+    SaturnNativeSky(ramp,rampPalette,32,1);
+    for(int turn=-1;turn<=1;turn++) {
+        GpuDrawState sky={.saturnSky=1,.skyYaw=(float)(turn*4)};
+        GpuClearArea(0,areaY,8,8,0,0,0);
+        GpuTriangles(&sky,v,4);Flush();
+        float landmark[4];glReadPixels(4,104,1,1,GL_RGBA,GL_FLOAT,landmark);
+        assert(fabsf(landmark[0]-(16+turn*2)*(8.0f/255))<.002f);
+        /* Replaying another sky polygon in this pass must not cover the world. */
+        poly.colour=0xfc00;GpuTriangles(&native,v,4);
+        GpuTriangles(&sky,v,4);Flush();
+        glReadPixels(4,104,1,1,GL_RGBA,GL_FLOAT,landmark);
+        assert(landmark[0]<.002f && fabsf(landmark[2]-248.0f/255)<.002f);
+    }
+    /* Original 0.AAA: RBG0 Xst/Yst=0, DX/DYst=1, kx/ky=1,
+       C=P=(176,120), Mx=heading/2, My=120-pitch/3. Mednafen's original
+       Phenitia Park state confirms HRes=1 (352 dots), VRes=1 (240 lines).
+       On the port's 320-dot scene, every ten X pixels span eleven Saturn
+       dots. Test full-sized, asymmetric data so periodic tiny patterns cannot
+       hide reversed signs, doubled angular rates or incorrect viewport scale. */
+    uint8_t *panorama=malloc(2048*512);
+    float *frame=malloc(320*240*4*sizeof(float));
+    assert(panorama && frame);
+    for(int i=0;i<256;i++) rampPalette[i]=(uint16_t)(0x8000|(i&31)|((i>>5)<<7));
+    for(int y=0;y<512;y++) for(int x=0;x<2048;x++)
+        panorama[y*2048+x]=(uint8_t)(x*13+y*29+(x>>5)*7+(y>>3)*11);
+    SaturnNativeSky(panorama,rampPalette,2048,512);
+    areaX=0;areaW=320;areaH=240;
+    for(int screen=0;screen<2;screen++) {
+        areaY=screen*256;
+        for(int heading=-704;heading<=704;heading+=704) for(int pitch=-360;pitch<=360;pitch+=360) {
+            GpuDrawState sky={.saturnSky=1,.skyYaw=(float)heading,.skyPitch=(float)pitch};
+            GpuClearArea(0,areaY,320,240,0,0,0);
+            GpuTriangles(&sky,v,4);Flush();
+            glReadPixels(0,areaY,320,240,GL_RGBA,GL_FLOAT,frame);
+            for(int y=0;y<240;y+=7) for(int x=0;x<320;x+=10) {
+                int sx=(x/10*11+heading/2)&2047,sy=(y+120-pitch/3)&511;
+                uint16_t expected=rampPalette[panorama[sy*2048+sx]];
+                for(int c=0;c<3;c++) {
+                    if(fabsf(frame[(y*320+x)*4+c]-((expected>>(5*c))&31)*(8.0f/255))>=.002f)
+                        fprintf(stderr,"Saturn sky screen=%d heading=%d pitch=%d xy=%d,%d source=%d,%d channel=%d got=%f expected=%f\n",
+                            screen,heading,pitch,x,y,sx,sy,c,frame[(y*320+x)*4+c],((expected>>(5*c))&31)*(8.0f/255));
+                    assert(fabsf(frame[(y*320+x)*4+c]-((expected>>(5*c))&31)*(8.0f/255))<.002f);
+                }
+            }
+        }
+    }
+    portSettings.render.saturn.originalSkyScroll = 0; RenderCommit();
+    /* Independent forward projection of a fixed world landmark. The sky must
+       put it at the same pixel as world geometry, including off-axis views,
+       combined pitch/roll, alternate focal lengths and a complete yaw turn. */
+    for(int scene=0;scene<2;scene++) for(int turn=-1;turn<=1;turn++) for(int bank=0;bank<2;bank++) {
+        const float radians=6.28318530718f/4096;
+        float bearing=scene ? 2010 : 100, elevation=60;
+        float yaw=(scene ? 2048 : 0)+turn*180, pitch=bank ? 90 : 0, roll=bank ? .25f : 0;
+        float focal=scene ? 240 : 160;
+        memset(panorama,0,2048*512);
+        int sx=(int)floorf(176+bearing/2),sy=(int)floorf(240+elevation/3);
+        for(int y=-3;y<=3;y++) for(int x=-3;x<=3;x++)
+            panorama[((sy+y)&511)*2048+((sx+x)&2047)]=1;
+        uint16_t markPalette[256]={0x8000,0x801f};
+        SaturnNativeSky(panorama,markPalette,2048,512);
+        /* Forward world-to-view rotation: Ry(-heading), Rx(-skyPitch),
+           Rz(-roll), followed by the production world's focal*x/z. */
+        float x=sinf((bearing-yaw)*radians)*cosf(elevation*radians);
+        float y=sinf(elevation*radians),z=cosf((bearing-yaw)*radians)*cosf(elevation*radians);
+        float yp=cosf(pitch*radians)*y+sinf(pitch*radians)*z;
+        z=-sinf(pitch*radians)*y+cosf(pitch*radians)*z;
+        float xp=cosf(roll)*x+sinf(roll)*yp;
+        yp=-sinf(roll)*x+cosf(roll)*yp;
+        int px=(int)roundf(160+focal*xp/z),py=(int)roundf(120+focal*yp/z);
+        assert(px>=0 && px<320 && py>=0 && py<240);
+        areaY=scene*256;
+        for(int revolution=-1;revolution<=1;revolution++) {
+            GpuDrawState sky={.saturnSky=1,.skyYaw=yaw+revolution*4096,
+                .skyPitch=pitch,.skyRoll=roll,.skyFocal=focal};
+            GpuClearArea(0,areaY,320,240,0,0,0);
+            GpuTriangles(&sky,v,4);Flush();
+            float pixel[4];glReadPixels(px,areaY+py,1,1,GL_RGBA,GL_FLOAT,pixel);
+            assert(fabsf(pixel[0]-248.0f/255)<.002f && pixel[1]<.002f && pixel[2]<.002f);
+        }
+    }
+    free(frame);free(panorama);
+    SaturnNativeSky(NULL,NULL,0,0);saturnSkyDrawn=0;
+    areaX=oldX;areaY=oldY;areaW=oldW;areaH=oldH;
+    portSettings.render=saved;RenderCommit();memset(pictureOwners,0,sizeof(pictureOwners));
+    BindTarget();
+    assert(glGetError()==GL_NO_ERROR);
+    puts("Saturn production pixels: native quad additive RGB555 and full-resolution VDP2 plane wrapping/heading/pitch/roll: OK");
+    puts("Saturn sky landmarks follow world projection through yaw/pitch/roll, focal changes and full-turn wrapping: OK");
+}
+
+
+static float saturnExpected[128][128][3];
+static int SaturnOracleIndex(void *user,float u,float v)
+{
+    SaturnDraw *draw=user;
+    return SaturnSampleIndex(draw,u,v);
+}
+static void SaturnOraclePixel(void *user,int x,int y,uint16_t rgb,int blend,float depth,uint8_t alpha)
+{
+    SaturnDraw *draw=user;
+    (void)depth;
+    assert(x>=0 && x<64*scale && y>=100*scale && y<164*scale);
+    if(scale>1 && (draw->source.saturn->mode&0x100) && ((x/scale+y/scale)&1)) return;
+    float a=alpha/255.0f;
+    if(blend==0 || blend==-2) a*=.5f;
+    for(int c=0;c<3;c++) {
+        float src=blend==-2 ? 0 : ((rgb>>(5*c))&31)*(8.0f/255);
+        float *out=&saturnExpected[y-100*scale][x][c];
+        *out=src*a+*out*(1-a);
+        /* The GL target rounds each ordered write to RGBA8. */
+        *out=roundf(*out*255)/255;
+    }
+}
+static void SaturnGpuReference(void)
+{
+    RenderSettings saved=portSettings.render;
+    int ox=areaX,oy=areaY,ow=areaW,oh=areaH;
+    portSettings.render=(RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.selection=RENDER_SATURN;RenderCommit();
+    areaX=0;areaY=100;areaW=areaH=64;
+    GLuint oldFramebuffer=framebuffer,testTexture,testDepth;
+    int oldScale=scale;
+    glGenFramebuffers(1,&framebuffer);glGenTextures(1,&testTexture);
+    glBindFramebuffer(GL_FRAMEBUFFER,framebuffer);
+    glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,testTexture);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,VRAM_WIDTH*2,VRAM_HEIGHT*2,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
+    glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,testTexture,0);
+    testDepth=DepthFor(VRAM_WIDTH*2,VRAM_HEIGHT*2);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE);
+    uint8_t texture[64];
+    for(int i=0;i<64;i++) texture[i]=(uint8_t)((i*7+i/8)&15);
+    SaturnNativePoly poly={.colour=0xa56a,.corners={0,1,2,3},.width=8,.height=8,.pixels=texture,
+        .gouraud={0x4210,0x7fef,0x1084,0x5294}};
+    for(int i=0;i<16;i++) poly.palette[i]=(uint16_t)(0x8000|(i*2)|((31-i)<<5)|((i+4)<<10));
+    const float shapes[][8]={
+        {4,104,47,104,47,147,4,147}, {30,99,60,130,30,160,0,130},
+        {-20,110,52,103,44,151,9,162}, {5,105,54,109,48,154,5,105},
+        {4,104,40,104,40,104,4,151}, {22,122,22,122,22,122,22,122},
+        {54,103,8,111,4,153,49,147}, {5,105,50,150,50,105,5,150},
+        {4,112,55,112,55,112,4,112}, {20,103,20,158,20,158,20,103}
+    };
+    const int modes[]={0xc0,0xc4,0xc8,0xcc,0x1cc,0xc1,0xc2,0xc3,0xc7,0x08};
+    /* The production road path samples packed compatibility VRAM with windows;
+       models sample the immutable native index atlas. Exercise both. */
+    for(int y=0;y<64;y++) for(int x=0;x<16;x++) {
+        uint16_t word=0;
+        for(int n=0;n<4;n++) word |= ((x*4+n+y*3)&15)<<(n*4);
+        psxVram[y+256][x+128]=word;
+    }
+    vramDirty=1;
+    unsigned checked=0;
+    for(scale=1;scale<=2;scale++) {
+    for(int path=0;path<3;path++)
+    for(size_t shape=0;shape<sizeof(shapes)/sizeof(shapes[0]);shape++) {
+        for(size_t mode=0;mode<sizeof(modes)/sizeof(modes[0]);mode++) {
+            GpuVertex v[4]={0}, scaled[4];
+            poly.mode=modes[mode];poly.textured=(mode>=2 && mode<=4) || mode==9;
+            poly.pixels=path==1 ? NULL : texture;
+            poly.clipped=path==2;poly.vertexAttributes=path==2;
+            for(int k=0;k<4;k++) v[k]=(GpuVertex){.x=shapes[shape][k*2]+.5f,.y=shapes[shape][k*2+1],
+                .w=100,.a=255,.u=k==1 || k==2 ? 31:0,.v=k>=2?31:0};
+            if(path==2) for(int k=0;k<4;k++) {
+                v[k].x+=.125f;v[k].y+=.25f;
+                v[k].u=(k==1 || k==2) ? 7.0f : 0;v[k].v=k>=2 ? 7.0f : 0;
+                for(int c=0;c<3;c++) v[k].saturnShade[c]=(poly.gouraud[k]>>(5*c))&31;
+                v[k].a=128+k*30;
+            }
+            Flush();glDisable(GL_SCISSOR_TEST);glClearColor(24/255.0f,48/255.0f,72/255.0f,1);
+            glClear(GL_COLOR_BUFFER_BIT);BindTarget();
+            for(int k=0;k<4;k++) {
+                scaled[k]=v[k];
+                scaled[k].x*=scale;scaled[k].y*=scale;
+            }
+            for(int y=0;y<64*scale;y++) for(int x=0;x<64*scale;x++) for(int c=0;c<3;c++)
+                saturnExpected[y][x][c]=(c+1)*24/255.0f;
+            GpuDrawState state={.saturn=&poly,.pageX=128,.pageY=256,.windowMaskX=1,.windowMaskY=2,
+                .windowOffsetX=1,.windowOffsetY=2};
+            SaturnDraw oracle={.source=state};
+            SaturnNativePoly scaledPoly=poly;
+            /* Rasterize on the finer grid, then apply the original dot mask in the callback. */
+            if(scale>1) scaledPoly.mode &= ~0x100;
+            SaturnVdp1Draw(&scaledPoly,scaled,0,100*scale,64*scale,164*scale,SaturnOraclePixel,SaturnOracleIndex,&oracle);
+            GpuTriangles(&state,v,4);
+            assert(RenderSaturnQuadsPending() && batchCount==0 && saturnRight==0);
+            Flush();
+            uint8_t actual[128*128*4];glReadPixels(0,100*scale,64*scale,64*scale,GL_RGBA,GL_UNSIGNED_BYTE,actual);
+            for(int y=0;y<64*scale;y++) for(int x=0;x<64*scale;x++) for(int c=0;c<3;c++) {
+                int expected=(int)lroundf(saturnExpected[y][x][c]*255);
+                int got=actual[(y*64*scale+x)*4+c];
+                if(abs(got-expected)>2) {
+                    fprintf(stderr,"Saturn GPU/reference mismatch scale %d path %d shape %zu mode %x at %d,%d ch %d: %d vs %d\n",
+                        scale,path,shape,poly.mode,x,y,c,got,expected);abort();
+                }
+                checked++;
+            }
+        }
+    }
+    }
+    scale=2;
+    /* The smooth Saturn profile uses compatibility Gouraud rays. Their dim
+       edges must add to the flare centre and blue trail, never erase them. */
+    for(int mesh=0;mesh<2;mesh++) {
+        portSettings.render.saturn.mesh=mesh;
+        portSettings.render.saturn.affineTextures=0;
+        portSettings.render.saturn.colourPrecision=0;
+        RenderCommit();
+        GpuVertex effect[3]={{.x=0,.y=100,.w=100,.a=255},
+                             {.x=16,.y=100,.w=100,.a=255},
+                             {.x=0,.y=116,.w=100,.a=255}};
+        GpuDrawState shadow={.semi=0},light={.semi=1};
+        GpuClearArea(0,100,64,64,32,16,8);
+        GpuTriangles(&shadow,effect,3);
+        for(int k=0;k<3;k++) effect[k].b=255;
+        GpuTriangles(&light,effect,3);Flush();
+        uint8_t pixels[4*4*4];
+        glReadPixels(0,200,4,4,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+        for(int y=0;y<4;y++) for(int x=0;x<4;x++) {
+            int dot=((x/2+y/2)&1)==0;
+            const uint8_t *pixel=&pixels[(y*4+x)*4];
+            int r=mesh ? (dot ? 0:32) : 16;
+            int g=mesh ? (dot ? 0:16) : 8;
+            int b=mesh ? (dot ? 255:8) : 132;
+            assert(abs(pixel[0]-r)<=1 && abs(pixel[1]-g)<=1 && abs(pixel[2]-b)<=1);
+        }
+        for(int k=0;k<3;k++) effect[k].r=effect[k].g=255;
+        GpuTriangles(&light,effect,3);
+        for(int k=0;k<3;k++) { effect[k].r=effect[k].g=0;effect[k].b=16; }
+        GpuTriangles(&light,effect,3);Flush();
+        glReadPixels(0,200,4,4,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+        for(int y=0;y<4;y++) for(int x=0;x<4;x++) {
+            int dot=((x/2+y/2)&1)==0;
+            const uint8_t *pixel=&pixels[(y*4+x)*4];
+            int r=mesh ? (dot ? 255:32) : 144;
+            int g=mesh ? (dot ? 255:16) : 136;
+            int b=mesh ? (dot ? 255:8) : 255;
+            assert(abs(pixel[0]-r)<=1 && abs(pixel[1]-g)<=1 && abs(pixel[2]-b)<=1);
+        }
+    }
+    portSettings.render.saturn.affineTextures=1;
+    portSettings.render.saturn.colourPrecision=1;
+    RenderCommit();
+    puts("Saturn compatibility effects retain blue over shadows and bright overlapping flare centres: OK");
+    /* Both transparency modes on the compatibility trail and native textured flare.
+       Half of the flare's source image uses the transparent texture index. */
+    GpuVertex trail[3]={{.x=0,.y=100,.w=100,.g=255,.a=255},
+                       {.x=16,.y=100,.w=100,.g=255,.a=255},
+                       {.x=0,.y=116,.w=100,.g=255,.a=255}};
+    GpuDrawState additive={.semi=1};
+    uint8_t flareTexels[]={1,0};
+    SaturnNativePoly flarePoly={.mode=0x188,.corners={0,1,2,3},.width=2,.height=1,
+        .textured=1,.pixels=flareTexels,.palette={[1]=0x801f}};
+    GpuDrawState flareDraw={.saturn=&flarePoly};
+    GpuVertex flareQuad[4]={{.x=0,.y=100,.w=100,.a=255},{.x=7,.y=100,.w=100,.a=255},
+                          {.x=7,.y=107,.w=100,.a=255},{.x=0,.y=107,.w=100,.a=255}};
+    SDL_Environment *env=SDL_GetEnvironment();
+    for(int reference=0;reference<2;reference++) {
+        assert(SDL_SetEnvironmentVariable(env,"WIPEOUT_SATURN_REFERENCE",reference ? "1" : "0",true));
+        for(int mesh=0;mesh<2;mesh++) {
+            portSettings.render.saturn.mesh=mesh;RenderCommit();
+            GpuClearArea(0,100,64,64,0,0,255);
+            GpuTriangles(&additive,trail,3);
+            GpuTriangles(&flareDraw,flareQuad,4);Flush();
+            uint8_t pixels[12*4*4];glReadPixels(0,200,12,4,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+            for(int y=0;y<4;y++) for(int x=0;x<12;x++) {
+                int dot=((x/2+y/2)&1)==0;
+                int flareTexel=x<8;
+                const uint8_t *pixel=&pixels[(y*12+x)*4];
+                int red=mesh ? (dot && flareTexel ? 248 : 0) : (flareTexel ? 124 : 0);
+                int green=mesh ? (dot && !flareTexel ? 248 : 0) : (flareTexel ? 62 : 124);
+                int blue=mesh ? (dot && flareTexel ? 0 : 255) : (flareTexel ? 128 : 255);
+                assert(abs(pixel[0]-red)<=1 && abs(pixel[1]-green)<=1 && abs(pixel[2]-blue)<=1);
+            }
+        }
+        /* Alpha mesh can test depth, but must leave later draws free to write. */
+        portSettings.render.saturn.mesh=0;
+        portSettings.render.saturn.depth=1;RenderCommit();
+        GpuClearArea(0,100,64,64,0,0,0);
+        GpuClearDepth(0,100,64,64);
+        GpuTriangles(&flareDraw,flareQuad,4);
+        SaturnNativePoly solid={.mode=0xc0,.colour=0xfc00,.corners={0,1,2,3}};
+        GpuDrawState solidDraw={.saturn=&solid};
+        GpuVertex behind[4];memcpy(behind,flareQuad,sizeof(behind));
+        for(int k=0;k<4;k++) behind[k].w=200;
+        GpuTriangles(&solidDraw,behind,4);Flush();
+        uint8_t pixel[4];glReadPixels(1,201,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel);
+        assert(pixel[0]==0 && pixel[1]==0 && pixel[2]==248);
+        portSettings.render.saturn.depth=0;RenderCommit();
+    }
+    assert(SDL_UnsetEnvironmentVariable(env,"WIPEOUT_SATURN_REFERENCE"));
+    /* Adjacent framebuffer samples inside one console pixel can see distinct
+       panorama texels. The literal RBG0 reference still samples one dot. */
+    uint8_t ramp[32];uint16_t palette[256]={0};
+    for(int x=0;x<32;x++) { ramp[x]=(uint8_t)x;palette[x]=(uint16_t)(0x8000|x); }
+    SaturnNativeSky(ramp,palette,32,1);
+    for(int reference=0;reference<2;reference++) {
+        if(reference) setenv("WIPEOUT_SATURN_VDP2_REFERENCE","1",1);
+        GpuDrawState sky={.saturnSky=1,.skyFocal=160};
+        GpuClearArea(0,100,64,64,0,0,0);
+        SaturnBackground(&sky);
+        float samples[8];glReadPixels(64,264,2,1,GL_RGBA,GL_FLOAT,samples);
+        assert(fabsf(samples[0]-16.0f*(8.0f/255))<.002f);
+        assert(fabsf(samples[4]-(reference ? 16.0f : 17.0f)*(8.0f/255))<.002f);
+    }
+    unsetenv("WIPEOUT_SATURN_VDP2_REFERENCE");
+    SaturnNativeSky(NULL,NULL,0,0);saturnSkyDrawn=0;
+    /* Several command-buffer turnovers must retain ordering. */
+    portSettings.render.saturn.depth=0;RenderCommit();
+    SaturnNativePoly flat={.mode=0xc0,.corners={0,1,2,3}};
+    GpuVertex square[4]={{.x=4,.y=104,.w=100,.a=255},{.x=20,.y=104,.w=100,.a=255},
+                         {.x=20,.y=120,.w=100,.a=255},{.x=4,.y=120,.w=100,.a=255}};
+    GpuDrawState native={.saturn=&flat};
+    for(int i=0;i<130;i++) { flat.colour=i==129 ? 0xfc00 : 0x801f;GpuTriangles(&native,square,4); }
+    Flush();float pixel[4];glReadPixels(10*scale,110*scale,1,1,GL_RGBA,GL_FLOAT,pixel);
+    assert(fabsf(pixel[2]-248.0f/255)<.002f && pixel[0]<.01f);
+    /* With depth disabled draw order wins; with it enabled the nearer quad wins,
+       in either order. A preceding half blend must not disable later depth writes. */
+    for(int enabled=0;enabled<2;enabled++) for(int reverse=0;reverse<2;reverse++) {
+        portSettings.render.saturn.depth=enabled;RenderCommit();
+        BindTarget();glDisable(GL_SCISSOR_TEST);glDepthMask(GL_TRUE);
+        glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+        flat.mode=0xc3;flat.colour=0xffff;
+        for(int k=0;k<4;k++) square[k].w=200;
+        GpuTriangles(&native,square,4);
+        flat.mode=0xc0;
+        for(int i=0;i<2;i++) {
+            int near=(i==0)^reverse;
+            flat.colour=near ? 0x801f : 0x83e0;
+            for(int k=0;k<4;k++) square[k].w=near ? 80 : 160;
+            GpuTriangles(&native,square,4);
+        }
+        Flush();glReadPixels(10*scale,110*scale,1,1,GL_RGBA,GL_FLOAT,pixel);
+        assert(fabsf(pixel[(enabled || reverse) ? 0 : 1]-248.0f/255)<.002f);
+        assert(pixel[(enabled || reverse) ? 1 : 0]<.01f);
+    }
+    /* At the midpoint a receding native surface is at z=182, so it hides
+       compatibility geometry at z=300 even though linear view z gives 550. */
+    GpuDrawState compatibility={.semi=-1};
+    GpuVertex overlap[3]={{.x=4,.y=104,.w=300,.g=248,.a=255},
+                          {.x=30,.y=104,.w=300,.g=248,.a=255},
+                          {.x=4,.y=130,.w=300,.g=248,.a=255}};
+    square[0].w=square[3].w=100;
+    square[1].w=square[2].w=1000;
+    flat.colour=0x801f;
+    for(int reference=0;reference<2;reference++) {
+        assert(SDL_SetEnvironmentVariable(env,"WIPEOUT_SATURN_REFERENCE",reference ? "1" : "0",true));
+        for(int clipped=0;clipped<2;clipped++) {
+            flat.clipped=clipped;
+            flat.corners[3]=clipped ? 0 : 3;
+            GpuClearArea(0,100,64,64,0,0,0);
+            GpuTriangles(&native,square,clipped ? 3 : 4);Flush();
+            glReadPixels(12*scale,108*scale,1,1,GL_DEPTH_COMPONENT,GL_FLOAT,pixel);
+            assert(fabsf(pixel[0]-(1.0f-.5f/100-.5f/1000))<.00001f);
+            GpuTriangles(&compatibility,overlap,3);Flush();
+            glReadPixels(12*scale,108*scale,1,1,GL_RGBA,GL_FLOAT,pixel);
+            assert(fabsf(pixel[0]-248.0f/255)<.002f && pixel[1]<.01f);
+        }
+    }
+    assert(SDL_UnsetEnvironmentVariable(env,"WIPEOUT_SATURN_REFERENCE"));
+    puts("Saturn sloped quads and clipped triangles share reciprocal depth with compatibility geometry: OK");
+
+    SaturnNativePoly road={.textured=1,.trackTile=1,.mode=0xc0,.corners={0,1,3,2}};
+    GpuDrawState roadDraw={.saturn=&road,.pageX=128,.pageY=256};
+    GpuVertex tile[4]={{.x=0,.y=104,.w=100,.a=255},
+                       {.x=32,.y=104,.w=1000,.a=255,.u=31},
+                       {.x=0,.y=136,.w=100,.a=255},
+                       {.x=32,.y=136,.w=1000,.a=255,.u=31}};
+    for (int i=0;i<16;i++) road.palette[i]=(uint16_t)(0x8000 | i);
+    for (int i=0;i<8;i++) psxVram[256][128+i]=(uint16_t)(0x3210 + (i%4)*0x4444);
+    vramDirty=1;
+    portSettings.render.saturn.depth=0;RenderCommit();
+    for (int reference=0;reference<2;reference++) {
+        assert(SDL_SetEnvironmentVariable(env,"WIPEOUT_SATURN_REFERENCE",reference ? "1" : "0",true));
+        for (int clipped=0;clipped<2;clipped++) {
+            road.clipped=clipped;
+            road.corners[2]=clipped ? 2 : 3;
+            road.corners[3]=clipped ? 0 : 2;
+            GpuClearArea(0,100,64,64,0,0,0);
+            GpuTriangles(&roadDraw,tile,clipped ? 3 : 4);Flush();
+            glReadPixels(16*scale,108*scale,1,1,GL_RGBA,GL_FLOAT,pixel);
+            /* Perspective UV samples index 2. Affine UV would sample index 15. */
+            assert(fabsf(pixel[0]-2.0f*(8.0f/255))<.003f);
+        }
+    }
+    assert(SDL_UnsetEnvironmentVariable(env,"WIPEOUT_SATURN_REFERENCE"));
+    road.clipped=0;road.corners[2]=3;road.corners[3]=2;
+    tile[2].x=-100000;tile[3].x=100000;
+    for (int i=0;i<4;i++) tile[i].u=2;
+    GpuClearArea(0,100,64,64,0,0,0);
+    GpuTriangles(&roadDraw,tile,4);Flush();
+    glReadPixels(16*scale,124*scale,1,1,GL_RGBA,GL_FLOAT,pixel);
+    assert(fabsf(pixel[0]-2.0f*(8.0f/255))<.003f);
+    puts("Saturn road tiles retain perspective UVs and clip oversized projections to the viewport: OK");
+    glDeleteFramebuffers(1,&framebuffer);glDeleteTextures(1,&testTexture);glDeleteRenderbuffers(1,&testDepth);
+    framebuffer=oldFramebuffer;scale=oldScale;
+    areaX=ox;areaY=oy;areaW=ow;areaH=oh;
+    portSettings.render=saved;RenderCommit();memset(pictureOwners,0,sizeof(pictureOwners));BindTarget();
+    assert(glGetError()==GL_NO_ERROR);
+    printf("Saturn GPU forward quads vs software reference: %u channel comparisons, coverage/collapsed/reversed/mesh/end-codes/shading/blending/VRAM/clipping/fades/scaling/depth/batch ordering: OK\n",checked);
+}
+
 static void N64SharedMaterials(void)
 {
     RenderSettings saved = portSettings.render;
@@ -1187,6 +1668,52 @@ static void ViResampling(void)
     puts("N64 VI bypass: native-size scene textures, offset destinations, resized readback and flipped presentation match the old RGBA output: OK");
 }
 
+static void SaturnPresentation(void)
+{
+    /* Direct sRGB presentation preserves scene bytes, including dark detail. */
+    uint8_t source[40*4*4], pixels[64*4*4], unchanged[sizeof(source)];
+    memset(source,255,sizeof(source));
+    for(int y=1;y<3;y++) for(int x=0;x<32;x++) {
+        uint8_t *p=&source[(y*40+x+4)*4];
+        p[0]=x*8;p[1]=(31-x)*8;p[2]=(y==1 ? x*8 : 255);
+    }
+    GLuint input,output;
+    GLuint raw=ViTarget(&input,40,4,source), destination=ViTarget(&output,70,10,NULL);
+    RenderSettings settings=RENDER_DEFAULTS;
+    GLint previous;
+    glGetIntegerv(GL_CURRENT_PROGRAM,&previous);
+    for(int race=0;race<2;race++) for(int scale=1;scale<=2;scale++) for(int flip=0;flip<4;flip++) {
+        int w=32*scale,h=2*scale;
+        RenderPresent p={.texture=input,.framebuffer=raw,.scale=scale,.race=race,
+            .left=4,.top=1,.right=36,.bottom=3,
+            .x0=3+((flip&1)?w:0),.y0=2+((flip&2)?h:0),
+            .x1=3+((flip&1)?0:w),.y1=2+((flip&2)?0:h)};
+        /* Repeat without changing the input: presentation must not compound. */
+        for(int repeat=0;repeat<2;repeat++) {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,destination);
+            saturnPipeline.present(&settings.saturn,&p);
+            GLint current;glGetIntegerv(GL_CURRENT_PROGRAM,&current);assert(current==previous);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,destination);
+            glReadPixels(3,2,w,h,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+            for(int y=0;y<h;y++) for(int x=0;x<w;x++) {
+                int sx=(flip&1) ? 31-x/scale : x/scale;
+                int sy=(flip&2) ? 1-y/scale : y/scale;
+                const uint8_t *q=&pixels[(y*w+x)*4];
+                assert(q[0]==sx*8 && q[1]==(31-sx)*8);
+                assert(q[2]==(sy ? 255:sx*8) && q[3]==255);
+                if(sx==0) assert(q[0]==0);
+            }
+        }
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,raw);
+    glReadPixels(0,0,40,4,GL_RGBA,GL_UNSIGNED_BYTE,unchanged);
+    assert(!memcmp(source,unchanged,sizeof(source)));
+    glDeleteTextures(1,&input);glDeleteTextures(1,&output);
+    glDeleteFramebuffers(1,&raw);glDeleteFramebuffers(1,&destination);
+    assert(glGetError()==GL_NO_ERROR);
+    puts("Saturn direct sRGB presentation: black/white, all RGB5 levels, crops, nearest scaling, flips and unchanged source: OK");
+}
+
 /* Real ownership transitions and cache invalidation, without shader-test shortcuts. */
 static void RendererLifecycle(void)
 {
@@ -1481,6 +2008,30 @@ int main(void)
     Render(RENDER_PC, 2, 0, 1, 1, 128, 3, 0, half, half / 4, 0, .5f);
     Render(RENDER_PC, 2, 0, 1, 1, 128, 2, 1, half, 0, 0, .5f);
     Render(RENDER_PC, 2, 0, 1, 1, 128, 2, 2, 0, half, 0, 0);
+    /* Saturn uses undithered RGB555 and replaces world translucency with native-pixel mesh. */
+    testShade = SHADE_PS1_COLOUR | SHADE_AFFINE_COLOUR | SHADE_AFFINE_UV;
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 0, 0, 0, full, 0, 1);
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 0, 1, 0, 0, 0, 0); /* opaque pass excludes semi */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 0, 2, 0, full, 0, 1);
+    testPixelX = 1;
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 0, 2, 0, 0, 0, 0); /* alternate native pixel */
+    Render(RENDER_SATURN, 3, 0, 0, 0, 128, 0, 1, full, 0, 0, 1); /* opaque texel survives */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 1, 0, 0, 0, 0, 0); /* additive mesh gap */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 3, 0, 0, 0, 0, 0); /* quarter-additive mesh gap */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0); /* ship shadow mesh gap */
+    testPixelX = 0;
+    Render(RENDER_SATURN, RENDER_SAMPLE_SATURN_ALPHA, 0, 1, 0, 128, 0, 0, 0, half, 0, .5f);
+    Render(RENDER_SATURN, RENDER_SAMPLE_SATURN_ALPHA, 0, 1, 0, 128, 3, 0, 0, full / 8, 0, 0);
+    Render(RENDER_SATURN, RENDER_SAMPLE_SATURN_ALPHA, 0, 1, 0, 0, 0, 0, 0, 0, 0, .5f); /* ship shadow alpha */
+    Render(RENDER_SATURN, RENDER_SAMPLE_SATURN_ALPHA, 0, 0, 0, 128, 1, 0, full, 0, 0, 1); /* opaque texel */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 1, 0, 0, full, 0, 0); /* additive mesh dot */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 3, 0, 0, full / 4, 0, 0); /* quarter-additive mesh dot */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0); /* black additive sample contributes nothing */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1); /* ship shadow mesh dot */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 2, 2, 0, full, 0, 0); /* other subtractive effects */
+    Render(RENDER_SATURN, 3, 0, 1, 0, 128, 0, 3, 0, 0, 0, 0); /* semi does not write depth */
+    Render(RENDER_SATURN, 0, 0, 1, 0, 100, -1, 0, 0, 192.0f / 255, 0, 1);
+    testShade = 0;
     palette[2] &= 0x7fff; words[63] = words[1024 + 63] = 0x2100;
     bounds[0] = 254; bounds[2] = 255; Upload();
     Render(RENDER_N64, 1, 0, 255.5f, 0, 128, -1, 0, 0, full, 0, 1); /* clamp before page wrap */
@@ -1501,6 +2052,8 @@ int main(void)
     N64GameplayLight();
     N64SaturatedLight();
     DepthBatches(fbo, output, dummy);
+    NativeSaturn();
+    SaturnGpuReference();
     N64SharedMaterials();
     WorldDithering();
     MainMenuColour();
@@ -1510,6 +2063,7 @@ int main(void)
     ViFiltering();
     ViPasses();
     ViResampling();
+    SaturnPresentation();
     RendererLifecycle();
     ScreenBufferOwnership();
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();

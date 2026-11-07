@@ -37,6 +37,8 @@ typedef struct GtePrecise {
     float x, y;  /* screen position, in the game's 320x240 units */
     float z;     /* view-space depth (for perspective-correct texturing) */
     float fade;  /* the port's distance fade: 1 opaque .. 0 gone */
+    float skyYaw, skyPitch, skyRoll; /* captured camera pose: yaw/pitch in 4096/turn, roll in radians */
+    float skyFocal; /* focal length of the world projection, in scene pixels */
     int background; /* projected while GteSetBackground was on: behind everything (the depth buffer leaves it out) */
     int exact;      /* ... while GteSetExactDepth was on: depth tested without the slack */
     int n64;        /* imported object, including its untextured polygons */
@@ -118,6 +120,8 @@ void GteKeepPast(int on);
    1 when *out was made, 0 when there is nothing to go by (no key, not in the frame before, too near, or the
    view jumped: a camera cut). */
 int GteInterpolate(const GtePrecise *p, float along, GtePrecise *out);
+/* Sky camera pose between game frames, sharing the world's camera-cut guard. */
+void GteInterpolateSky(const GtePrecise *p, float along, GtePrecise *out);
 /* A vertex's view-space position in the picture drawn: the frame's own (along >= 1) or `along` of the way from the
    frame before, as GteInterpolate places it but at any depth, also behind the camera (a polygon there is clipped at
    GteNearPlane, libgpu.c). 0 when the vertex has no view-space position. */
