@@ -36,7 +36,7 @@ int main(void)
     SDL_GLContext context = SDL_GL_CreateContext(window);
     assert(context);
     portSettings.renderScale = 1;
-    assert(RenderStart(window));
+    assert(RenderStartBackend(window, RENDER_OPENGL));
     assert(GpuInit());
     if (SDL_getenv("WIPEOUT_TEST_METAL")) {
         assert(RenderRequestBackend(RENDER_METAL));

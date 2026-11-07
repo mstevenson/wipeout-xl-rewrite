@@ -67,7 +67,8 @@ int PortVideoInit(void)
             SDL_Log("second player: %s", SDL_GetError());
             return 0;
         }
-        if (!RenderStart(window)) {
+        /* This offscreen producer uses the host's OpenGL context on its worker thread. */
+        if (!RenderStartBackend(window, RENDER_OPENGL)) {
             SDL_Log("second player renderer: %s", RenderBackendError());
             return 0;
         }
@@ -123,9 +124,11 @@ int PortVideoInit(void)
         preferred = RenderDefaultBackend();
     if (!RenderBackendAvailable(preferred))
         preferred = RenderDefaultBackend();
-    if (!RenderStartBackend(window, preferred)) {
+    int useDefault = preferred == RenderDefaultBackend();
+    int ready = useDefault ? RenderStart(window) : RenderStartBackend(window, preferred);
+    if (!ready) {
         SDL_Log("renderer: %s", RenderBackendError());
-        if (preferred == RenderDefaultBackend() || !RenderStart(window))
+        if (useDefault || !RenderStart(window))
             return 0;
     }
     portSettings.graphicsBackend = RenderActiveBackend();

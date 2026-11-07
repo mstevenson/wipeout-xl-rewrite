@@ -22,7 +22,7 @@ typedef struct FakeRead {
     int api;
     uint8_t *pixels;
 } FakeRead;
-static int liveImages, liveBuffers, liveDevices, liveReads, failImageAfter, metalAvailable = 1;
+static int liveImages, liveBuffers, liveDevices, liveReads, failImageAfter, metalAvailable = 1, failMetalCreate;
 static int CreateFake(RenderDevice *d, int api) {
     FakeDevice *f = calloc(1, sizeof(*f));
     assert(f);
@@ -36,7 +36,10 @@ static int CreateFake(RenderDevice *d, int api) {
     return 1;
 }
 static int CreateGL(RenderDevice *d, void *w) { return CreateFake(d, 1); }
-static int CreateMetal(RenderDevice *d, void *w) { return CreateFake(d, 2); }
+static int CreateMetal(RenderDevice *d, void *w) {
+    CreateFake(d, 2);
+    return failMetalCreate ? SDL_SetError("injected Metal initialization failure") : 1;
+}
 static int Api(RenderDevice *d) { return ((FakeDevice *)d->data)->api; }
 static void DestroyFake(RenderDevice *d) {
     free(d->data);
@@ -186,8 +189,20 @@ static void CheckPicture(void) {
     usedRead--;
 }
 int main(void) {
+    assert(RenderDefaultBackend() == RENDER_METAL);
     assert(RenderStart(NULL));
+    assert(RenderActiveBackend() == RENDER_METAL);
+    RenderStop();
+    failMetalCreate = 1;
+    assert(RenderStart(NULL));
+    assert(RenderActiveBackend() == RENDER_OPENGL && liveDevices == 1);
+    assert(!*RenderBackendError());
+    RenderStop();
+    assert(!liveDevices);
+    failMetalCreate = 0;
     metalAvailable = 0;
+    assert(RenderDefaultBackend() == RENDER_OPENGL);
+    assert(RenderStart(NULL));
     assert(!RenderBackendAvailable(RENDER_METAL));
     assert(!RenderRequestBackend(RENDER_METAL));
     metalAvailable = 1;
@@ -263,7 +278,7 @@ int main(void) {
     assert(!liveDevices && !liveImages && !liveBuffers && !liveReads);
     /* Large mutable color images use GPU authority, preserving both full
        uploads and untouched pixels after partial updates during a switch. */
-    assert(RenderStart(NULL));
+    assert(RenderStartBackend(NULL, RENDER_OPENGL));
     RgHandle large;
     RgGenTextures(1, &large); RgBindTexture(RG_TEXTURE_2D, large);
     uint8_t *rgba = malloc(1024 * 1024 * 4);

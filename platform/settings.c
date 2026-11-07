@@ -30,7 +30,7 @@ static void Set(const char *key, const char *value)
     if (!strcmp(key, "show_fps")) {
         portSettings.showFps = number != 0;
     } else if (!strcmp(key, "graphics_backend")) {
-        portSettings.graphicsBackend = SDL_clamp(number, 0, RENDER_BACKEND_COUNT-1);
+        portSettings.graphicsBackend = SDL_clamp(number, -1, RENDER_BACKEND_COUNT-1);
     } else if (!strcmp(key, "far_view")) {
         portSettings.farView = number != 0;
     } else if (!strcmp(key, "far_flares")) {
@@ -120,6 +120,7 @@ void PortSettingsLoad(void)
     char *text, *line, *next;
     const char *value;
 
+    portSettings.graphicsBackend = -1; /* Choose the platform default unless a renderer was saved. */
     if (base) {
         SDL_snprintf(path, sizeof(path), "%swipeoutxl.ini", base);
         SDL_strlcpy(defaultSaveDir, base, sizeof(defaultSaveDir));

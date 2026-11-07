@@ -131,8 +131,23 @@ static const RenderDeviceOps *Ops(RenderBackend id) {
     const BackendEntry *b = Backend(id);
     return b ? b->factory() : NULL;
 }
-RenderBackend RenderDefaultBackend(void) { return backends[0].id; }
-int RenderStart(void *window) { return RenderStartBackend(window, RenderDefaultBackend()); }
+RenderBackend RenderDefaultBackend(void) {
+#ifdef PORT_HAVE_METAL
+    if (RenderBackendAvailable(RENDER_METAL))
+        return RENDER_METAL;
+#endif
+    return backends[0].id;
+}
+int RenderStart(void *window) {
+    RenderBackend preferred = RenderDefaultBackend();
+    if (RenderStartBackend(window, preferred))
+        return 1;
+    for (size_t i = 0; i < SDL_arraysize(backends); i++)
+        if (backends[i].id != preferred && RenderBackendAvailable(backends[i].id) &&
+            RenderStartBackend(window, backends[i].id))
+            return 1;
+    return 0;
+}
 int RenderStartBackend(void *window, RenderBackend selected) {
     if (started)
         return 1;
@@ -155,6 +170,7 @@ int RenderStartBackend(void *window, RenderBackend selected) {
     state.uniforms.depthPull = 1;
     device.ops->activate(&device, 1);
     started = 1;
+    error[0] = 0;
     SDL_Log("renderer: %s on %s", RenderBackendName(backend), device.caps.deviceName);
     return 1;
 }

@@ -50,6 +50,8 @@ Render images and buffers have stable logical identities. Immutable uploads reta
 
 Drivers can implement `writeBuffer` to retain a native streaming buffer and orphan its storage, as OpenGL does. Drivers that need immutable storage can omit it and receive replacement buffers. The CPU shadow always holds the latest bytes for migration.
 
+Macs with Metal support use Metal by default. Other desktop systems use OpenGL, and web builds use WebGL 2. A saved renderer choice or `WIPEOUT_RENDERER` overrides the default. If the default device cannot initialize, startup tries the remaining available backends, including OpenGL on macOS.
+
 ## Switching and failure handling
 
 A switch finishes the old work, drains outstanding asynchronous reads into CPU-owned results, creates the new device, and rebuilds its resources. The new device becomes active only after all resources transfer successfully. If creation or import fails, temporary resources are released and the old renderer remains active; the console reports the error.
