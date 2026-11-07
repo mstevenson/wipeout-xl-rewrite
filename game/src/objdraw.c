@@ -937,6 +937,8 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
     const unsigned char *skip = NULL;
     CVECTOR compatibleLight;
     const RenderGeometry geometry = PortRenderGeometry();
+    int     ship = kind == DRAW_LIT ? nextInstance : -1;
+    char   *firstPacket;
 
     /* Port: colour.cd carries the track face's light format, not its texture identity. */
     if (kind == DRAW_LIT && colour) {
@@ -959,6 +961,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         SetSkeletonTransform(object->skeleton);
         out = nextPrim.ptr;
     }
+    firstPacket = out;
     primitive = (char *)object->primitives;
     count = (u_short)object->primitiveCount;
     ordering = OT[CurrentScreen];
@@ -1042,6 +1045,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         index++;
     } while (--count > 0);
 finished:
+    if (ship >= 0) PortShipPackets(ship, firstPacket, out); /* Port: shield compositing for this ship instance. */
     GteSetN64(0); /* Port: subsequent PS1 projections keep their own material identity. */
     forceReject = 0;
     if (farView) {

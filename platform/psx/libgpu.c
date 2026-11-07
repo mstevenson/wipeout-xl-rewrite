@@ -407,14 +407,11 @@ static int HoldShadow(const uint32_t *w, int words);
 static void ReleaseShadows(void);
 static int AheadOfShadows(const uint32_t *w, int words);
 
-static void Submit(const uint32_t *w, int words)
+static void DrawPacket(const uint32_t *w, int words)
 {
     int backdrop = PortScreenMargin() && Backdrop(w);
     uint32_t code = words > 0 ? w[0] >> 24 : 0;
 
-    if (!interpolating) {
-        PortTraceGp0(w, words);
-    }
     if (HoldShadow(w, words)) {
         return;
     }
@@ -428,6 +425,14 @@ static void Submit(const uint32_t *w, int words)
     if (backdrop) {
         GpuBackdrop(0);
     }
+}
+
+static void Submit(const uint32_t *w, int words)
+{
+    if (!interpolating) {
+        PortTraceGp0(w, words);
+    }
+    DrawPacket(w, words);
 }
 
 /* The library's clamps of a drawing-area corner and a size to video memory. */
@@ -963,6 +968,14 @@ static int hudPackets;
 typedef struct PacketRange {
     const char *start, *end;
 } PacketRange;
+/* The game has three shield models and reserves 64 draw modes per model. */
+enum { SHIELD_DRAWS = 3, SHIELD_FACES = 64 };
+typedef struct ShieldPackets {
+    int ship;
+    PacketRange shell, hull;
+    const u_long *lastHull;
+} ShieldPackets;
+
 static const uint32_t *heldShadows[HELD_SHADOWS];
 static int heldWords[HELD_SHADOWS];
 static uint32_t heldTexpage;
@@ -973,12 +986,103 @@ typedef struct TrackPackets {
     PacketRange shadows;              /* the shadows' packets */
     PacketRange ranges[TRACK_RANGES]; /* the track's */
     int count;
+    ShieldPackets shields[SHIELD_DRAWS];
+    int shieldCount;
 } TrackPackets;
 static TrackPackets building;      /* the frame being built's */
 static TrackPackets tableTrack[4]; /* ... the tables drawn's (a table is drawn again between frames) */
 static int tableTrackNext, walkTrack = -1;
+typedef struct HeldShield {
+    const ShieldPackets *pending;
+    int count;
+    struct {
+        const u_long *node;
+        uint32_t texpage;
+    } faces[SHIELD_FACES];
+} HeldShield;
+
+static HeldShield heldShields[SHIELD_DRAWS];
+static int heldShieldCount;
+
 
 static int PacketBounds(const uint32_t *w, int words, int box[4]);
+
+static u_long *NodeAfter(u_long *node);
+static u_long *PacketFrom(u_long *node);
+
+static int PacketInRange(const void *packet, PacketRange range)
+{
+    return (uintptr_t)packet >= (uintptr_t)range.start && (uintptr_t)packet < (uintptr_t)range.end;
+}
+
+void PortShieldPackets(int ship, const void *start, const void *end)
+{
+    if (start == end || building.shieldCount == SHIELD_DRAWS) return;
+    building.shields[building.shieldCount++] = (ShieldPackets){.ship = ship, .shell = {start, end}};
+}
+
+void PortShipPackets(int ship, const void *start, const void *end)
+{
+    if (start == end) return;
+    for (int i = 0; i < building.shieldCount; i++) {
+        if (building.shields[i].ship == ship) building.shields[i].hull = (PacketRange){start, end};
+    }
+}
+
+/* Lit hull faces are biased forward in the game's table. Hold only shell faces
+   that would draw before the last packet of their own hull. The table links and
+   each face's actual projected depth are preserved. */
+static void OrderShields(TrackPackets *table)
+{
+    if (!table->shieldCount) return;
+    for (u_long *node = PacketFrom(table->table); node; node = PacketFrom(NodeAfter(node))) {
+        for (int i = 0; i < table->shieldCount; i++) {
+            if (PacketInRange(node, table->shields[i].hull)) table->shields[i].lastHull = node;
+        }
+    }
+}
+
+static int HoldShield(const u_long *node)
+{
+    for (int i = 0; i < heldShieldCount; i++) {
+        HeldShield *held = &heldShields[i];
+        if (held->pending && PacketInRange(node, held->pending->shell) && held->count < SHIELD_FACES) {
+            int face = held->count++;
+            held->faces[face].node = node;
+            held->faces[face].texpage = state.texpage;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void ReleaseShipShields(const u_long *node)
+{
+    for (int i = 0; i < heldShieldCount; i++) {
+        HeldShield *held = &heldShields[i];
+        if (!held->pending || held->pending->lastHull != node) continue;
+        uint32_t texpage = state.texpage;
+        for (int j = 0; j < held->count; j++) {
+            const u_long *face = held->faces[j].node;
+            state.texpage = held->faces[j].texpage;
+            DrawPacket(face + 1, (int)(*face >> 24));
+        }
+        state.texpage = texpage;
+        held->pending = NULL;
+    }
+}
+
+static void SubmitTablePacket(const u_long *node)
+{
+    const uint32_t *w = node + 1;
+    int words = (int)(*node >> 24);
+
+    /* Traces keep the original GP0 order. Only the drawing is deferred. */
+    if (!interpolating) PortTraceGp0(w, words);
+    if (HoldShield(node)) return;
+    DrawPacket(w, words);
+    ReleaseShipShields(node);
+}
 
 void PortShadowRange(const void *start, size_t bytes)
 {
@@ -1013,7 +1117,19 @@ static void WalkTable(u_long *table, int newFrame)
         }
         tableTrack[walkTrack] = building;
         tableTrack[walkTrack].table = table;
+        OrderShields(&tableTrack[walkTrack]);
         memset(&building, 0, sizeof(building));
+    }
+    heldShieldCount = 0;
+    if (walkTrack >= 0) {
+        const TrackPackets *current = &tableTrack[walkTrack];
+        for (i = 0; i < current->shieldCount; i++) {
+            const ShieldPackets *shield = &current->shields[i];
+            if (!shield->lastHull) continue;
+            HeldShield *held = &heldShields[heldShieldCount++];
+            held->pending = shield;
+            held->count = 0;
+        }
     }
 }
 
@@ -1681,7 +1797,7 @@ static u_long *PacketFromNoting(u_long *node, int *inHud)
 static void SubmitNode(u_long *node, int inHud)
 {
     hudPackets = inHud && !SceneSprite(node);
-    Submit((const uint32_t *)(node + 1), (int)(*node >> 24));
+    SubmitTablePacket(node);
     hudPackets = 0;
 }
 
@@ -1942,6 +2058,12 @@ static int SceneSprite(const u_long *node)
 {
     int i;
 
+    if (walkTrack >= 0) {
+        const TrackPackets *table = &tableTrack[walkTrack];
+        for (i = 0; i < table->shieldCount; i++) {
+            if (PacketInRange(node, table->shields[i].shell) || PacketInRange(node, table->shields[i].hull)) return 1;
+        }
+    }
     for (i = 0; i < sceneSpriteCount; i++) {
         if (sceneSprites[i] == (const void *)node) {
             return 1;
@@ -1983,7 +2105,7 @@ static void DrawAnchored(u_long *p, int margin, int half)
                 continue;
             }
         }
-        Submit((const uint32_t *)(node + 1), (int)(*node >> 24));
+        SubmitTablePacket(node);
     }
     ReleaseShadows();
     for (first = 0; first < count;) {

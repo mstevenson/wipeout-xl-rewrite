@@ -17,6 +17,12 @@
 #include "trackasm.h"
 #include "track.h"
 #include "port_widen.h"
+#include "portfar.h"
+#include "portinterp.h"
+#include "portorig.h"
+#include "../../platform/n64_material.h"
+#include "../../platform/original.h"
+#include "../../platform/trace.h"
 #include "../../platform/psx/gte.h"
 
 /* ---- what the port expects from the rest of the game ---- */
@@ -28,7 +34,38 @@ HeapBlock *heap, *mainheapcopy;
 void Error(char *text, short level) { fprintf(stderr, "Error: %s\n", text); exit(2); }
 
 short CurrentScreen;
-RenderGeometry PortRenderGeometry(void) { return (RenderGeometry){0, 0, 0, RENDER_LIGHT_PS1}; } /* differential test always uses console packet rules */
+int portPal;
+/* Select the retail packet rules and disable the host's extra drawing passes. */
+RenderGeometry PortRenderGeometry(void) { return (RenderGeometry){0, 0, 0, RENDER_LIGHT_PS1}; }
+int PortTracing(void) { return 1; }
+int PortOriginalLooks(void) { return 0; }
+int PortOriginalTrackIs64(void) { return 0; }
+int PortScreenMargin(void) { return 0; }
+char *PortNearAlloc(int bytes) { (void)bytes; return NULL; }
+unsigned char *PortFarObjectPrimitives(Object *object) { (void)object; return NULL; }
+void PortFarMarkFace(Face *face) { (void)face; }
+void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index)
+{ (void)start; (void)end; (void)what; (void)name; (void)index; }
+void PortShipPackets(int ship, const void *start, const void *end) { (void)ship; (void)start; (void)end; }
+
+static _Noreturn void UnexpectedFarDraw(void)
+{
+    fputs("asmtest: unexpected host far-view draw\n", stderr);
+    exit(2);
+}
+
+int PortFarFaceDrawn(Face *face) { (void)face; UnexpectedFarDraw(); }
+const unsigned char *PortFarObjectDrawn(Object *object, int *complete)
+{ (void)object; (void)complete; UnexpectedFarDraw(); }
+char *PortFarAlloc(int bytes) { (void)bytes; UnexpectedFarDraw(); }
+void PortFarRelease(char *end) { (void)end; UnexpectedFarDraw(); }
+u_long *PortFarSlot(int entry, double depth) { (void)entry; (void)depth; UnexpectedFarDraw(); }
+void PortFarDepthBias(double scale) { (void)scale; UnexpectedFarDraw(); }
+void PortFarProject(const PortView *view, double x, double y, double z, PortFarVertex *out)
+{ (void)view; (void)x; (void)y; (void)z; (void)out; UnexpectedFarDraw(); }
+void PortFarProjectAny(double x, double y, double z, PortFarVertex *out)
+{ (void)x; (void)y; (void)z; (void)out; UnexpectedFarDraw(); }
+
 TrackData *track;
 u_long *OT[2];
 POLY_FT4 *TrackLoPolys[2], *TrackMedPolys[2], *TrackHiPolys[2];
@@ -194,6 +231,7 @@ static void BuildWorld(World *w, const char *discRoot, int trackNumber)
     w->sectionCount = (int)(size / 156);
     w->sectionBytes = malloc((size_t)size);
     memcpy(w->sectionBytes, src, (size_t)size);
+    free(wad.data);
     for (i = 0; i < w->sectionCount; i++) {
         unsigned char *r = w->sectionBytes + 156 * i;
 
@@ -282,10 +320,17 @@ static void Fail(const char *what, int a, int b)
     }
 }
 
-/* Compares the packets linked by the port with the chains in the console's ordering table. */
-static void CompareDrawn(const char *label, uint32_t emuOt, uint32_t emuPool, void *nativePool, int packetSize, int count)
+typedef struct PacketPool {
+    uint32_t emu;
+    const void *native;
+    size_t size;
+} PacketPool;
+
+/* Compares the packets linked by the port with the chains in the console's ordering table.
+   A zero packet size uses the GPU packet length. An extra pool can hold static draw modes. */
+static void CompareDrawn(const char *label, uint32_t emuOt, uint32_t emuPool, void *nativePool,
+                         int packetSize, const PacketPool *extra)
 {
-    static int expectedFirst[4096];
     int i, n = 0;
 
     /* The console side: walk the chains. */
@@ -296,6 +341,7 @@ static void CompareDrawn(const char *label, uint32_t emuOt, uint32_t emuPool, vo
         while (entry) {
             uint32_t address = 0x80000000u | entry;
             uint32_t slot = (address - emuPool);
+            const void *base = nativePool;
             int j;
             int found = -1;
             Linked *l;
@@ -316,14 +362,20 @@ static void CompareDrawn(const char *label, uint32_t emuOt, uint32_t emuPool, vo
                 return;
             }
             l = &linked[found];
-            if ((int)((char *)l->poly - (char *)nativePool) != (int)slot) {
-                Fail("packet position", (int)slot, (int)((char *)l->poly - (char *)nativePool));
+            if (extra && address >= extra->emu && address - extra->emu < extra->size) {
+                slot = address - extra->emu;
+                base = extra->native;
             }
-            /* the packet bytes except the tag */
-            if (memcmp(MipsPointer(address) + 4, (unsigned char *)l->poly + 4, (size_t)packetSize - 4) != 0) {
+            if ((uintptr_t)l->poly != (uintptr_t)base + slot) {
+                Fail("packet position", (int)slot, (int)((uintptr_t)l->poly - (uintptr_t)base));
+            }
+            /* Ignore the link address. A variable-length packet must also have the retail length. */
+            int first = packetSize ? 4 : 3;
+            int bytes = packetSize ? packetSize : 4 * (MipsLoad8(address + 3) + 1);
+            if (memcmp(MipsPointer(address) + first, (unsigned char *)l->poly + first, (size_t)(bytes - first)) != 0) {
                 int k;
 
-                for (k = 4; k < packetSize; k++) {
+                for (k = first; k < bytes; k++) {
                     if (MipsPointer(address)[k] != ((unsigned char *)l->poly)[k]) break;
                 }
                 if (failures < 20) {
@@ -336,12 +388,10 @@ static void CompareDrawn(const char *label, uint32_t emuOt, uint32_t emuPool, vo
             entry = MipsLoad32(address) & 0xFFFFFF;
         }
     }
-    (void)expectedFirst;
     totalPackets += n;
     if (n != linkedCount) {
         Fail("number of linked packets", n, linkedCount);
     }
-    (void)label; (void)count;
     checks++;
 }
 
@@ -394,13 +444,21 @@ static void RunTrack(World *w, int trials, int level)
     MipsStore16(Sym("CurrentScreen"), 0);
     CurrentScreen = 0;
 
-    /* random texture tiles, the same in both worlds (the face's texture and flip select one of 32x2 surfaces) */
+    /* Random tile data within the retail format. The high page bits belong
+       to the port's imported materials, which these fixtures do not use. */
     for (t = 0; t < (int)sizeof(tileSurfaces); t++) {
-        unsigned char b = (unsigned char)Rand();
-
-        ((unsigned char *)tileSurfaces)[t] = b;
-        MipsStore8(Sym("tileSurfaces") + (uint32_t)t, b);
+        ((unsigned char *)tileSurfaces)[t] = (unsigned char)Rand();
     }
+    for (t = 0; t < (int)(sizeof(tileSurfaces) / sizeof(tileSurfaces[0])); t++) {
+        for (int flip = 0; flip < 2; flip++) {
+            Surface *surface = &tileSurfaces[t][flip];
+            unsigned mask = ~(PORT_TPAGE_N64 | PORT_TPAGE_PS1_LIGHT);
+            surface->low[0].tsb &= mask;
+            for (i = 0; i < 4; i++) surface->med[i].tsb &= mask;
+            for (i = 0; i < 16; i++) surface->high[i].tsb &= mask;
+        }
+    }
+    memcpy(MipsPointer(Sym("tileSurfaces")), tileSurfaces, sizeof(tileSurfaces));
     for (t = 0; t < trials; t++) {
         int sectionIndex = RandRange(0, w->sectionCount - 3);
         int count = RandRange(1, 3);
@@ -447,14 +505,21 @@ static void RunTrack(World *w, int trials, int level)
         if (level == 2 && MipsLoad32(Sym("nextPrim")) - emuPool != (uint32_t)((POLY_FT4 *)nextPrim.ptr - nativePool) * 40u) {
             Fail("nextPrim", (int)(MipsLoad32(Sym("nextPrim")) - emuPool) / 40, (int)((POLY_FT4 *)nextPrim.ptr - nativePool));
         }
-        CompareDrawn(routine, emuOt, emuPool, nativePool, 40, 0);
+        CompareDrawn(routine, emuOt, emuPool, nativePool, 40, NULL);
     }
 }
 
 /* ---- particles ---- */
 #include "sparks.h"
 
-void SetLineG2(LINE_G2 *p) { ((unsigned char *)p)[3] = 4; ((unsigned char *)p)[7] = 0x50; }
+static void SetHeader(void *packet, unsigned char length, unsigned char code)
+{
+    unsigned char *p = packet;
+    p[3] = length;
+    p[7] = code;
+}
+
+void SetLineG2(LINE_G2 *p) { SetHeader(p, 4, 0x50); }
 void SetSemiTrans(void *p, int abe) { ((unsigned char *)p)[7] = (unsigned char)((((unsigned char *)p)[7] & ~2) | (abe ? 2 : 0)); }
 
 static void RunParticles(World *w, int trials)
@@ -530,7 +595,7 @@ static void RunParticles(World *w, int trials)
                 Fail("particle record", i, bad - 1);
             }
         }
-        CompareDrawn("AsmDrawParticles", emuOt, emuTable, nativeTable, 20, 0);
+        CompareDrawn("AsmDrawParticles", emuOt, emuTable, nativeTable, 20, NULL);
     }
     (void)w;
 }
@@ -625,6 +690,12 @@ static void RunObjects(World *w, int trials, int kind)
             for (k = 0; k < size; k++) p[k] = (unsigned char)Rand();
             *(short *)p = (short)type;
             *(short *)(p + 2) = (short)(RandRange(0, 7));       /* flag: single sided / translucent bits */
+            switch (type) {
+            case TypeFT3: ((FT3 *)p)->tsb &= ~(PORT_TPAGE_N64 | PORT_TPAGE_PS1_LIGHT); break;
+            case TypeFT4: ((FT4 *)p)->tsb &= ~(PORT_TPAGE_N64 | PORT_TPAGE_PS1_LIGHT); break;
+            case TypeGT3: ((GT3 *)p)->tsb &= ~(PORT_TPAGE_N64 | PORT_TPAGE_PS1_LIGHT); break;
+            case TypeGT4: ((GT4 *)p)->tsb &= ~(PORT_TPAGE_N64 | PORT_TPAGE_PS1_LIGHT); break;
+            }
             if (type == 10 || type == 11) {
                 *(short *)(p + 4) = (short)RandRange(0, vertexCount - 1);
                 *(short *)(p + 6) = (short)RandRange(-100, 600);
@@ -701,9 +772,111 @@ static void RunObjects(World *w, int trials, int kind)
             }
         }
         objectPackets[kind] += linkedCount;
-        CompareDrawn(routine, emuOt, emuBuffer, nativeBuffer, 4, 0);
+        CompareDrawn(routine, emuOt, emuBuffer, nativeBuffer, 4, NULL);
     }
     (void)w;
+}
+
+/* TransformTransparentObject's scratch and large-object projection buffers. */
+_Alignas(8) unsigned char PsxScratchpad[1024];
+DVECTOR StaticScreen[448];
+u_short StaticDepth[448], StaticFlags[448];
+DR_MODE shieldParams[192][2];
+int primsDrawn;
+
+static void CheckShieldBindings(const DVECTOR *projected)
+{
+    int faces = 0;
+    for (int i = 0; i < linkedCount; i++) {
+        const unsigned char *packet = linked[i].poly;
+        int code = packet[7];
+        if (code != 0x32 && code != 0x3a) continue;
+        int corners = code == 0x32 ? 3 : 4;
+        faces++;
+        for (int corner = 0; corner < corners; corner++) {
+            uint32_t expected = PortProjection(&projected[corner]);
+            uint32_t actual = PortProjection(packet + 8 + corner * 8);
+            GtePrecise point;
+            if (!expected || actual != expected || !GtePreciseOf(actual, &point) || point.z <= 0) {
+                Fail("shield corner's projected depth binding", (int)expected, (int)actual);
+            }
+        }
+    }
+    if (faces != 2) Fail("visible shield faces", 2, faces);
+}
+
+static void RunShields(void)
+{
+    static u_long nativeOt[0x2000];
+    static uint32_t nativeBuffer[256];
+    static SVECTOR vertices[129] = {
+        {-170, -130, 12, 0}, {160, -140, 20, 0}, {-160, 130, 0, 0}, {170, 140, 32, 0}, {0, 0, -5000, 0}
+    };
+    /* One front-facing triangle and quad. The back face and the face behind
+       the near plane must both be culled, before the port binds packet corners. */
+    static struct { G3 tri; G4 quad; G3 back; G4 clipped; } primitives = {
+        {.type = TypeG3, .coords = {0, 1, 2}, .colour = {{10, 20, 30}, {40, 50, 60}, {70, 80, 90}}},
+        {.type = TypeG4, .coords = {0, 1, 2, 3}, .colour = {{30, 20, 10}, {60, 50, 40}, {90, 80, 70}, {30, 60, 90}}},
+        {.type = TypeG3, .coords = {1, 0, 2}},
+        {.type = TypeG4, .coords = {0, 1, 2, 4}},
+    };
+    uint32_t emuBuffer = EmuAlloc(sizeof(nativeBuffer)), emuOt = EmuAlloc(sizeof(nativeOt));
+    uint32_t emuVertices = EmuAlloc(sizeof(vertices)), emuPrims = EmuAlloc(sizeof(primitives));
+    uint32_t emuObject = EmuAlloc(0x40), emuParams = Sym("shieldParams");
+    const PacketPool modes = {emuParams, shieldParams, sizeof(shieldParams)};
+
+    OT[0] = OT[1] = nativeOt;
+    MipsStore32(Sym("OT"), emuOt);
+    MipsStore32(Sym("OT") + 4, emuOt);
+    for (int i = 0; i < 192; i++) {
+        for (int screen = 0; screen < 2; screen++) {
+            shieldParams[i][screen] = (DR_MODE){.tag = 2u << 24, .code = {0xe1000620u, 0}};
+        }
+    }
+    memcpy(MipsPointer(emuParams), shieldParams, sizeof(shieldParams));
+    memcpy(MipsPointer(emuVertices), vertices, sizeof(vertices));
+    memcpy(MipsPointer(emuPrims), &primitives, sizeof(primitives));
+    MipsStore32(emuObject + 0x14, emuVertices);
+    MipsStore16(emuObject + 0x20, 4);
+    MipsStore32(emuObject + 0x24, emuPrims);
+
+    int before = failures;
+    for (int trial = 0; trial < 12; trial++) {
+        int shieldID = trial / 4, vertexCount = trial & 2 ? 129 : 5;
+        Skeleton skeleton = {0};
+        SetSkeletonDirection(&skeleton, 0, 0, 0);
+        skeleton.relative.t[2] = 1200 + trial * 200;
+        uint32_t emuSkeleton = MarshalSkeleton(&skeleton, 0);
+        Object object = {.vertexCount = (short)vertexCount, .vertices = vertices,
+            .primitiveCount = 4, .primitives = (Primitive *)&primitives, .skeleton = &skeleton};
+
+        ClearOts(emuOt);
+        memset(nativeBuffer, 0, sizeof(nativeBuffer));
+        memset(MipsPointer(emuBuffer), 0, sizeof(nativeBuffer));
+        CurrentScreen = (short)(trial & 1);
+        linkedCount = primsDrawn = 0;
+        nextPrim.ptr = (char *)nativeBuffer;
+        MipsStore16(Sym("CurrentScreen"), CurrentScreen);
+        MipsStore32(Sym("primsDrawn"), 0);
+        MipsStore32(Sym("nextPrim"), emuBuffer);
+        MipsStore16(emuObject + 0x10, (uint16_t)vertexCount);
+        MipsStore32(emuObject + 0x30, emuSkeleton);
+
+        GteSetup();
+        MipsCall(Sym("TransformTransparentObject"), emuObject, 0, shieldID, 0, NULL, 0);
+        GteSetup();
+        GteClearPrecise();
+        TransformTransparentObject(&object, NULL, shieldID);
+        if ((int)MipsLoad32(Sym("primsDrawn")) != primsDrawn) {
+            Fail("shield primitive counter", (int)MipsLoad32(Sym("primsDrawn")), primsDrawn);
+        }
+        int endEmu = (int)(MipsLoad32(Sym("nextPrim")) - emuBuffer);
+        int endNative = (int)(nextPrim.ptr - (char *)nativeBuffer);
+        if (endEmu != endNative) Fail("shield primitive buffer end", endEmu, endNative);
+        CompareDrawn("TransformTransparentObject", emuOt, emuBuffer, nativeBuffer, 0, &modes);
+        CheckShieldBindings(vertexCount > 128 ? StaticScreen : (const DVECTOR *)PsxScratchpad);
+    }
+    printf("shield: 12 retail packet and native depth-binding trials, %d failures\n", failures - before);
 }
 
 int main(int argc, char **argv)
@@ -741,14 +914,25 @@ int main(int argc, char **argv)
                 }
             }
             printf("track %d: %d trials each, %d failures so far\n", trackNumbers[k], trials, failures);
+            free(world.vertexBytes);
+            free(world.faceBytes);
+            free(world.sectionBytes);
+            free(world.sections);
         }
     }
+    if (MipsLoadExe(argv[1])) { fprintf(stderr, "cannot load %s\n", argv[1]); return 2; }
+    emuNext = 0x80110000u;
+    RunShields();
     printf("object packets drawn: plain %ld, lit %ld, fixed %ld\n", objectPackets[0], objectPackets[1], objectPackets[2]);
     printf("%d checks, %ld packets compared, %d failures\n", checks, totalPackets, failures);
     return failures != 0;
 }
 
 /* libgpu's packet initialiser, without the rest of the library */
-void SetPolyFT4(POLY_FT4 *p) { ((unsigned char *)p)[3] = 9; ((unsigned char *)p)[7] = 0x2C; }
+void SetPolyFT4(POLY_FT4 *p) { SetHeader(p, 9, 0x2c); }
+void SetPolyG3(POLY_G3 *p) { SetHeader(p, 6, 0x30); }
+void SetPolyG4(POLY_G4 *p) { SetHeader(p, 8, 0x38); }
+void SetPolyGT3(POLY_GT3 *p) { SetHeader(p, 9, 0x34); }
+void SetPolyGT4(POLY_GT4 *p) { SetHeader(p, 12, 0x3c); }
 int lowTideMark;
 char msgSkeletonAllocFailed[] = "NewSkeleton failed\n";

@@ -82,6 +82,9 @@ void PortShadowRange(const void *start, size_t bytes);
 /* ... and the track's packets of the frame being built (each part of memory they are in, from start to end), which
    are drawn before a shadow when they reach as deep as it. */
 void PortTrackPackets(const void *start, const void *end);
+/* Packet ranges for compositing a translucent shield over its own ship. */
+void PortShieldPackets(int ship, const void *start, const void *end);
+void PortShipPackets(int ship, const void *start, const void *end);
 /* The HUD packets from start to end, of the frame being built, stay where the game puts them: a menu over the race
    whose items stand apart in the middle of the screen (the pause's YES and NO), not an element of a side. */
 void PortHudCentred(const void *start, const void *end);

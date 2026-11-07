@@ -22,9 +22,13 @@ the packets (every byte), the ordering table chains (which packet at which depth
 and where the primitive buffer ends. Scenes: all eight tracks' real sections, vertices and faces with cameras
 from far to inside the track, random tile textures (so a wrong texture page or mirror shows), objects of 1 to 250
 vertices with all primitive types, random flags and sprites with random roll, particle tables with every type. Run
-`tools/asmtest/build.sh && /tmp/render_test EXE SYMBOLS DISCROOT` (an executable of the game and its symbol list are
-needed; it builds with AddressSanitizer/UBSan). Result: 11200 checks, about 155000 packets, 0 failures. Mutations of the
-ports (a swapped corner, a wrong shift, a changed constant, a missing flag test) all make it fail.
+`tools/asmtest/build.sh && /tmp/render_test EXE SYMBOLS DISCROOT` with the US `SCUS_943.51`, its symbol list, and
+the extracted `WIPEOUT2` directory containing `TRACK01` and the other course directories. The build uses
+AddressSanitizer and UBSan. The harness also compares `TransformTransparentObject` with the retail routine
+for both screen buffers, all three shield slots, and both projection buffers. It compares shield packets and
+draw modes, then checks each emitted corner's native depth binding. The shared renderer's shield ordering is
+covered separately by `tools/bugtest/run.sh`. The standalone run reports 11,212 checks and 155,522 packets
+with zero failures.
 
 ## What the original does that a C programmer would not have written (kept)
 

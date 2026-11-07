@@ -64,6 +64,39 @@ static void ImportedQuad(void)
     puts("Untextured N64 vertex provenance preserves authored quad diagonals before and during clipping: OK");
 }
 
+static void ShieldOrdering(void)
+{
+    u_long ot[4];
+    POLY_G3 shield[2] = {0}, hull[2] = {0}, other = {0};
+    ClearOTagR(ot, 4);
+    for (int i = 0; i < 2; i++) {
+        SetPolyG3(&shield[i]);
+        SetSemiTrans(&shield[i], 1);
+        SetPolyG3(&hull[i]);
+    }
+    SetPolyG3(&other);
+    AddPrim(&ot[3], &shield[0]);
+    AddPrim(&ot[2], &hull[1]);
+    AddPrim(&ot[1], &hull[0]);
+    AddPrim(&ot[0], &other);
+    AddPrim(&ot[0], &shield[1]);
+    PortShieldPackets(3, shield, shield + 2);
+    PortShipPackets(3, hull, hull + 2);
+    PortShipPackets(2, &other, &other + 1);
+    WalkTable(&ot[3], 1);
+    assert(tableTrack[walkTrack].shields[0].lastHull == &hull[0].tag);
+    assert(!HoldShield(&other.tag));
+    state.texpage = 0x220;
+    assert(HoldShield(&shield[0].tag));
+    assert(heldShields[0].count == 1 && heldShields[0].faces[0].texpage == 0x220);
+    assert(NodeAfter(&shield[0].tag) == &ot[2]);
+    WalkTable(&ot[3], 0);
+    assert(heldShields[0].count == 0 && HoldShield(&shield[0].tag));
+    WalkTable(NULL, 0);
+    assert(!HoldShield(&shield[0].tag));
+    puts("Transparent shield follows its own hull and retains its draw mode during table replay: OK");
+}
+
 static void ClippedInterpolation(void)
 {
     /* One corner is cut away. Both edge directions must agree at the new corners.
@@ -243,6 +276,7 @@ int main(void)
     }
     ImportedQuad();
     ClippedInterpolation();
+    ShieldOrdering();
     WorldBillboardClip();
     return 0;
 }
