@@ -34,6 +34,15 @@ int main(void)
     SDL_UnsetEnvironmentVariable(SDL_GetEnvironment(), "WIPEOUT_DOWNSAMPLE_STYLE");
     assert(portSettings.downsample == 0 && portSettings.downsampleStyle == DOWNSAMPLE_BOX);
     PortSettingsLoad();
+    assert(portSettings.graphicsBackend == -1);
+    Set("graphics_backend", "0");
+    assert(PortSettingsSave());
+    PortSettingsLoad();
+    assert(portSettings.graphicsBackend == RENDER_OPENGL);
+    Set("graphics_backend", "-1");
+    assert(PortSettingsSave());
+    PortSettingsLoad();
+    assert(portSettings.graphicsBackend == -1);
     Set("downsample", "1"); /* the old checkbox setting */
     assert(portSettings.downsample == 1);
     Set("downsample", "3");

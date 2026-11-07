@@ -1,6 +1,6 @@
-/* The window, its OpenGL context and the event pump. */
+/* The SDL window, graphics device and event pump. */
 #include <SDL3/SDL.h>
-#include "port_gl.h"
+#include "render/state.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,21 +24,15 @@ static SDL_GLContext context;
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
-/* The web: the browser shows the canvas at its next display refresh after the game gives it its turn. A
-   picture ends the game's turn without waiting for that refresh (the game's time must not follow the
-   display's), and is marked unseen until then. */
+/* One visible presentation per browser refresh. Resume after its compositor
+   turn, so another picture cannot overwrite it or accumulate extra GPU work.
+   Field catch-up in libetc keeps simulation time separate from presentation. */
 EM_ASYNC_JS(void, ShowPicture, (void), {
     Module.pictureUnseen = true;
-    requestAnimationFrame(function () { Module.pictureUnseen = false; });
-    await new Promise(function (resolve) { setTimeout(resolve, 0); });
-});
-/* ... and a picture between the game's frames waits until the one before it has been shown (in a hidden page,
-   which shows nothing, it does not wait). */
-EM_ASYNC_JS(void, WaitPictureShown, (void), {
-    if (Module.pictureUnseen && !document.hidden) {
-        await new Promise(requestAnimationFrame);
-        await new Promise(function (resolve) { setTimeout(resolve, 0); });
-    }
+    if (!document.hidden) await new Promise(requestAnimationFrame);
+    await Module.gamePresentation.wait();
+    await new Promise(function (resolve) { setTimeout(resolve, document.hidden ? 16 : 0); });
+    Module.pictureUnseen = false;
 });
 #endif
 
@@ -73,6 +67,11 @@ int PortVideoInit(void)
             SDL_Log("second player: %s", SDL_GetError());
             return 0;
         }
+        /* This offscreen producer uses the host's OpenGL context on its worker thread. */
+        if (!RenderStartBackend(window, RENDER_OPENGL)) {
+            SDL_Log("second player renderer: %s", RenderBackendError());
+            return 0;
+        }
         PortSwapInterval(0);
         return GpuInit();
     }
@@ -85,7 +84,12 @@ int PortVideoInit(void)
     }
 #if defined(__EMSCRIPTEN__) || defined(PORT_MOBILE)
 #ifdef __EMSCRIPTEN__
-    flags |= SDL_WINDOW_FILL_DOCUMENT; /* the web: the whole page, following the browser window's size */
+    /* viewport.js owns CSS bounds; SDL's resizable window follows them at the current pixel density. */
+    /* The game owns its offscreen depth and alpha buffers. The browser's
+       presentation surface is opaque and needs neither attachment. */
+    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 0);
 #else
     flags |= SDL_WINDOW_FULLSCREEN; /* a phone or tablet: the whole screen */
 #endif
@@ -113,6 +117,21 @@ int PortVideoInit(void)
         return 0;
     }
     SDL_GL_MakeCurrent(window, context);
+    SDL_SetPointerProperty(SDL_GetWindowProperties(window), "wipeout.opengl.context", context);
+    RenderBackend preferred = (RenderBackend)portSettings.graphicsBackend;
+    const char *renderer = SDL_getenv("WIPEOUT_RENDERER");
+    if (renderer && !RenderFindBackend(renderer, &preferred))
+        preferred = RenderDefaultBackend();
+    if (!RenderBackendAvailable(preferred))
+        preferred = RenderDefaultBackend();
+    int useDefault = preferred == RenderDefaultBackend();
+    int ready = useDefault ? RenderStart(window) : RenderStartBackend(window, preferred);
+    if (!ready) {
+        SDL_Log("renderer: %s", RenderBackendError());
+        if (useDefault || !RenderStart(window))
+            return 0;
+    }
+    portSettings.graphicsBackend = RenderActiveBackend();
 #ifdef SDL_PLATFORM_IOS
     GpuSetWindowFramebuffer((unsigned int)SDL_GetNumberProperty(SDL_GetWindowProperties(window),
                                                                 SDL_PROP_WINDOW_UIKIT_OPENGL_FRAMEBUFFER_NUMBER, 0));
@@ -135,23 +154,15 @@ SDL_Window *PortWindow(void)
    uncapped or capped (the settings); tests run unthrottled. */
 void PortSwapInterval(int vsync)
 {
-    static int current = -2;
-
-    if (portConfig.hidden || portConfig.fixedStep) {
+    if (portConfig.hidden || portConfig.fixedStep)
         vsync = 0;
-    }
-    if (vsync == current) {
-        return;
-    }
-    current = vsync;
-    if (!vsync || !SDL_GL_SetSwapInterval(-1)) {
-        SDL_GL_SetSwapInterval(vsync);
-    }
+    RenderSetVsync(vsync);
 }
 
 void PortVideoShutdown(void)
 {
     DebugUiShutdown();
+    RenderStop();
 #ifdef PORT_SECOND_GAME
     if (portConfig.secondPlayer) {
         return; /* (its window and drawing context are the first game's to close: host.c) */
@@ -202,9 +213,9 @@ static void Capture(void)
         return;
     }
     PortDrawableSize(&width, &height);
-    /* RGBA, the one format every OpenGL (ES too) reads back */
+    /* The device contract returns window pixels in RGBA order. */
     pixels = SDL_malloc((size_t)width * height * 4);
-    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    RgReadPixels(0, 0, width, height, RG_RGBA, RG_UNSIGNED_BYTE, pixels);
     if (SDL_getenv("WIPEOUT_ALPHA_CHECK")) {
         /* tests: pixels the window would show see-through */
         long low = 0, k;
@@ -259,7 +270,8 @@ void PortDumpVram(void)
 static void TimingLog(void)
 {
     static int opened, wasRacing;
-    static FILE *file;
+    static FILE *file, *intervals;
+    static uint64_t previous;
     static uint64_t last, frames, fieldCount;
     static int pictures;
     uint64_t now;
@@ -267,12 +279,20 @@ static void TimingLog(void)
 
     if (!opened) {
         const char *path = SDL_getenv("WIPEOUT_TIMING_LOG");
+        const char *intervalPath = SDL_getenv("WIPEOUT_FRAME_TIMING_LOG");
+        if (intervalPath && !portConfig.secondPlayer) intervals = fopen(intervalPath, "w");
+        if (intervals) fprintf(intervals, "seconds,interval_ms,game_frame\n");
         opened = 1;
         if (path && !portConfig.secondPlayer) file = fopen(path, "w");
         if (file) fprintf(file, "seconds,display_fps,game_fps,field_hz,racing,cap\n");
     }
-    if (!file) return;
+    if (!file && !intervals) return;
     now = SDL_GetTicksNS();
+    if (intervals && previous)
+        fprintf(intervals, "%.6f,%.6f,%llu\n", now / 1e9, (now - previous) / 1e6,
+                (unsigned long long)PortGameFrames());
+    previous = now;
+    if (!file) return;
     racing = PortLinkRaceActive() && PortLinkSplit();
     if (!last || racing != wasRacing) {
         last = now; frames = PortGameFrames(); fieldCount = PsxFieldCount(); pictures = shown;
@@ -287,20 +307,56 @@ static void TimingLog(void)
     }
 }
 
+/* Deterministic integration runs can exercise repeated switches while a race
+   is running. Visible games use the console selector. */
+static void TestBackendSwitch(void)
+{
+    static const char *next;
+    static int checked;
+    if (!portConfig.hidden)
+        return;
+    if (!checked) {
+        next = SDL_getenv("WIPEOUT_RENDERER_SWITCH");
+        checked = 1;
+    }
+    if (!next || !*next)
+        return;
+    unsigned frame;
+    char name[24];
+    int used = 0;
+    if (SDL_sscanf(next, "%u:%23[^,]%n", &frame, name, &used) < 2 || !used) {
+        next = NULL;
+        return;
+    }
+    if (shown < (int)frame)
+        return;
+    RenderRequestBackendName(name);
+    next += used;
+    if (*next == ',')
+        next++;
+}
+
 void PortVideoPresent(void)
 {
     /* The picture is opaque: blending (the subtractive modes, the fade) also changes the alpha the
        framebuffer holds, and the window system composites the window with it, so such pixels showed
        what is behind the window (black holes where ship shadows were). */
-    glDisable(GL_SCISSOR_TEST); /* the presenters leave the window's framebuffer bound */
+    RgDisable(RG_SCISSOR_TEST); /* the presenters leave the window's framebuffer bound */
     DebugUiRender();
-    glDisable(GL_SCISSOR_TEST);
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    RgDisable(RG_SCISSOR_TEST);
+    RgColorMask(0, 0, 0, 1);
+    RgClearColor(0,0,0,1);
+    RgClear(RG_COLOR_BUFFER_BIT);
+    RgColorMask(1, 1, 1, 1);
     Capture();
-    SDL_GL_SwapWindow(window);
+    RenderPresent();
+    TestBackendSwitch();
+    RenderBackend oldBackend = RenderActiveBackend();
+    RenderApplyBackend();
+    if (oldBackend != RenderActiveBackend()) {
+        portSettings.graphicsBackend = RenderActiveBackend();
+        PortSettingsSave();
+    }
     PsxEndPresentation();
     TimingLog();
 #ifdef __EMSCRIPTEN__
@@ -308,13 +364,10 @@ void PortVideoPresent(void)
 #endif
 }
 
-/* Before a picture between the game's frames: on the desktop the swap's VSync (the settings) paces them; the
-   web's pictures are paced here, one per display refresh at most. */
+/* Native swap pacing belongs to the device. Web pacing is completed by
+   ShowPicture for both game and interpolated pictures. */
 void PortVideoBetweenFrames(void)
 {
-#ifdef __EMSCRIPTEN__
-    WaitPictureShown();
-#endif
 }
 
 /* The hidden test window never has the focus: it counts as focused unless its script says otherwise. */

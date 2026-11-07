@@ -129,7 +129,7 @@ static void PageChanges(void)
         uint64_t result = Hash(pixels, (size_t)w * h * 4);
         if (!raw) expected = result;
         else assert(result == expected);
-        assert(glGetError() == GL_NO_ERROR);
+        assert(!RenderBackendError()[0]);
     }
     referenceMode = savedReference;
 }
@@ -192,7 +192,9 @@ int main(int argc, char **argv)
     SDL_GLContext context = SDL_GL_CreateContext(window);
     assert(context);
     portSettings.renderScale = 1;
+    assert(RenderStartBackend(window, RENDER_OPENGL));
     assert(GpuInit());
+    if(SDL_getenv("WIPEOUT_TEST_METAL")){assert(RenderRequestBackend(RENDER_METAL));assert(RenderApplyBackend());}
     PaletteChanges();
     PageChanges();
     OffscreenPicture();
@@ -250,6 +252,9 @@ int main(int argc, char **argv)
                         v[i].a = scene & 2 ? 255 : Next();
                         v[i].w = primitive & 1 ? 100 + Next() % 300 : 0;
                         v[i].noDepth = primitive % 11 == 0;
+                        /* These flags affect vertex depth, not the constant metadata varyings. */
+                        v[i].exactDepth = primitive % 9 == 0 && i == 2;
+                        v[i].backFacing = primitive % 13 == 0 && i == 1;
                     }
                     GpuTriangles(&s, v, 3);
                     /* Upload while the last primitive is pending: classification must use the new palette. */
@@ -263,8 +268,8 @@ int main(int argc, char **argv)
                 uint8_t *pixels = GpuReadArea(0, y, 128, 96, &w, &h);
                 uint64_t colourHash = Hash(pixels, (size_t)w * h * 4);
                 float *depth = malloc((size_t)w * h * sizeof(float));
-                glBindFramebuffer(GL_READ_FRAMEBUFFER, wideMargin ? wideFramebuffer : framebuffer);
-                glReadPixels(wideMargin * factor, y * factor, w, h, GL_DEPTH_COMPONENT, GL_FLOAT, depth);
+                RgBindFramebuffer(RG_READ_FRAMEBUFFER, wideMargin ? wideFramebuffer : framebuffer);
+                RgReadPixels(wideMargin * factor, y * factor, w, h, RG_DEPTH_COMPONENT, RG_FLOAT, depth);
                 uint64_t depthHash = Hash(depth, (size_t)w * h * sizeof(float));
                 free(depth);
                 if (!referenceMode) {
@@ -286,7 +291,7 @@ int main(int argc, char **argv)
                     }
                     assert(colourHash == expectedColour && depthHash == expectedDepth);
                 }
-                assert(glGetError() == GL_NO_ERROR);
+                assert(!RenderBackendError()[0]);
             }
             cases++;
         }
@@ -294,6 +299,7 @@ int main(int argc, char **argv)
     free(expectedPixels);
     if (output) fclose(output);
     printf("%d GPU colour/depth cases covering palette classes, updates, overlaps, scales, HD and wrapping: OK\n", cases);
+    RenderStop();
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
     return 0;
 }

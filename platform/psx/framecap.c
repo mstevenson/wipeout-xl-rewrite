@@ -10,6 +10,14 @@
 
 #include "framecap.h"
 #include "gpu.h"
+#include "../render/state.h"
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#endif
+
+#ifdef PORT_HAVE_TURBOJPEG
+#include <turbojpeg.h>
+#endif
 #include "pad.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -34,6 +42,7 @@ int PortGameInfo(char *out, int size); /* (game/src/portinfo.c) */
 #define PICTURE_QUALITY 95
 
 static FrameCapFrame frames[FRAMES];
+static uint8_t skippedPictures[FRAMES];
 static uint32_t nextNumber;
 static uint64_t lastPictureTicks; /* when the last recorded picture was taken */
 static int inBetween;             /* a picture between frames is being recorded (FrameCapBetween) ... */
@@ -60,14 +69,34 @@ static int generation;
 static char savedDir[1024];
 
 /* Video-memory snapshots, shared by the frames drawn while it did not change. */
+#define VRAM_PAGE_WORDS 2048
+#define VRAM_PAGES (sizeof(psxVram) / (VRAM_PAGE_WORDS * sizeof(uint16_t)))
+typedef struct VramPage {
+    int users;
+    uint16_t pixels[VRAM_PAGE_WORDS];
+} VramPage;
 typedef struct Snapshot {
-    uint16_t *pixels;
+    VramPage *pages[VRAM_PAGES];
     int users;
 } Snapshot;
 #define SNAPSHOTS (FRAMES + 2)
 static Snapshot snapshots[SNAPSHOTS];
 static unsigned vramVersion = 1, snapshotVersion;
 static int lastSnapshot = -1;
+static uint16_t *snapshotPixels;
+static int decodedSnapshot = -1;
+static uint8_t *decodedPicture;
+static unsigned decodedPictureToken;
+/* Saved pictures already exist on disk. Keep their paths, not another copy of
+   every full-resolution JPEG while the recorder is frozen. */
+static struct SavedPicture { char *path; unsigned token; } savedPictures[FRAMES];
+static void TrimRecorderMemory(void)
+{
+    RenderTrimMemory();
+#ifdef __APPLE__
+    malloc_zone_pressure_relief(NULL, 0);
+#endif
+}
 
 /* What built the packets: address ranges, rebuilt for each frame the game builds. */
 typedef struct Tag {
@@ -141,9 +170,24 @@ const FrameCapFrame *FrameCapFrameAt(int index)
     return index >= 0 && index < count ? &frames[(first + index) % FRAMES] : NULL;
 }
 
+int FrameCapPictureSkipped(int index)
+{
+    const FrameCapFrame *f = FrameCapFrameAt(index);
+    return f && skippedPictures[f - frames];
+}
+
 const uint16_t *FrameCapVram(int snapshot)
 {
-    return snapshot >= 0 && snapshot < SNAPSHOTS ? snapshots[snapshot].pixels : NULL;
+    if (snapshot < 0 || snapshot >= SNAPSHOTS || !snapshots[snapshot].users) return NULL;
+    if (!snapshotPixels) snapshotPixels = malloc(sizeof(psxVram));
+    if (!snapshotPixels) return NULL;
+    if (decodedSnapshot != snapshot) {
+        for (size_t i = 0; i < VRAM_PAGES; i++)
+            memcpy(snapshotPixels + i * VRAM_PAGE_WORDS, snapshots[snapshot].pages[i]->pixels,
+                   VRAM_PAGE_WORDS * sizeof(uint16_t));
+        decodedSnapshot = snapshot;
+    }
+    return snapshotPixels;
 }
 
 void FrameCapVramChanged(void)
@@ -154,8 +198,12 @@ void FrameCapVramChanged(void)
 static void Release(int snapshot)
 {
     if (snapshot >= 0 && --snapshots[snapshot].users <= 0) {
-        free(snapshots[snapshot].pixels);
-        snapshots[snapshot].pixels = NULL;
+        for (size_t i = 0; i < VRAM_PAGES; i++) {
+            VramPage *page = snapshots[snapshot].pages[i];
+            if (!--page->users) free(page);
+            snapshots[snapshot].pages[i] = NULL;
+        }
+        if (decodedSnapshot == snapshot) decodedSnapshot = -1;
         snapshots[snapshot].users = 0;
         if (snapshot == lastSnapshot) {
             lastSnapshot = -1;
@@ -171,14 +219,26 @@ static int TakeSnapshot(void)
         snapshots[lastSnapshot].users++;
         return lastSnapshot;
     }
-    for (i = 0; i < SNAPSHOTS && snapshots[i].pixels; i++) {
+    for (i = 0; i < SNAPSHOTS && snapshots[i].users; i++) {
     }
     if (i == SNAPSHOTS) {
         return -1;
     }
-    snapshots[i].pixels = malloc(sizeof(psxVram));
-    memcpy(snapshots[i].pixels, psxVram, sizeof(psxVram));
+    for (size_t p = 0; p < VRAM_PAGES; p++) {
+        VramPage *page = lastSnapshot >= 0 ? snapshots[lastSnapshot].pages[p] : NULL;
+        const uint8_t *source = (const uint8_t *)psxVram + p * VRAM_PAGE_WORDS * sizeof(uint16_t);
+        if (page && !memcmp(page->pixels, source, sizeof(page->pixels))) {
+            page->users++;
+        } else {
+            page = malloc(sizeof(*page));
+            if (!page) abort();
+            page->users = 1;
+            memcpy(page->pixels, source, sizeof(page->pixels));
+        }
+        snapshots[i].pages[p] = page;
+    }
     snapshots[i].users = 1;
+    if (decodedSnapshot == i) decodedSnapshot = -1;
     lastSnapshot = i;
     snapshotVersion = vramVersion;
     return i;
@@ -186,10 +246,12 @@ static int TakeSnapshot(void)
 
 /* ---- the pictures: read back, compressed by worker threads ---- */
 
+typedef struct RawPicture RawPicture;
 typedef struct Job {
     uint8_t *pixels; /* RGBA */
     int w, h, slot;
     unsigned token;
+    RawPicture *raw; /* shared while one identical picture is being encoded */
 } Job;
 #define JOBS 3 /* (each a whole picture uncompressed: 24 MB at 8x) */
 static Job jobs[JOBS];
@@ -216,6 +278,69 @@ typedef struct Output {
     size_t size, capacity;
 } Output;
 
+typedef struct EncodedPicture {
+    uint8_t *data;
+    size_t size;
+    unsigned users;
+} EncodedPicture;
+static EncodedPicture *encodedPictures[FRAMES], *lastEncodedPicture;
+struct RawPicture {
+    unsigned users;
+    uint8_t *pixels;
+    int width, height;
+    EncodedPicture *encoded;
+};
+static RawPicture *lastRawPicture;
+static struct { RawPicture *raw; unsigned token; } pendingPictures[FRAMES];
+
+static void ReleaseEncoded(EncodedPicture *picture)
+{
+    if (picture && !--picture->users) {
+        if (lastEncodedPicture == picture) lastEncodedPicture = NULL;
+        free(picture->data);
+        free(picture);
+    }
+}
+
+static void ReleaseRaw(RawPicture *raw)
+{
+    if (raw && !--raw->users) {
+        ReleaseEncoded(raw->encoded);
+        free(raw->pixels);
+        free(raw);
+    }
+}
+
+/* Caller holds the recorder lock, or has drained all compression jobs. */
+static void ReleaseJpeg(FrameCapFrame *f)
+{
+    EncodedPicture *picture = encodedPictures[f - frames];
+    if (picture) {
+        ReleaseEncoded(picture);
+        encodedPictures[f - frames] = NULL;
+    } else free(f->jpeg);
+    f->jpeg = NULL;
+}
+
+/* Caller holds the recorder lock. A pending frame keeps its own token, even
+   when its identical pixels share an in-flight compression job. */
+static void ShareRawPicture(FrameCapFrame *f, RawPicture *raw)
+{
+    ReleaseJpeg(f);
+    int slot = (int)(f - frames);
+    pendingPictures[slot].raw = NULL;
+    if (raw->encoded) {
+        EncodedPicture *picture = raw->encoded;
+        picture->users++;
+        encodedPictures[slot] = picture;
+        f->jpeg = picture->data;
+        f->jpegSize = picture->size;
+    } else {
+        pendingPictures[slot].raw = raw;
+        pendingPictures[slot].token = f->pictureToken;
+    }
+}
+
 static void Write(void *context, void *data, int size)
 {
     Output *o = (Output *)context;
@@ -234,23 +359,66 @@ static void Encode(Job *job)
     Output out = {NULL, 0, 0};
     FrameCapFrame *f = &frames[job->slot];
 
-    if (!stbi_write_jpg_to_func(Write, &out, job->w, job->h, 4, job->pixels, PICTURE_QUALITY)) {
+#ifdef PORT_HAVE_TURBOJPEG
+    /* Each job owns its compressor. Keep 4:4:4 chroma and the same quality as
+       the fallback, with the accurate DCT for small text and pixel artwork. */
+    tjhandle compressor = tjInitCompress();
+    unsigned char *jpeg = NULL;
+    unsigned long bytes = 0;
+    int compressed = compressor && !tjCompress2(compressor, job->pixels, job->w, 0, job->h,
+        TJPF_RGBA, &jpeg, &bytes, TJSAMP_444, PICTURE_QUALITY, TJFLAG_ACCURATEDCT);
+    if (compressed) Write(&out, jpeg, (int)bytes);
+    tjFree(jpeg);
+    if (compressor) tjDestroy(compressor);
+#endif
+    /* Allocation/codec failures retain the portable encoder, without lowering quality. */
+    if (!out.data && !stbi_write_jpg_to_func(Write, &out, job->w, job->h, 4, job->pixels, PICTURE_QUALITY)) {
         free(out.data);
         out.data = NULL;
-    } else {
-        uint8_t *fitted = realloc(out.data, out.size); /* (no room to grow kept) */
-
-        out.data = fitted ? fitted : out.data;
     }
-    free(job->pixels);
+    if (out.data) {
+        uint8_t *fitted = realloc(out.data, out.size);
+        if (fitted) out.data = fitted;
+    }
+    if (!job->raw) free(job->pixels);
     SDL_LockMutex(Lock());
-    if (f->pictureToken == job->token && out.data) {
-        free(f->jpeg);
-        f->jpeg = out.data;
-        f->jpegSize = out.size;
+    if (out.data && (job->raw || f->pictureToken == job->token)) {
+        EncodedPicture *picture = lastEncodedPicture;
+        if (picture && picture->size == out.size && !memcmp(picture->data, out.data, out.size)) {
+            picture->users++;
+            free(out.data);
+        } else {
+            picture = malloc(sizeof(*picture));
+            if (!picture) abort();
+            *picture = (EncodedPicture){out.data, out.size, 1};
+            lastEncodedPicture = picture;
+        }
+        if (job->raw) {
+            job->raw->encoded = picture; /* job/cache owns the initial reference */
+            for (int i = 0; i < FRAMES; i++) {
+                if (pendingPictures[i].raw != job->raw) continue;
+                if (frames[i].pictureToken == pendingPictures[i].token)
+                    ShareRawPicture(&frames[i], job->raw);
+                else pendingPictures[i].raw = NULL;
+            }
+        } else {
+            ReleaseJpeg(f);
+            encodedPictures[f - frames] = picture;
+            f->jpeg = picture->data;
+            f->jpegSize = picture->size;
+        }
     } else {
         free(out.data);
     }
+    if (job->raw && !job->raw->encoded) {
+        for (int i = 0; i < FRAMES; i++)
+            if (pendingPictures[i].raw == job->raw) pendingPictures[i].raw = NULL;
+        if (lastRawPicture == job->raw) {
+            ReleaseRaw(lastRawPicture);
+            lastRawPicture = NULL;
+        }
+    }
+    ReleaseRaw(job->raw);
     SDL_UnlockMutex(lockMutex);
 }
 
@@ -286,22 +454,55 @@ static void ReadBack(const uint8_t *pixels, int w, int h, void *user)
     if (readSlot < 0) {
         return;
     }
-    job.pixels = malloc((size_t)w * h * 4);
-    if (!job.pixels) {
+    size_t size = (size_t)w * h * 4;
+    SDL_LockMutex(Lock());
+    if (frames[readSlot].pictureToken != readToken) {
+        readSlot = -1;
+        SDL_UnlockMutex(lockMutex);
         return;
     }
-    memcpy(job.pixels, pixels, (size_t)w * h * 4);
-    job.w = w;
-    job.h = h;
-    job.slot = readSlot;
-    job.token = readToken;
+    if (lastRawPicture && lastRawPicture->width == w && lastRawPicture->height == h &&
+        !memcmp(lastRawPicture->pixels, pixels, size)) {
+        ShareRawPicture(&frames[readSlot], lastRawPicture);
+        readSlot = -1;
+        SDL_UnlockMutex(lockMutex);
+        return;
+    }
+    /* Recording is best effort. A full encoder queue must never stall game
+       updates or presentation. Keep geometry/VRAM inspection for this frame. */
+    if (workerCount && jobCount == JOBS) {
+        skippedPictures[readSlot] = 1;
+        readSlot = -1;
+        SDL_UnlockMutex(lockMutex);
+        return;
+    }
+    uint8_t *recycled = NULL;
+    if (lastRawPicture && lastRawPicture->users == 1 && lastRawPicture->width == w && lastRawPicture->height == h) {
+        recycled = lastRawPicture->pixels;
+        lastRawPicture->pixels = NULL;
+        ReleaseRaw(lastRawPicture);
+        lastRawPicture = NULL;
+    }
+    SDL_UnlockMutex(lockMutex);
+    RawPicture *raw = calloc(1, sizeof(*raw));
+    if (!raw) { free(recycled); return; }
+    raw->pixels = recycled ? recycled : malloc(size);
+    if (!raw->pixels) { free(raw); return; }
+    memcpy(raw->pixels, pixels, size);
+    raw->width = w; raw->height = h;
+    raw->users = 2; /* the latest-picture cache and the queued/running job */
+    job = (Job){.pixels = raw->pixels, .w = w, .h = h, .slot = readSlot, .token = readToken, .raw = raw};
+    SDL_LockMutex(lockMutex);
+    ReleaseRaw(lastRawPicture);
+    lastRawPicture = raw;
+    ShareRawPicture(&frames[readSlot], raw);
     readSlot = -1;
-    Lock();
+    SDL_UnlockMutex(lockMutex);
     if (!workersStarted) {
         int i, cores = SDL_GetNumLogicalCPUCores();
 
         workersStarted = 1;
-        for (i = 0; i < SDL_clamp(cores - 2, 1, 4); i++) {
+        for (i = 0; i < SDL_clamp(cores - 2, 1, 8); i++) {
             SDL_Thread *thread = SDL_CreateThread(Worker, "framecap", NULL);
 
             if (thread) {
@@ -315,9 +516,8 @@ static void ReadBack(const uint8_t *pixels, int w, int h, void *user)
         return;
     }
     SDL_LockMutex(lockMutex);
-    while (jobCount == JOBS) {
-        SDL_WaitCondition(jobDone, lockMutex); /* (the workers are behind: the game waits) */
-    }
+    /* Only this thread produces jobs; consumers can only make more room
+       after the admission check above. */
     jobs[(jobFirst + jobCount) % JOBS] = job;
     jobCount++;
     SDL_SignalCondition(jobWaiting);
@@ -341,6 +541,8 @@ static void FinishPictures(void)
     while (jobCount || jobsRunning) {
         SDL_WaitCondition(jobDone, lockMutex);
     }
+    ReleaseRaw(lastRawPicture);
+    lastRawPicture = NULL;
     SDL_UnlockMutex(lockMutex);
 }
 
@@ -348,11 +550,52 @@ static void FinishPictures(void)
 static void ForgetPicture(FrameCapFrame *f)
 {
     SDL_LockMutex(Lock());
-    free(f->jpeg);
-    f->jpeg = NULL;
+    ReleaseJpeg(f);
+    pendingPictures[f - frames].raw = NULL;
+    skippedPictures[f - frames] = 0;
     f->jpegSize = 0;
     f->pictureToken = 0;
+    SDL_free(savedPictures[f - frames].path);
+    memset(&savedPictures[f - frames], 0, sizeof(savedPictures[0]));
     SDL_UnlockMutex(lockMutex);
+}
+
+static const uint8_t *PictureJpeg(const FrameCapFrame *f, size_t *size, void **loaded)
+{
+    *loaded = NULL;
+    *size = f->jpegSize;
+    if (f->jpeg) return f->jpeg;
+    const struct SavedPicture *saved = &savedPictures[f - frames];
+    if (!saved->path || saved->token != f->pictureToken) return NULL;
+    *loaded = SDL_LoadFile(saved->path, size);
+    return *loaded;
+}
+
+/* Only drop the RAM copy after a complete successful write. Re-saving a
+   file-backed frame reads it before opening the destination, even at the same path. */
+static int SavePicture(FrameCapFrame *f, const char *path)
+{
+    const struct SavedPicture *existing = &savedPictures[f - frames];
+    if (!f->jpeg && existing->path && existing->token == f->pictureToken && !strcmp(existing->path, path))
+        return 1;
+    size_t size;
+    void *loaded;
+    const uint8_t *jpeg = PictureJpeg(f, &size, &loaded);
+    if (!jpeg || !f->shown) { SDL_free(loaded); return 0; }
+    FILE *file = fopen(path, "wb");
+    if (!file) { SDL_free(loaded); return 0; }
+    size_t written = fwrite(jpeg, 1, size, file);
+    int closed = fclose(file);
+    SDL_free(loaded);
+    if (written != size || closed) return 0;
+    char *copy = SDL_strdup(path);
+    if (!copy) return 0;
+    struct SavedPicture *saved = &savedPictures[f - frames];
+    SDL_free(saved->path);
+    saved->path = copy;
+    saved->token = f->pictureToken;
+    ReleaseJpeg(f);
+    return 1;
 }
 
 int FrameCapPictureReady(int index)
@@ -361,15 +604,14 @@ int FrameCapPictureReady(int index)
     int ready;
     if (!f) return 0;
     SDL_LockMutex(Lock());
-    ready = f->shown && f->jpeg != NULL;
+    const struct SavedPicture *saved = &savedPictures[f - frames];
+    ready = f->shown && (f->jpeg || (saved->path && saved->token == f->pictureToken));
     SDL_UnlockMutex(lockMutex);
     return ready;
 }
 
 const uint8_t *FrameCapPicture(int index, int *w, int *h)
 {
-    static uint8_t *decoded;
-    static unsigned decodedToken;
     const FrameCapFrame *f;
     const uint8_t *jpeg;
     size_t size;
@@ -380,28 +622,27 @@ const uint8_t *FrameCapPicture(int index, int *w, int *h)
         return NULL;
     }
     f = FrameCapFrameAt(index);
+    if (!f->shown) return NULL;
     SDL_LockMutex(Lock());
-    jpeg = f->jpeg;
-    size = f->jpegSize;
     token = f->pictureToken;
-    SDL_UnlockMutex(lockMutex);
-    if (!jpeg || !f->shown) {
-        return NULL;
-    }
-    if (!decoded || decodedToken != token) {
+    if (!decodedPicture || decodedPictureToken != token) {
         int dw, dh;
-
-        stbi_image_free(decoded);
-        decoded = stbi_load_from_memory(jpeg, (int)size, &dw, &dh, &n, 3);
-        decodedToken = token;
-        if (decoded && (dw != f->pictureW || dh != f->pictureH)) {
-            stbi_image_free(decoded);
-            decoded = NULL;
+        void *loaded;
+        jpeg = PictureJpeg(f, &size, &loaded);
+        if (!jpeg) { SDL_UnlockMutex(lockMutex); return NULL; }
+        stbi_image_free(decodedPicture);
+        decodedPicture = stbi_load_from_memory(jpeg, (int)size, &dw, &dh, &n, 3);
+        SDL_free(loaded);
+        decodedPictureToken = token;
+        if (decodedPicture && (dw != f->pictureW || dh != f->pictureH)) {
+            stbi_image_free(decodedPicture);
+            decodedPicture = NULL;
         }
     }
+    SDL_UnlockMutex(lockMutex);
     *w = f->pictureW;
     *h = f->pictureH;
-    return decoded;
+    return decodedPicture;
 }
 
 /* The next frame of the ring (the oldest given up when it is full). */
@@ -583,19 +824,27 @@ static void TakePicture(FrameCapFrame *f, int x, int y, int w, int h)
     width = (PICTURE_W + 2 * margin) * scale;
     height = GPU_LINES * scale; /* (240 lines, or PAL's 256) */
 
-    FinishRead(1); /* (the picture before's: back by now) */
+    FinishRead(0); /* poll completed captures; presentation never waits for readback */
     ForgetPicture(f);
     f->pictureW = width;
     f->pictureH = height;
     f->pictureScale = scale;
     f->pictureX = -margin;
+    f->shown = PortShownFrames() + 1;
+    if (GpuReadPictureBusy(GPU_READ_RECORDER)) {
+        skippedPictures[f - frames] = 1;
+        lastPictureTicks = SDL_GetTicksNS();
+        return;
+    }
     SDL_LockMutex(Lock());
     f->pictureToken = ++nextToken;
     SDL_UnlockMutex(lockMutex);
     readSlot = (int)(f - frames);
     readToken = f->pictureToken;
-    GpuReadPictureStart(GPU_READ_RECORDER, x, y, w, h, margin, width, height);
-    f->shown = PortShownFrames() + 1;
+    if (!GpuReadPictureStart(GPU_READ_RECORDER, x, y, w, h, margin, width, height)) {
+        skippedPictures[f - frames] = 1;
+        readSlot = -1;
+    }
     lastPictureTicks = SDL_GetTicksNS();
 }
 
@@ -801,6 +1050,38 @@ static void PutI32(FILE *f, int32_t v)
     Put(f, &v, 4);
 }
 
+/* A rapid re-save can reuse an export directory while ring indices have
+   changed. Read all backing images before overwriting any indexed files. */
+static int ProtectBackingPictures(const char *directory)
+{
+    size_t length = strlen(directory);
+    int overlap = 0;
+    for (int i = 0; i < count; i++) {
+        const struct SavedPicture *saved = &savedPictures[(first + i) % FRAMES];
+        if (saved->path && !strncmp(saved->path, directory, length) && saved->path[length] == '/') {
+            char destination[1200];
+            SDL_snprintf(destination, sizeof(destination), "%s/picture_%03d.jpg", directory, i);
+            if (strcmp(saved->path, destination)) overlap = 1;
+        }
+    }
+    if (!overlap) return 1;
+    for (int i = 0; i < count; i++) {
+        FrameCapFrame *f = &frames[(first + i) % FRAMES];
+        if (!f->jpeg && savedPictures[f - frames].path) {
+            void *loaded;
+            size_t size;
+            const uint8_t *data = PictureJpeg(f, &size, &loaded);
+            if (!data) return 0;
+            f->jpeg = malloc(size);
+            if (f->jpeg) memcpy(f->jpeg, data, size);
+            SDL_free(loaded);
+            if (!f->jpeg) return 0;
+            f->jpegSize = size;
+        }
+    }
+    return 1;
+}
+
 static void Save(void)
 {
     FinishPictures();
@@ -824,6 +1105,7 @@ static void Save(void)
         return;
     }
     SDL_CreateDirectory(savedDir);
+    if (!ProtectBackingPictures(savedDir)) return;
     SDL_snprintf(path, sizeof(path), "%s/frames.bin", savedDir);
     if (!(file = fopen(path, "wb"))) {
         savedDir[0] = 0;
@@ -894,36 +1176,32 @@ static void Save(void)
     }
     fclose(file);
     for (i = 0; i < SNAPSHOTS; i++) {
-        if (snapshots[i].pixels) {
+        if (snapshots[i].users) {
             SDL_snprintf(path, sizeof(path), "%s/vram_%d.bin", savedDir, i);
             if ((file = fopen(path, "wb"))) {
-                Put(file, snapshots[i].pixels, sizeof(psxVram));
+                Put(file, FrameCapVram(i), sizeof(psxVram));
                 fclose(file);
             }
         }
     }
     for (i = 0; i < count; i++) {
-        const FrameCapFrame *f = FrameCapFrameAt(i);
-
-        if (!f->jpeg || !f->shown) {
-            continue;
-        }
+        FrameCapFrame *f = &frames[(first + i) % FRAMES];
         SDL_snprintf(path, sizeof(path), "%s/picture_%03d.jpg", savedDir, i);
-        if ((file = fopen(path, "wb"))) {
-            Put(file, f->jpeg, f->jpegSize);
-            fclose(file);
-        }
+        SavePicture(f, path);
     }
     /* what the game was doing (game/src/portinfo.c) and how it was shown */
     SDL_snprintf(path, sizeof(path), "%s/info.json", savedDir);
     if ((file = fopen(path, "w"))) {
         char info[2048];
         int n = PortGameInfo(info, (int)sizeof(info));
+        int skipped = 0;
+        for (int frame = 0; frame < count; frame++)
+            skipped += skippedPictures[(first + frame) % FRAMES] != 0;
 
         fprintf(file, "{\n  \"version\": \"%s\",\n  %.*s  \"widescreen\": %d,\n  \"frame rate\": %d,\n"
-                      "  \"console depth\": %d,\n  \"recorded frames\": %d\n}\n",
+                      "  \"console depth\": %d,\n  \"recorded frames\": %d,\n  \"skipped previews\": %d\n}\n",
                 PORT_VERSION, n, info, portSettings.widescreen, portSettings.frameRate, portSettings.consoleDepth,
-                count);
+                count, skipped);
         fclose(file);
     }
     PortLog("frame recorder: %d frames saved to %s\n", count, savedDir);
@@ -932,6 +1210,7 @@ static void Save(void)
 void FrameCapSave(void)
 {
     Save();
+    TrimRecorderMemory();
 }
 
 /* The frame being built when the recording stops: never finished nor shown, nothing to look at. */
@@ -959,6 +1238,7 @@ void FrameCapToggleFreeze(void)
     PsxPadStopRumble(); /* Fields stop while inspecting frames, including the motor expiry updates. */
     generation++;
     Save();
+    TrimRecorderMemory();
 }
 
 void FrameCapClear(void)
@@ -977,6 +1257,12 @@ void FrameCapClear(void)
         f->prims = NULL;
         f->count = f->capacity = 0;
     }
+    free(snapshotPixels);
+    snapshotPixels = NULL;
+    stbi_image_free(decodedPicture);
+    decodedPicture = NULL;
+    decodedPictureToken = 0;
+    decodedSnapshot = -1;
     first = count = 0;
     current = -1;
     newFrame = 1;
@@ -986,6 +1272,7 @@ void FrameCapClear(void)
     frozen = taking = 0;
     savedDir[0] = 0;
     generation++;
+    TrimRecorderMemory();
 }
 
 void FrameCapTab(void)
@@ -997,6 +1284,7 @@ void FrameCapTab(void)
         DropUnfinished();
         FinishPictures();
         generation++;
+        TrimRecorderMemory();
     } else {
         FrameCapClear();
         taking = 1;

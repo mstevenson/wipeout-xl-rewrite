@@ -83,7 +83,7 @@ real game.
 
 ## Build
 
-Each build has its own folder under `build/`. macOS (Homebrew's `sdl3`):
+Each build has its own folder under `build/`. macOS uses Homebrew's `sdl3` and `jpeg-turbo`:
 
 ```sh
 cmake -S . -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -92,6 +92,13 @@ ninja -C build/mac
 
 It also makes `build/mac/Wipeout XL.app`, with the Mac version's icon and the
 Homebrew libraries it uses inside (copy it to `/Applications`).
+
+The recorder uses the static libjpeg-turbo library when its CMake package is available.
+It preserves quality 95 and full 4:4:4 chroma. Minimal builds can use the slower portable
+encoder with `-DWIPEOUT_FAST_JPEG=OFF`; release builds require the SIMD codec.
+This software is based in part on the work of the Independent JPEG Group.
+See [JPEG notices](docs/licenses/libjpeg-turbo.txt).
+
 
 Linux (for example Debian 13 or Ubuntu 25.04: `libsdl3-dev libgl-dev`): the
 same two commands with `build/linux`.
@@ -138,6 +145,11 @@ emcmake cmake -S . -B build/web -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ninja -C build/web
 ```
 
+The web build bounds function inlining to avoid excessive compiler memory use
+in older iOS WebKit. Keep those web-specific compiler/linker options together;
+removing only the LLVM or Binaryen bound can recreate large Asyncify functions.
+`wipeoutxl.html.symbols` maps function indices for profiling.
+
 This makes `wipeoutxl.html`, `wipeoutxl.js` and `wipeoutxl.wasm`, and, as
 wipeout-rewrite's web build has its data beside the page, the disc the page
 loads by itself: `WIPEOUT_WEB_DISC` (your own copy) links the `.cue` and its
@@ -150,6 +162,48 @@ without a `wipeoutxl-data.json`, and the JSON (`{ "disc": "url/of/the.cue" }`)
 can point anywhere on the site. With `-DWIPEOUT_WEB_DISC_MUSIC=OFF` only the
 data track goes into `disc/` (about 86 MB in place of about 700): the game
 plays, without its music.
+
+For a muted phone test over your LAN, run `python3 tools/serve_web.py --host YOUR_LAN_IP`
+from the repository root and open `http://YOUR_LAN_IP:8768/phone.html`. It keeps 3x
+widescreen rendering, enables touch controls and the FPS counter, and serves only
+the data track. Small compressed chunks use the HTTP cache even on a plain HTTP
+LAN address. The first preparation creates a compressed cache under `build/phone-cache`.
+This helper requires a CUE with separate data and music files. The normal web page
+and full-music build remain available as above.
+
+Add `--music` to publish `phone-music.html` alongside the muted test. It includes
+every original CD track and enables audio. Tap **Play with sound** after the disc loads. This starts audio inside a user
+gesture before the game opens its audio device. If the browser interrupts audio,
+the **Enable sound** button resumes it. On iOS, the mixed audio plays through a
+media element started by the same gesture. Music streams through a shared six MiB decoded cache with small
+track headers. The server must remain reachable for uncached music chunks.
+The mixer schedules short Web Audio buffers ahead of playback, with a bounded
+queue, so rendering does not have to meet a main-thread audio callback deadline.
+Uncached music sectors load in the background while sound effects continue;
+music resumes from the same sample once its data is ready.
+If browser save storage does not respond within five seconds, Play becomes
+available with a notice that the session will not save changes. Existing browser
+saves remain untouched. Normal save restoration and autosaving continue when
+storage is available.
+
+For static hosting, run `python3 tools/serve_web.py --music --export build/web-static`
+and upload the contents of `build/web-static/`. Its `index.html` enables streamed
+music; `phone.html` is the muted version. These are ordinary HTML, JS, WASM, CUE
+and binary chunk files. They need no API, Python process, service worker or custom
+compression headers, and relative URLs allow hosting under a subdirectory.
+
+For local phone crash checks, `phone-music-check.html` uses the same music build
+and saves a small diagnostic snapshot once per second to `build/phone-diagnostics/`.
+It includes audio activation and media state, scheduled audio queue and underruns,
+FPS, heap capacity, music fetch state, graphics API timings, GPU fence waits and WebGL context loss. The static
+export excludes this diagnostic hook.
+
+The mobile web page has a **Full screen** button. Browsers with the Fullscreen API
+enter full screen directly. On iPhone with iOS 16, open the page in Safari, use
+**Share > Add to Home Screen**, and launch Wipeout XL from that icon to remove the
+browser bars. The game resizes on rotation and keeps its HUD and touch controls
+clear of the notch and home indicator. This does not require a service worker;
+the game still needs access to the server for files missing from the HTTP cache.
 
 ## Phones and tablets (iOS, Android)
 
@@ -203,3 +257,5 @@ the next start. Dear ImGui (`platform/third_party/imgui`, MIT) draws it.
 [docs/PLAN.md](docs/PLAN.md) describes the design; [docs/IO.md](docs/IO.md)
 the sound, CD, pad and card side. [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) has the licenses of code adapted
 from others (Monkey's Audio's decoder).
+
+Graphics devices and live switching in the debug console are described in [Graphics backends](docs/RENDER_BACKENDS.md).

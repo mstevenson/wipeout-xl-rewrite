@@ -18,6 +18,10 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
     tools/bugtest/test_movie.c $(pkg-config --libs sdl3) -o "$test_build/movie"
 "$test_build/movie"
 
+${CC:-cc} -O2 -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) \
+    tools/bugtest/test_glyph_strokes.c platform/keyglyphs.c $(pkg-config --libs sdl3) -o "$test_build/glyph_strokes"
+"$test_build/glyph_strokes"
+
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
     -include platform/include/port.h -iquote game/include tools/bugtest/test_lobby.c \
     game/data/menus_data.c -o "$test_build/lobby"
@@ -31,6 +35,11 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
     -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_ordering_cycle.c \
     $(pkg-config --libs sdl3) -o "$test_build/ordering_cycle"
 "$test_build/ordering_cycle"
+
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
+    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_menu_reuse.c \
+    $(pkg-config --libs sdl3) -o "$test_build/menu_reuse"
+"$test_build/menu_reuse"
 
 ${CC:-cc} -O2 -ffunction-sections -fdata-sections $discard \
     tools/bugtest/test_projection_cache.c -lm -o "$test_build/projection_cache"
@@ -50,6 +59,23 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
 "$test_build/rumble_stop"
 "$test_build/framecap_storage"
 
+# Keep the portable encoder covered, plus the optional SIMD codec when installed.
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
+    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_framecap_codec.c \
+    $(pkg-config --libs sdl3) -o "$test_build/framecap_codec"
+"$test_build/framecap_codec"
+if pkg-config --exists libturbojpeg; then
+    for test in framecap_storage framecap_codec; do
+        ${CC:-cc} -O1 -DPORT_HAVE_TURBOJPEG -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
+            -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3 libturbojpeg) "tools/bugtest/test_$test.c" \
+            $(pkg-config --libs sdl3 libturbojpeg) -o "$test_build/${test}_turbo"
+        "$test_build/${test}_turbo"
+    done
+fi
+
+${CC:-cc} -O1 -Iplatform $(pkg-config --cflags sdl3) tools/bugtest/test_render_switch.c \
+    $(pkg-config --libs sdl3) -lm -o "$test_build/render_switch"
+"$test_build/render_switch"
 ${CC:-cc} -O2 -D_FORTIFY_SOURCE=2 -include platform/include/port.h -iquote game/include \
     tools/bugtest/test_card_label.c -o "$test_build/card_label"
 "$test_build/card_label" TESTSAVE
@@ -57,22 +83,44 @@ ${CC:-cc} -O2 -D_FORTIFY_SOURCE=2 -include platform/include/port.h -iquote game/
 # Optional real GPU checks, for a desktop session with an OpenGL driver.
 if [ "${WIPEOUT_TEST_GL:-0}" = 1 ]; then
     case $(uname -s) in Darwin) gl_libs='-framework OpenGL';; *) gl_libs='-lGL';; esac
+    gpu_defines=''
+    gpu_objects=''
+    if [ "${WIPEOUT_TEST_METAL:-0}" = 1 ]; then
+        python3 tools/embed_shader.py platform/render/shaders_metal.metal "$test_build/shaders_metal.h"
+        ${CC:-cc} -c -fobjc-arc -Wno-deprecated-declarations -Iplatform -I"$test_build" $(pkg-config --cflags sdl3) \
+            platform/render/device_metal.m -o "$test_build/metal.o"
+        gpu_defines='-DPORT_HAVE_METAL'
+        gpu_objects="$test_build/metal.o"
+        gl_libs="$gl_libs -framework Metal -framework QuartzCore -framework AppKit"
+    fi
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-        -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_hud.c \
-        $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_hud"
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_hud.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_hud"
     "$test_build/gpu_hud"
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-        -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_mesh.c \
-        $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_mesh"
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_mesh.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_mesh"
     "$test_build/gpu_mesh"
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-        -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_downsample.c \
-        $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_downsample"
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_downsample.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_downsample"
     "$test_build/gpu_downsample"
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-        -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_passes.c \
-        $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_passes"
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_passes.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_passes"
     "$test_build/gpu_passes"
+    # WebGL's float metadata must reproduce the desktop flat interface exactly.
+    # Exercise it on a real GL driver even when the other cases selected Metal.
+    env -u WIPEOUT_TEST_METAL "$test_build/gpu_passes" "$test_build/flat.bin"
+    ${CC:-cc} -O1 -DPORT_TEST_WEBGL_METADATA -DPORT_TEST_WEBGL_UPLOADS -ffunction-sections -fdata-sections $discard \
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_passes.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_metadata"
+    env -u WIPEOUT_TEST_METAL "$test_build/gpu_metadata" "$test_build/float.bin"
+    cmp "$test_build/flat.bin" "$test_build/float.bin"
+    echo 'WebGL float metadata and direct indexed uploads preserve all colour/depth hashes: OK'
+    env -u WIPEOUT_TEST_METAL WIPEOUT_DECODED_CACHE=0 "$test_build/gpu_metadata" "$test_build/raw.bin"
+    cmp "$test_build/flat.bin" "$test_build/raw.bin"
+    echo 'WebGL raw VRAM sampler preserves all cached colour/depth hashes: OK'
 fi
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \

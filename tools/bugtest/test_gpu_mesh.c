@@ -10,7 +10,10 @@ int main(void)
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_Window *win = SDL_CreateWindow("Saturn mesh", 320, 240, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     SDL_GLContext ctx = SDL_GL_CreateContext(win); assert(ctx);
-    portSettings.renderScale = 1; portSettings.consoleDepth = 0; assert(GpuInit());
+    portSettings.renderScale = 1; portSettings.consoleDepth = 0; assert(RenderStartBackend(win, RENDER_OPENGL)); assert(GpuInit());
+    if (SDL_getenv("WIPEOUT_TEST_METAL")) {
+        assert(RenderRequestBackend(RENDER_METAL)); assert(RenderApplyBackend());
+    }
     for (int factor = 1; factor <= 3; factor += 2) {
         SetScale(factor); GpuSetDrawArea(0, 0, 320, 240, 0, 0);
         GpuFill(0, 0, 8, 8, 96, 96, 96);
