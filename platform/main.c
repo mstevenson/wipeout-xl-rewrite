@@ -534,6 +534,11 @@ int PortFarFlaresEnabled(void)
     return portSettings.farFlares;
 }
 
+int PortNativeRenderer(void)
+{
+    return !PortFarViewEnabled() && !PortTracing() ? RenderCurrent()->id : RENDER_AUTO;
+}
+
 int PortPcNativeView(int *sections, int *scenery)
 {
     return !PortFarViewEnabled() && !PortTracing() && RenderPcViewLimits(RenderCurrent(), sections, scenery);

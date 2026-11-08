@@ -405,6 +405,47 @@ static void MakeNativeTrack(const Course *c)
     SDL_free(native);
 }
 
+static uint16_t *nativeSceneObjects;
+static uint32_t *nativeSceneOffsets;
+static int nativeSceneSections, nativeSceneTrack;
+
+const unsigned short *PortSaturnNativeSceneObjects(int trackNumber, int section, int *count)
+{
+    *count = 0;
+    if (!PortSaturnDisc() || trackNumber != nativeSceneTrack || section < 0 || section >= nativeSceneSections) return NULL;
+    *count = (int)(nativeSceneOffsets[section + 1] - nativeSceneOffsets[section]);
+    return nativeSceneObjects + nativeSceneOffsets[section];
+}
+
+static void KeepNativeSceneObjects(const Course *c, int trackNumber)
+{
+    SDL_free(nativeSceneObjects);
+    SDL_free(nativeSceneOffsets);
+    nativeSceneSections = 0;
+    nativeSceneTrack = 0;
+    nativeSceneObjects = NULL;
+    nativeSceneOffsets = SDL_calloc(c->sectionCount + 1, sizeof(*nativeSceneOffsets));
+    uint32_t total = 0;
+    if (!nativeSceneOffsets) return;
+    for (uint32_t i = 0; i < c->sectionCount; i++) {
+        const uint8_t *s = c->sections + SECTIONS_AT + i * SECTION;
+        uint32_t count = Be16(s + 114), at = Be32(s + 116);
+        if (at > c->facesSize || count > (c->facesSize - at) / 2 || count > UINT32_MAX - total) return;
+        total += count;
+        nativeSceneOffsets[i + 1] = total;
+    }
+    nativeSceneObjects = SDL_malloc(((size_t)total + 1) * sizeof(*nativeSceneObjects));
+    if (!nativeSceneObjects) return;
+    for (uint32_t i = 0; i < c->sectionCount; i++) {
+        const uint8_t *s = c->sections + SECTIONS_AT + i * SECTION;
+        uint32_t at = Be32(s + 116);
+        for (uint32_t j = nativeSceneOffsets[i]; j < nativeSceneOffsets[i + 1]; j++, at += 2)
+            nativeSceneObjects[j] = Be16(c->faces + at);
+    }
+    nativeSceneTrack = trackNumber;
+    nativeSceneSections = (int)c->sectionCount;
+}
+
 /* track.trv, .trf, .trs, .vew and .tex */
 static void MakeGeometry(const Course *c, Buffer *trv, Buffer *trf, Buffer *trs, Buffer *vew, Buffer *tex)
 {
@@ -1439,6 +1480,7 @@ static uint8_t *MakeTrackWad(int track, size_t *size, uint8_t **texFile, size_t 
         return NULL;
     }
     memset(parts, 0, sizeof(parts));
+    KeepNativeSceneObjects(&c, track);
     MakeGeometry(&c, &parts[0], &parts[1], &parts[2], &parts[3], &tex);
     MakeLibrary(&c, &parts[4], &parts[5]);
     FreeCourse(&c);
@@ -1607,6 +1649,7 @@ int PortSaturnFileInfo(const char *pathname, int *loc, int *size)
            mutable palettes and sky on both fresh loads and cache hits. */
         Course c;
         if (ReadCourse(track, &c)) {
+            KeepNativeSceneObjects(&c, track);
             MakeNativeTrack(&c);
             SaturnLoadNativeSky(track);
         } else {

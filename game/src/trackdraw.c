@@ -595,7 +595,7 @@ void PortTrackFar(TrackSection *section, const PortView *view)
         POLY_FT4     *poly;
         int           left = 0, right = 0, above = 0, below = 0;
 
-        if (PortFarFaceDrawn(face)) {
+        if (!PortNativeTrackFaceVisible(face, view) || PortFarFaceDrawn(face)) {
             continue; /* the game drew it */
         }
         for (k = 0; k < 4; k++) {

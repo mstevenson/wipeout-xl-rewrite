@@ -1,21 +1,17 @@
 # Native PC draw distance
 
-- `draw.c` applies the retail PC near and F3 far bounds in `DrawLandscape`
-  for the active PC renderer in Native mode. Its accepted objects use precise
-  projection through `PortPcDrawNativeScenery`.
-- `track.c` dispatches `DrawNewTrack` and `DrawAllTrack` to the PC visibility
-  path in Native mode. `portfar.c` adds `PortPcDrawNativeTrack`, which follows
-  the authored section links, caps north low-detail runs and uses full-precision
-  drawing for faces the compatibility track renderer misses. The compatibility
-  tile pools keep their original sizes.
-- `PortFarMarkFace`, `PortFarDraw`, `PortFade`, `PortFarObject`,
-  `PortFarObjectPrimitives` and `PortNearAlloc` differ in the MIPS oracle because
-  arena registration was shared with the new PC path and face marking can now
-  run in Native PC mode. The oracle baseline was a snapshot of the pre-change
-  HEAD because the local `B0` snapshot was unavailable.
-- The new code uses typed fields and existing packet representations. It adds
-  no console addresses, raw struct offsets, or file reads. The console path
-  remains the fallback during lockstep tracing. The PC visibility tables are
-  verified against the Windows disc executable. The compatibility renderer
-  still supplies the console profiles' loaded course visibility and game-side
-  ship drawing.
+Native PC road rendering follows authored section links, with the original F3
+cap on north low-detail runs. All-view lists remain uncapped. Precise projection
+fills faces outside the compatibility renderer's coordinate range.
+
+Scenery uses the PowerVR candidate-list square root and original integer
+skeleton composition, near bound 2048, F3 far bound and projected sphere bounds.
+Candidate lists are captured at scene initialization independently of the active
+profile. They no longer inherit PlayStation rounding at radius boundaries.
+
+Rendered ships use `AddShipRenderObjects`' 1200/40 limits and float magnitude,
+separately from gameplay visibility. Native hulls and shadows share their mask.
+Full distance and lockstep tracing retain their existing dispatch.
+
+See [the original function evidence and tests](native-ships.md) and
+[the four-profile implementation and verification](native-distance.md).

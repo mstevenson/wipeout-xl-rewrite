@@ -143,6 +143,7 @@ static int Round(double v)
 typedef struct Poly {
     int corner[4];
     int flags;
+    int depthMode; /* retain raw group sorting bits before billboard compatibility flags */
     uint16_t srca, size, colr, mode; /* original VDP1 command words, retained for native rendering */
 } Poly;
 
@@ -152,6 +153,7 @@ typedef struct Model {
     Poly *poly;
     int polyCount;
     int billboard;
+    int32_t nativeRadius;
     int position[3];
 } Model;
 
@@ -173,6 +175,7 @@ static int ReadModel(const uint8_t *blk, size_t blkSize, const uint8_t *verts, s
     if ((size_t)at + 32 > blkSize) {
         return 0;
     }
+    m->nativeRadius = (int32_t)Be32(blk + at + 24);
     groups = Be32(blk + at);
     first = Be32(blk + at + 4);
     nv = Be16(blk + at + 16) + Be16(blk + at + 18);
@@ -208,6 +211,7 @@ static int ReadModel(const uint8_t *blk, size_t blkSize, const uint8_t *verts, s
                 q->corner[k] = Clamp(Be16(r + k * 2) / 12, 0, nv ? nv - 1 : 0);
             }
             /* a billboard's texel 0 is see-through (the trees: their groups ask for it drawn, black) */
+            q->depthMode = (flags >> 14) & 3;
             q->flags = m->billboard ? flags & ~SPD : flags;
             if (flags & TEXTURED) {
                 q->srca = Be16(r + 8);
@@ -229,6 +233,7 @@ static void MergeModels(Model *out, const Model *a, const Model *b)
     int i, k;
 
     memset(out, 0, sizeof(*out));
+    out->nativeRadius = SDL_max(a->nativeRadius, b->nativeRadius);
     out->vertexCount = a->vertexCount + b->vertexCount;
     out->vertex = SDL_calloc((size_t)out->vertexCount + 1, sizeof(*out->vertex));
     memcpy(out->vertex, a->vertex, (size_t)a->vertexCount * sizeof(*a->vertex));
@@ -1010,6 +1015,9 @@ typedef struct Object {
     int position[3];
     Spec *spec;
     int specCount;
+    int32_t nativeRadius;
+    int haveNativeRadius, nativeBillboard;
+    uint32_t nativeBillboardParts;
 } Object;
 
 /* A texture's palette: the key it was assigned under. */
@@ -1290,6 +1298,8 @@ static Object *NewObject(Converter *cv, const char *name, const Model *m, const 
     memset(o, 0, sizeof(*o));
     SDL_strlcpy(o->name, name, sizeof(o->name));
     if (m) {
+        o->nativeRadius = m->nativeRadius;
+        o->haveNativeRadius = 1;
         o->vertexCount = m->vertexCount;
         o->vertex = SDL_calloc((size_t)m->vertexCount + 1, sizeof(*o->vertex));
         memcpy(o->vertex, m->vertex, (size_t)m->vertexCount * sizeof(*o->vertex));
@@ -1357,6 +1367,33 @@ static void AddBillboard(Converter *cv, const char *name, const Model *m, Saturn
         SDL_free(tex);
     }
     o = NewObject(cv, name, NULL, position);
+    o->nativeRadius = m->nativeRadius;
+    o->haveNativeRadius = 1;
+    o->nativeBillboard = 1;
+    /* Retain each authored billboard quad for Native's per-piece depth gate.
+       Full mode continues to use the compatible composite sprite below. */
+    SaturnNativePoly *pieces = SDL_calloc((size_t)m->polyCount, sizeof(*pieces));
+    for (int piece = 0; piece < m->polyCount; piece++) {
+        const Poly *p = &m->poly[piece];
+        SaturnNativePoly *native = &pieces[piece];
+        native->colour = p->colr;
+        native->mode = p->mode;
+        native->depthMode = p->depthMode;
+        for (int corner = 0; corner < 4; corner++) {
+            native->corners[corner] = corner == 2 ? 3 : corner == 3 ? 2 : corner;
+            native->gouraud[corner] = 0x4210;
+            memcpy(native->billboardVertex[corner], m->vertex[p->corner[corner]], sizeof(native->billboardVertex[corner]));
+        }
+        if (p->flags & TEXTURED) {
+            native->textured = 1;
+            native->pixels = Texture(v, p, &native->width, &native->height);
+            Lut(v, p->colr, native->palette);
+            native->animation = PaletteAnimation(cv, native->palette);
+        }
+    }
+    o->nativeBillboardParts = SaturnNativeModel(pieces, m->polyCount, NULL, 0);
+    for (int piece = 0; piece < m->polyCount; piece++) SDL_free(pieces[piece].pixels);
+    SDL_free(pieces);
     o->vertexCount = 1;
     o->vertex = SDL_calloc(2, sizeof(*o->vertex));
     o->vertex[0][0] = (int)((x0 + x1) / 2.0);
@@ -1429,6 +1466,7 @@ static void AddModelSplit(Converter *cv, const char *name, const Model *m, Satur
         /* Port: the source word is CMDPMOD, not CMDGRDA. The extra word in
            lit records is an offset into the runtime Gouraud table (0 for ships). */
         s->native.mode = p->mode;
+        s->native.depthMode = p->depthMode;
         s->native.dynamicLight = (p->flags & (TEXTURED | 8)) == (TEXTURED | 8);
         for (int corner = 0; corner < 4; corner++) s->native.gouraud[corner] = 0x4210;
         s->gouraud = i >= split ? gouraud2 : cv->gouraud;
@@ -1662,8 +1700,26 @@ static uint8_t *BuildPrm(Converter *cv, size_t *size, Buffer *tims, size_t **tim
                     frameCount = 0;
                 }
             }
+            if (o->nativeBillboardParts && frameCount) {
+                const SaturnNativePoly *part = SaturnNativeModelPoly(o->nativeBillboardParts, 0);
+                if (part) {
+                    SaturnNativePoly animated = native[0];
+                    memcpy(animated.billboardVertex, part->billboardVertex, sizeof(animated.billboardVertex));
+                    memcpy(animated.corners, part->corners, sizeof(animated.corners));
+                    animated.depthMode = part->depthMode;
+                    o->nativeBillboardParts = SaturnNativeModel(&animated, 1, frames, frameCount);
+                }
+            }
             nativeTag = SaturnNativeModel(native, o->specCount, frames, frameCount);
             SDL_free(native);
+        }
+        if (o->haveNativeRadius) {
+            if (!nativeTag) nativeTag = SaturnNativeModel(NULL, 0, NULL, 0);
+            SaturnNativeSetRadius(nativeTag, o->nativeRadius);
+            if (o->nativeBillboard) {
+                SaturnNativeSetBillboard(nativeTag);
+                SaturnNativeSetBillboardParts(nativeTag, o->nativeBillboardParts);
+            }
         }
         PutObject(&out, o->name, o->vertex, o->vertexCount, o->position, &prims, o->specCount, nativeTag);
         SDL_free(prims.data);

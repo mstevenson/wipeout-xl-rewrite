@@ -2,6 +2,14 @@
 #include "../../platform/saturn.c"
 #include <assert.h>
 
+/* The synthetic course is already loaded; its getter must not read a disc. */
+char *cdTrackNames[13], *cdTrackArtists[13];
+const Disc *PsxIoDisc(void) { return NULL; }
+bool DiscFindFile(const Disc *disc, const char *path, int32_t *lba, uint32_t *size)
+{ (void)disc; (void)path; (void)lba; (void)size; assert(0); return false; }
+bool DiscReadData(const Disc *disc, int32_t lba, int count, void *out)
+{ (void)disc; (void)lba; (void)count; (void)out; assert(0); return false; }
+
 static uint16_t drawn;
 static int Sample(void *user, float u, float v) { (void)user;(void)u;(void)v;return 1; }
 static void Pixel(void *user,int x,int y,uint16_t rgb,int blend,float depth,uint8_t alpha)
@@ -52,6 +60,32 @@ static void WeaponPads(void)
     puts("Saturn weapon pads cycle, deplete, recharge, and reload independently of the road: OK");
 }
 
+static void SceneCandidates(void)
+{
+    uint8_t sections[SECTIONS_AT + 2 * SECTION] = {0}, lists[8] = {0};
+    Course c = {.sections = sections, .sectionCount = 2, .faces = lists, .facesSize = sizeof(lists)};
+    PutBe16(sections + SECTIONS_AT + 114, 3);
+    PutBe32(sections + SECTIONS_AT + SECTION + 116, 6);
+    PutBe16(sections + SECTIONS_AT + SECTION + 114, 1);
+    PutBe16(lists, 0x4007); PutBe16(lists + 2, 2); PutBe16(lists + 4, 0xc013); PutBe16(lists + 6, 0x5001);
+    KeepNativeSceneObjects(&c, 20);
+    checked = saturn = 1;
+    int count;
+    const unsigned short *objects = PortSaturnNativeSceneObjects(20, 0, &count);
+    assert(objects && count == 3 && objects[0] == 0x4007 && objects[1] == 2 && objects[2] == 0xc013);
+    objects = PortSaturnNativeSceneObjects(20, 1, &count);
+    assert(objects && count == 1 && objects[0] == 0x5001);
+    assert(!PortSaturnNativeSceneObjects(1, 0, &count) && count == 0);
+    assert(!PortSaturnNativeSceneObjects(20, 2, &count));
+    /* Invalid offsets invalidate the cache instead of retaining another course. */
+    PutBe32(sections + SECTIONS_AT + 116, UINT32_MAX);
+    KeepNativeSceneObjects(&c, 1);
+    assert(!PortSaturnNativeSceneObjects(20, 0, &count));
+    SDL_free(nativeSceneObjects); nativeSceneObjects = NULL;
+    SDL_free(nativeSceneOffsets); nativeSceneOffsets = NULL;
+    puts("Saturn authored scene candidates preserve ordering, special flags and per-course cache identity: OK");
+}
+
 int main(void)
 {
     uint8_t sections[SECTIONS_AT+SECTION]={0}, faces[FACE]={0}, views[48]={0}, vri[48]={0};
@@ -81,5 +115,6 @@ int main(void)
     }
     puts("Saturn course loader: prelit palettes retain dark detail, original draw mode and SPD: OK");
     WeaponPads();
+    SceneCandidates();
     SaturnNativeShutdown();
 }

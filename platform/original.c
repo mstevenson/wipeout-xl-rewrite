@@ -122,6 +122,8 @@ static size_t modelsSize;
 static uint8_t *picturesFile;
 static size_t picturesSize;
 static int builtFor = -1;
+static int16_t *n64SectionNumbers;
+static int n64SectionCount;
 static int libraryTextures;     /* the TIMs of the built track's library.cmp (its surface's textures) */
 static void ListGuests(void);
 #define VIRTUAL_LOC 0x40000000  /* the sectors the files are read at: beyond any disc */
@@ -553,6 +555,18 @@ int PortOriginalTrackIs64(void)
     return chosen >= 0 && guests[chosen].from == FROM_64;
 }
 
+int PortOriginalN64Course(void)
+{
+    return PortOriginalTrackIs64() && guests[chosen].track >= 0 && guests[chosen].track < 7
+           ? guests[chosen].track + 1 : 0;
+}
+
+int PortOriginalN64SectionNumber(int index)
+{
+    return builtFor == chosen && PortOriginalTrackIs64() && index >= 0 && index < n64SectionCount
+           ? n64SectionNumbers[index] : 0;
+}
+
 int PortOriginalStartLine(void)
 {
     return chosen < 0 ? 0 : guests[chosen].startLine;
@@ -681,6 +695,9 @@ static void FreeFiles(void)
         fileSizes[i] = 0;
     }
     builtFor = -1;
+    SDL_free(n64SectionNumbers);
+    n64SectionNumbers = NULL;
+    n64SectionCount = 0;
     libraryTextures = 0;
     PortN64TexturesReset();
     FreeAnimations();
@@ -908,6 +925,16 @@ static int Build(void)
         }
     }
     sectionCount = ok ? (int)(sizes[2] / SECTION_BYTES) : 0;
+    if (ok && from64) {
+        /* Preserve cartridge ordinals before XL numbers the gameplay topology. */
+        n64SectionNumbers = SDL_malloc((size_t)sectionCount * sizeof(*n64SectionNumbers));
+        if (!n64SectionNumbers && sectionCount) ok = 0;
+        if (ok) {
+            n64SectionCount = sectionCount;
+            for (i = 0; i < sectionCount; i++)
+                n64SectionNumbers[i] = (int16_t)Be16(parts[2] + (size_t)i * SECTION_BYTES + 152);
+        }
+    }
     if (ok && !NumberSections(parts[2], sectionCount)) {
         fprintf(stderr, "guest track %s: its sections make no loop\n", guest->name);
         ok = 0;

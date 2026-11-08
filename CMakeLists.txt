@@ -99,7 +99,7 @@ set(PLATFORM_PSX_SOURCES
     platform/psx/framecap.c)
 list(TRANSFORM PLATFORM_PSX_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/)
 set(PLATFORM_RENDER_SOURCES platform/render/gl_backend.c platform/render/renderer.c
-    platform/render/ps1_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c platform/render/saturn_native.c
+    platform/render/ps1_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c platform/render/saturn_native.c platform/render/n64_visibility.c platform/render/saturn_visibility.c
     platform/render/gl_api.c platform/render/gl_program.c platform/render/gl_pipeline.c
     platform/render/ps1_gl.c platform/render/pc_gl.c platform/render/n64_gl.c platform/render/saturn_gl.c)
 list(TRANSFORM PLATFORM_RENDER_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/)

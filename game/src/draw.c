@@ -80,11 +80,16 @@ void DrawLandscape(ShipData *playerShip, TrackCamera *camera)
     /* Port: an object whose far side is nearer than minDistance is left out, but a big one beside the camera (a wall
        section) still showed its front part: it popped out at the side of the screen. The renderer cuts what reaches
        behind the camera (DrawNearPrimitive), so it is drawn while any of it is in front. */
-    if (!pcNative && !PortTracing()) {
+    if (!pcNative && !PortTracing() && PortFarViewEnabled()) {
         minDistance = 0;
     }
 
     section = camera->section;
+    /* Port: each profile uses its original scenery candidates. */
+    if (PortDrawNativeLandscape(camera) || PortDrawSaturnNativeLandscape(camera)) {
+        waveIndex++;
+        return;
+    }
     if (section->objectCount > 0) {
         centre.vx = 0;
         centre.vy = 0;
@@ -96,6 +101,8 @@ void DrawLandscape(ShipData *playerShip, TrackCamera *camera)
             object = trackObjects[section->objects[i]];
             object->skeleton->update = 1;
             SetSkeletonTransform(object->skeleton);
+            /* Port: Saturn/N64 depth bounds precede the PS1 landscape culler. */
+            if (!pcNative && PortDrawNativeScenery(object)) continue;
             extent = object->extent;
             RotTrans(&centre, &result, &flag);
             farZ = result.vz + extent;
@@ -107,7 +114,7 @@ void DrawLandscape(ShipData *playerShip, TrackCamera *camera)
                 extent = (extent * 160) / result.vz;
                 if ((result.vx >= -(extent + 160)) && (result.vx <= (extent + 160)) &&
                     (result.vy >= -(extent + 120)) && (result.vy <= (extent + 120))) {
-                    if (!pcNative || !PortPcDrawNativeScenery(object)) AsmDrawObject(object, camera->camPos, roll);
+                    if (!pcNative || !PortDrawNativeScenery(object)) AsmDrawObject(object, camera->camPos, roll);
                 }
             }
         }

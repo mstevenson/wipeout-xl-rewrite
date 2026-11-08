@@ -32,9 +32,12 @@ typedef struct PortFarVertex {
 /* The distance fade (as wipeout-rewrite's), on during a race's 3D drawing. */
 void PortFade(int on);
 
-/* The PC renderer's native visibility lists and full-precision scenery projection. */
-int PortPcDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView);
-int PortPcDrawNativeScenery(Object *object);
+/* Port: each renderer's native visibility, using precise non-PS1 packet projection. */
+int PortDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView);
+int PortDrawNativeScenery(Object *object);
+int PortNativeShipsEnabled(void);
+void PortNativeShipsReset(void);
+void PortDrawNativeShips(TrackCamera *camera, ShipData *ships, Object **shapes, int cameraShip);
 
 /* The game marks what it drew this frame. */
 void PortFarMarkFace(Face *face);     /* a track face the game drew (some of) */
@@ -61,6 +64,9 @@ void PortFarDraw(TrackCamera *camera, ShipData *ships, Object **shipShapes);
 /* An object the game draws apart from the scene's, after PortFarDraw (a checkpoint droid's board): what of it the
    game's drawing left out for its depth, drawn by the far view, so that it does not pop in. */
 void PortFarObject(Object *object);
+void PortBuildNativeScene(Object *objects);
+int PortDrawNativeLandscape(TrackCamera *camera);
+int PortDrawSaturnNativeLandscape(TrackCamera *camera);
 
 /* The engine flares of the ships the far view drew (after DrawShipTrails, which draws the near ones'): DrawFlare
    says which it drew (PortFarFlared) and links them where PortFlareSlot says. */
@@ -88,6 +94,8 @@ void PortFarRelease(char *end); /* the memory from end on, of the last PortFarAl
 /* Memory for primitives the port adds to the game's own drawing (objdraw.c), this frame: NULL when full or
    the far view is off. */
 char *PortNearAlloc(int bytes);
+int PortNativeObjectDepthVisible(const double depths[4], unsigned int tag, int index);
+int PortNativeTrackFaceVisible(const Face *face, const PortView *view);
 void PortTrackFar(TrackSection *section, const PortView *view);
 void PortDrawObjectFar(Object *object, const PortView *view, const CVECTOR *colour);
 

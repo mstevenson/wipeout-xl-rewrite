@@ -81,6 +81,8 @@ void DrawShips(ShipData *shipIndex, Object **shipShapes, int camShip, TrackCamer
     Face     *face;
     CVECTOR  *win;
 
+    int nativeShips = PortNativeShipsEnabled(); /* Port: drawing policy is independent of simulation flags. */
+
     proximity = 0;
     baseIndex = (u_short)raceLines[camera.section->secNo].distance;
     firstMag = 3000;
@@ -127,7 +129,7 @@ void DrawShips(ShipData *shipIndex, Object **shipShapes, int camShip, TrackCamer
                     diff = diff - numTrackSections;
                     }
                 if ((u_short)(diff + 39) < 79) {
-                    PortFarMarkShip(i); /* Port: drawn here, not by the far view */
+                    if (!nativeShips) PortFarMarkShip(i); /* Port: drawn here, not by the far view */
                     shipIndex[i].combatAttr = attr2 & ~0x80;
                     face = track->faces + shipIndex[i].nearTrkSect->faceStart;
                     do {
@@ -137,24 +139,26 @@ void DrawShips(ShipData *shipIndex, Object **shipShapes, int camShip, TrackCamer
                     face--;
                     if (!(shipIndex[i].attr & LSIDE)) face++;
                     win = (CVECTOR *)&face->red;
-                    PortInterpInstance(i); /* Port: frame interpolation: the model's drawing is this ship's */
-                    if (raceType == RACE_ONE_ON_ONE) {
-                        if ((i == remoteShip) || (i == ownShip)) {
+                    if (!nativeShips) {
+                        PortInterpInstance(i); /* Port: frame interpolation: the model's drawing is this ship's */
+                        if (raceType == RACE_ONE_ON_ONE) {
+                            if ((i == remoteShip) || (i == ownShip)) {
+                                AsmDrawObjectLit(obj, camera.camPos, 0, win);
+                            }
+                        } else if (raceType == RACE_TIME_TRIAL) {
+                            if (i == ownShip) {
+                                AsmDrawObjectLit(obj, camera.camPos, 0, win);
+                            }
+                            if (i == ghostShip) {
+                                InitTransShip(obj, 1);
+                                AsmDrawObjectLit(obj, camera.camPos, 0, win);
+                                InitTransShip(obj, 0);
+                            }
+                        } else {
                             AsmDrawObjectLit(obj, camera.camPos, 0, win);
                         }
-                    } else if (raceType == RACE_TIME_TRIAL) {
-                        if (i == ownShip) {
-                            AsmDrawObjectLit(obj, camera.camPos, 0, win);
-                        }
-                        if (i == ghostShip) {
-                            InitTransShip(obj, 1);
-                            AsmDrawObjectLit(obj, camera.camPos, 0, win);
-                            InitTransShip(obj, 0);
-                        }
-                    } else {
-                        AsmDrawObjectLit(obj, camera.camPos, 0, win);
+                        PortInterpInstance(-1);
                     }
-                    PortInterpInstance(-1);
                 }
               }
             }
@@ -166,6 +170,7 @@ void DrawShips(ShipData *shipIndex, Object **shipShapes, int camShip, TrackCamer
             break;
         }
     }
+    if (nativeShips) PortDrawNativeShips(&camera, shipIndex, shipShapes, camShip);
     if (flg == -1) {
         AdjustRemoteEngineSound(firstShip, secondShip, firstMag, secondMag);
     }
@@ -434,6 +439,7 @@ void initShipData(TrackSection *section, ShipData *shipIndex, ConfigData *option
     Face         *face;
     u_char        flags;
 
+    PortNativeShipsReset(); /* Port: per-race render history, never gameplay visibility. */
     locals.states = startStateTable;
     shakeAmount = 0;
     bigGrid = options->shipClass == 3;

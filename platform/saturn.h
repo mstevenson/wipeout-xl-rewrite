@@ -14,6 +14,7 @@ struct Disc;
 /* Whether a disc image is the Saturn's Wipeout XL (Japan) or WipEout 2097 (Europe). */
 int PortSaturnDiscIs(const struct Disc *disc);
 /* Whether the disc in use is; its name. */
+const unsigned short *PortSaturnNativeSceneObjects(int trackNumber, int section, int *count);
 int PortSaturnDisc(void);
 const char *PortSaturnTitle(void);
 /* Whether it is WipEout 2097 (Europe). */

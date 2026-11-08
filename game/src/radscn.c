@@ -1,4 +1,5 @@
 #include "functions.h"
+#include "portfar.h"
 
 /* Debug pad state for the radius controls: the current pad word, and the raw input. */
 extern u_short debugPadState;
@@ -239,6 +240,9 @@ void SceneRadiusCheck(Object *objects)
 
         section = NextIndexSection(section);
     }
+    /* Port: retain the PC/N64 profiles' original candidate lists independently of
+       the active renderer, before scenery animations change their positions. */
+    PortBuildNativeScene(objects);
 }
 
 

@@ -2,6 +2,7 @@
 #include "../../game/src/objdraw.c"
 #include <assert.h>
 #include <string.h>
+#include "../../platform/render/saturn_visibility.c"
 
 static POLY_FT4 packet;
 static u_long ordering[8192];
@@ -11,6 +12,26 @@ static Texture texture = {.textureW = 16, .textureH = 128, .tsb = 17, .cba = 42,
                           .u0 = 16, .v0 = 32, .u1 = 79, .v1 = 32,
                           .u2 = 16, .v2 = 159, .u3 = 79, .v3 = 159};
 Texture *textureTable[] = {&texture};
+
+static int nativeRenderer, taggedPiece = -1;
+static SaturnNativePoly nativePieces[2];
+int PortNativeRenderer(void) { return nativeRenderer; }
+int PortNativeObjectDepthVisible(const double depths[4], unsigned int tag, int index)
+{
+    if (nativeRenderer != RENDER_SATURN) return 1;
+    const SaturnNativePoly *poly = SaturnNativeModelPoly(SaturnNativeObjectTag(tag), index);
+    assert(poly);
+    int32_t z[4];
+    for (int i = 0; i < 4; i++) z[i] = (int32_t)(depths[poly->corners[i]] * 8192);
+    return SaturnModelDepthVisible(z, poly->depthMode, 0);
+}
+void PortTagObjectPrims(const void *first, const void *end, const char *kind, const char *name, uint32_t tag, int index)
+{
+    (void)kind; (void)name;
+    /* Same byte-order boundary as framecap.c, with the real registry/binder. */
+    SaturnNativeBind(first, end, SaturnNativeObjectTag(tag), index);
+    taggedPiece = index;
+}
 
 void AddPrim(u_long *slot, void *poly)
 {
@@ -123,5 +144,33 @@ int main(void)
     assert(((unsigned char *)&packet)[3] == 0);
     projected[0].depth = 2047;
     assert(DrawSprite(DRAW_PLAIN, out, ordering, 0, &sprite, 0) == out);
+    /* A composite's farther authored quad disappears independently in Native.
+       Returning to Full restores the existing single-sprite representation. */
+    nativeRenderer = RENDER_SATURN;
+    view = (PortView){.m = {{1,0,0},{0,1,0},{0,0,1}}, .t = {0,0,10000}};
+    farView = &view;
+    for (int piece = 0; piece < 2; piece++) for (int i = 0; i < 4; i++) {
+        nativePieces[piece].corners[i] = i == 2 ? 3 : i == 3 ? 2 : i;
+        nativePieces[piece].billboardVertex[i][0] = i == 1 || i == 2 ? 100 : -100;
+        nativePieces[piece].billboardVertex[i][1] = i < 2 ? -200 : 200;
+        nativePieces[piece].billboardVertex[i][2] = piece ? 40000 : 0;
+    }
+    uint32_t parts = SaturnNativeModel(nativePieces, 2, NULL, 0);
+    uint32_t model = SaturnNativeModel(NULL, 0, NULL, 0);
+    SaturnNativeSetBillboardParts(model, parts);
+    /* Populate scratch as the loader does, without using the conversion helper. */
+    unsigned char stored[4] = {model >> 24, model >> 16, model >> 8, model};
+    memcpy(&object.scratch, stored, sizeof(stored));
+    int before = linked;
+    assert(DrawWorldSprite(&object, 0, out, ordering, &sprite) == out + sizeof(packet));
+    assert(linked == before + 1 && taggedPiece == 0);
+    assert(SaturnNativeLookup((const char *)&packet + 4) == SaturnNativeModelPoly(parts, 0));
+    Corners(p);
+    Expect(&p[0], -100, -200, 10000); Expect(&p[3], 100, 200, 10000);
+    view.t[2] = 40064;
+    assert(DrawWorldSprite(&object, 0, out, ordering, &sprite) == out);
+    nativeRenderer = 0;
+    view.t[2] = 2000;
+    assert(DrawWorldSprite(&object, 0, out, ordering, &sprite) != out);
     puts("PC billboard dimensions, upright facing, per-corner projection, clipping inputs and keys; unchanged PS1 sprites: OK");
 }

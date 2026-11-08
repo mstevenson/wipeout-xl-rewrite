@@ -21,8 +21,14 @@ presentation preserves the 4:3 base aspect ratio. Switching profiles also switch
 resolution; restoring a profile's defaults restores its 1× resolution.
 Widescreen, frame rate, the Native/Full draw-distance choice, fading and HD
 textures are shared. Native draw distance follows the active renderer. PC uses
-its original F3 road and scenery limits. The console profiles use the loaded
-course's visibility lists through the console compatibility renderer.
+its original F3 road and scenery limits and its separate rendered-ship gate.
+PS1 retains the original regional road, scenery and ship rules. N64 uses its
+camera-direction/junction road walker, original scenery bounds and remembered
+ship visibility. Saturn uses contiguous authored road spans, course depth buckets,
+model bounds and its separate ship depth interval. These policies apply when
+**Native** is selected, including renderer overrides on another platform's assets;
+**Full** keeps the extended-distance pass. Original course-specific exceptions
+apply when their source course is loaded. See [native distance verification](port-notes/native-distance.md).
 HD texture replacements apply only above 1×, including when Auto selects a higher scale.
 
 The shared **Frame rate > Original** mode follows the **active renderer profile**,

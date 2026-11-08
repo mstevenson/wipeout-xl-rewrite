@@ -72,13 +72,16 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
 "$test_build/n64_page"
 
 # Port rendering changes must preserve the original effect segments and quad geometry.
-for test in electric near_object billboard track_light; do
+for test in electric near_object billboard track_light native_ship_dispatch native_ship_policy native_scene_dispatch; do
     gte_sources=
+    if [ "$test" = native_ship_policy ] || [ "$test" = native_scene_dispatch ]; then
+        gte_sources="platform/render/n64_visibility.c platform/render/saturn_visibility.c platform/render/saturn_native.c"
+    fi
     if [ "$test" = near_object ] || [ "$test" = track_light ]; then
         gte_sources="platform/psx/gte.c platform/psx/gte_tables.c"
     fi
     if [ "$test" = billboard ]; then
-        gte_sources="platform/psx/gte.c platform/psx/gte_tables.c platform/psx/libgte.c"
+        gte_sources="platform/psx/gte.c platform/psx/gte_tables.c platform/psx/libgte.c platform/render/saturn_visibility.c platform/render/saturn_native.c"
     fi
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
         -include platform/include/port.h -iquote game/include \

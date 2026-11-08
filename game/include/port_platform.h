@@ -37,6 +37,8 @@ void PsxLinkRegion(void *start, size_t bytes);
 /* Whether the port draws the whole track in view (portfar.h): not in the lockstep tests (WIPEOUT_TRACE)
    or with WIPEOUT_FAR_VIEW=0. */
 int PortFarViewEnabled(void);
+/* Active native visibility profile, or zero in Full/lockstep mode. */
+int PortNativeRenderer(void);
 /* Native PC road and scenery limits from the active renderer's F3 level. */
 int PortPcNativeView(int *sections, int *scenery);
 /* ... and whether the ships it draws beyond the console's distance have their engine flares (off: as the console,
@@ -135,6 +137,9 @@ int PortOriginalTrackClass(int index);
 void PortOriginalTrackSelect(int index);
 int PortOriginalTrack(void);
 int PortOriginalTrackIs64(void); /* the chosen track is Wipeout 64's */
+/* Port: original cartridge course and section ordinals for native visibility. */
+int PortOriginalN64Course(void); /* 1..7, or zero outside a cartridge course */
+int PortOriginalN64SectionNumber(int index); /* zero when unavailable */
 int PortOriginalStartLine(void);
 int PortOriginalSkyY(void);
 /* The textures of the chosen track's surface (its library.cmp), once the race has opened its files; 0 for none. */
@@ -149,6 +154,7 @@ int PortOriginalRead(int loc, int sectors, void *buffer);
 int PortRegionFileInfo(const char *pathname, int *loc, int *size);
 int PortRegionRead(int loc, int sectors, void *buffer);
 /* ... and with the Sega Saturn's disc, everything the game reads, made from the Saturn's (platform/saturn.c). */
+const unsigned short *PortSaturnNativeSceneObjects(int trackNumber, int section, int *count);
 int PortSaturnFileInfo(const char *pathname, int *loc, int *size);
 int PortSaturnRead(int loc, int sectors, void *buffer);
 /* ... and with the PC CD-ROM version's files (platform/pc.c): whether they are in use, the files the game reads. */

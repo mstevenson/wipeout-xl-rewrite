@@ -25,6 +25,9 @@
 #include "../../platform/psx/gte.h"
 #include "portfar.h"
 #include "portorig.h"
+#include "port_platform.h"
+#include "../../platform/render/renderer.h"
+#include "../../platform/render/saturn_native.h"
 #include "../../platform/n64_material.h"
 
 extern short   CurrentScreen;
@@ -641,6 +644,57 @@ static void CameraSpace(const SVECTOR *v, double out[3])
     }
 }
 
+/* Port: Native Saturn keeps billboard pieces separate, including their own
+   far buckets. The compatibility sprite remains the Full-mode representation. */
+static char *DrawSaturnBillboard(Object *object, int index, char *out, const SPR *prim, unsigned int parts, int count)
+{
+    Texture *texture = textureTable[prim->texture];
+    GteSetN64(0);
+    double length = hypot(farView->m[2][0], farView->m[2][2]);
+    double cosine = length ? farView->m[2][2] / length : 1;
+    double sine = length ? farView->m[2][0] / length : 0;
+    for (int piece = 0; piece < count; piece++) {
+        const SaturnNativePoly *native = SaturnNativeModelPoly(parts, piece);
+        double corners[4][3], depths[4], depth = 0;
+        int inFront = 0;
+        for (int i = 0; i < 4; i++) {
+            const int *v = native->billboardVertex[i];
+            double x = cosine * v[0] + sine * v[2], z = -sine * v[0] + cosine * v[2];
+            int c = native->corners[i];
+            for (int k = 0; k < 3; k++)
+                corners[c][k] = farView->t[k] + farView->m[k][0] * x + farView->m[k][1] * v[1] + farView->m[k][2] * z;
+            depths[c] = corners[c][2];
+            depth += depths[c] * 0.25;
+            inFront |= depths[c] >= PORT_FAR_NEAR;
+        }
+        if (!inFront || !PortNativeObjectDepthVisible(depths, SaturnNativeStoredTag(parts), piece)) continue;
+        POLY_FT4 *poly = (POLY_FT4 *)out;
+        short *xy[4] = {&poly->x0, &poly->x1, &poly->x2, &poly->x3};
+        GteSetExactDepth(1);
+        for (int i = 0; i < 4; i++) {
+            PortFarVertex point;
+            GteKeyNext(0, GteKeyMix(GteKeyMix(currentDrawing, 0x20000u + (u_int)piece), (uint64_t)i));
+            PortFarProjectAny(corners[i][0], corners[i][1], corners[i][2], &point);
+            StoreScreenXY(xy[i], xy[i] + 1, point.screen);
+            GteBindPrecise(xy[i], point.handle);
+        }
+        GteSetExactDepth(0);
+        SetRgb(&poly->r0, &poly->g0, &poly->b0, &prim->colour);
+        ((u_char *)poly)[3] = 9;
+        poly->code = 0x2C;
+        poly->tpage = texture->tsb; poly->clut = texture->cba;
+        poly->u0 = texture->u0; poly->v0 = texture->v0;
+        poly->u1 = texture->u1; poly->v1 = texture->v1;
+        poly->u2 = texture->u2; poly->v2 = texture->v2;
+        poly->u3 = texture->u3; poly->v3 = texture->v3;
+        AddPrim(PortFarSlot((int)(depth / 4), depth), poly);
+        PortTagObjectPrims(out, out + sizeof(*poly), "native billboard", object->name, SaturnNativeStoredTag(parts), piece);
+        out += sizeof(*poly);
+    }
+    (void)index;
+    return out;
+}
+
 /* Port: the PC's LoadPrmCommon/BuildQuads makes upright object-space billboards, with
    texture-sized dimensions and the anchor at the bottom for both sprite types. Keep
    its XZ facing calculation in model units, then project each corner with its own
@@ -658,6 +712,11 @@ static char *DrawWorldSprite(Object *object, int index, char *out, u_long *order
 
     if (forceReject || (u_short)prim->coord >= (u_short)object->vertexCount) {
         return out;
+    }
+    if (farView && PortNativeRenderer() == RENDER_SATURN) {
+        int pieces;
+        unsigned int parts = SaturnNativeBillboardParts(SaturnNativeObjectTag((unsigned int)object->scratch), &pieces);
+        if (parts) return DrawSaturnBillboard(object, index, out, prim, parts, pieces);
     }
     position = &object->vertices[prim->coord];
     texture = textureTable[prim->texture];
@@ -697,6 +756,10 @@ static char *DrawWorldSprite(Object *object, int index, char *out, u_long *order
     }
     if (!inFront) {
         return out;
+    }
+    if (farView) {
+        double depths[4] = {corner[0][2], corner[1][2], corner[2][2], corner[3][2]};
+        if (!PortNativeObjectDepthVisible(depths, (unsigned int)object->scratch, index)) return out;
     }
     /* PC-authored 3D sprites participate in the depth buffer without the PS1 model slack. */
     GteSetExactDepth(1);
@@ -928,12 +991,38 @@ static CVECTOR ObjectLight(const Object *object, const CVECTOR *colour, RenderGe
     return result;
 }
 
+/* Port: native Saturn model packets have a separate per-polygon far bucket test. */
+static int NativeObjectPrimitiveVisible(Object *object, int index, Poly prim)
+{
+    const short *coords;
+    int count;
+    double depths[4];
+    if (PortNativeRenderer() != RENDER_SATURN) return 1;
+    switch ((u_short)prim.prim->type) {
+    case TypeFT3: coords = prim.ft3->coords; count = 3; break;
+    case TypeGT3: coords = prim.gt3->coords; count = 3; break;
+    case TypeG3: coords = prim.g3->coords; count = 3; break;
+    case TypeF3: coords = prim.f3->coords; count = 3; break;
+    case TypeFT4: coords = prim.ft4->coords; count = 4; break;
+    case TypeGT4: coords = prim.gt4->coords; count = 4; break;
+    case TypeG4: coords = prim.g4->coords; count = 4; break;
+    case TypeF4: coords = prim.f4->coords; count = 4; break;
+    default: return 1;
+    }
+    for (int i = 0; i < count; i++) {
+        if ((u_short)coords[i] >= (u_short)object->vertexCount || (u_short)coords[i] >= MAX_OBJECT_VERTICES) return 0;
+        depths[i] = farZ[coords[i]];
+    }
+    if (count == 3) depths[3] = depths[2];
+    return PortNativeObjectDepthVisible(depths, (unsigned int)object->scratch, index);
+}
+
 static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *colour, int fixedSlot)
 {
     u_long *ordering;
     char   *out;
     char   *primitive;
-    int     count, index = 0;
+    int     count, index = 0, nativeBillboardPieces = 0;
     unsigned char *drawnFlags = NULL;
     const unsigned char *skip = NULL;
     CVECTOR compatibleLight;
@@ -952,8 +1041,10 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
 
         /* the primitives the game handled (scenery; a ship model can serve several ships) */
         skip = kind == DRAW_LIT ? NULL : PortFarObjectDrawn(object, &complete);
+        if (PortNativeRenderer() == RENDER_SATURN)
+            SaturnNativeBillboardParts(SaturnNativeObjectTag((unsigned int)object->scratch), &nativeBillboardPieces);
         /* the largest packet per primitive, in the far view's own memory */
-        out = PortFarAlloc((u_short)object->primitiveCount * (int)sizeof(POLY_GT4));
+        out = PortFarAlloc(((u_short)object->primitiveCount + nativeBillboardPieces) * (int)sizeof(POLY_GT4));
         if (!out) {
             return;
         }
@@ -977,7 +1068,8 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         char *before = out;
 
         prim.ptr = primitive;
-        forceReject = skip && index < (u_short)object->primitiveCount && skip[index];
+        forceReject = (skip && index < (u_short)object->primitiveCount && skip[index]) ||
+                      (farView && !NativeObjectPrimitiveVisible(object, index, prim));
         culled = 0;
         switch ((u_short)prim.prim->type) {
         case TypeGT3:
@@ -1043,7 +1135,8 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
                                 (!culled && kind == DRAW_PLAIN && DrawNearPrimitive(object, index, ordering, prim));
         }
         /* Port: the frame recorder and the Saturn model registry. */
-        PortTagObjectPrims(before, out, farView ? "far object" : "object", object->name, object->scratch, index);
+        if (!nativeBillboardPieces)
+            PortTagObjectPrims(before, out, farView ? "far object" : "object", object->name, object->scratch, index);
         index++;
     } while (--count > 0);
 finished:

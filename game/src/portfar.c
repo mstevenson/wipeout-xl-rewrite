@@ -10,7 +10,14 @@
 #include "effects.h"
 #include "port_platform.h"
 #include "../../platform/psx/gte.h"
+#include "../../platform/render/renderer.h"
+#include "../../platform/render/pc_visibility.h"
+#include "../../platform/render/n64_visibility.h"
+#include "../../platform/render/saturn_visibility.h"
+#include "../../platform/render/saturn_native.h"
 
+extern ConfigData *gameData;
+extern RaceLine raceLines[];
 extern TrackData *track;
 extern Object   **trackObjects;
 extern short      CurrentScreen;
@@ -43,7 +50,7 @@ static uint32_t nearFrame[2];
 static uint32_t frame = 1;
 static uint32_t *faceMarks;      /* the frame each track face was last drawn by the game */
 static int      faceMarkCount;
-static int      pcNativeScene;
+static int      nativeScene;
 static uint32_t shipMarks[15];
 static int      farShips;        /* the ships the far view drew this frame, until their engine flares are drawn */
 static int      shadowShips;     /* the ships DrawShadow gave a shadow this frame */
@@ -82,7 +89,7 @@ void PortFarMarkFace(Face *face)
 {
     int index;
 
-    if (!track || (!pcNativeScene && !Enabled())) {
+    if (!track || (!nativeScene && !Enabled())) {
         return;
     }
     if (faceMarkCount < track->faceCount) {
@@ -384,6 +391,8 @@ static void CameraView(TrackCamera *camera, PortView *view)
     }
 }
 
+static int NativeSaturnCourse(void);
+
 /* PC runs follow the authored next-section links, including across the start line. */
 static void PcViewRuns(short *const spans[3], const short sizes[3], int limit, unsigned char *details)
 {
@@ -399,6 +408,40 @@ static void PcViewRuns(short *const spans[3], const short sizes[3], int limit, u
             }
         }
     }
+}
+
+/* Port: Saturn keeps full-width section deltas and uses its rounded atan table. */
+static int SaturnTrackDirection(const TrackCamera *camera)
+{
+    const TrackSection *section = camera->section;
+    const TrackSection *next = section->nextSection.ptr;
+    return SaturnNativeRoadDirection(camera->hdg,
+        (int32_t)((uint32_t)next->centre.vx - (uint32_t)section->centre.vx),
+        (int32_t)((uint32_t)next->centre.vz - (uint32_t)section->centre.vz));
+}
+
+/* Port: Saturn span records enumerate contiguous sections, not topology links. */
+static void SaturnViewRuns(short *const spans[3], const short sizes[3], int limit, unsigned char *details)
+{
+    for (int lod = 0; lod < 3; lod++)
+        for (int i = 0; i + 1 < sizes[lod]; i += 2)
+            for (int j = 0; j < spans[lod][i + 1] && (lod != 2 || j < limit); j++) {
+                int index = spans[lod][i] + j;
+                if (index >= 0 && index < track->sectionCount && details[index] < 3 - lod)
+                    details[index] = (unsigned char)(3 - lod);
+            }
+}
+
+static int NativeSectionIndex(TrackSection *section)
+{
+    uintptr_t address = (uintptr_t)section, base = (uintptr_t)track->sections;
+    if (address < base || address - base >= (size_t)track->sectionCount * sizeof(*section)) return -1;
+    return (int)((address - base) / sizeof(*section));
+}
+
+static void NativeN64Section(int index, void *context)
+{
+    ((unsigned char *)context)[index] = 1;
 }
 
 /* Keep the compatibility tiles where their projection and packet pools can represent the section. */
@@ -423,14 +466,19 @@ static void PcNearSection(TrackSection *section, TrackCamera *camera, AutoMeshDa
     else AsmTrackLo(section, camera->camPos, 1);
 }
 
-int PortPcDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView)
+int PortDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView)
 {
     static unsigned char *details;
     static int capacity;
-    int limit, scenery;
+    int limit = 65535, scenery;
+    int renderer = PortNativeRenderer();
 
-    pcNativeScene = 0;
-    if (!PortPcNativeView(&limit, &scenery) || !track || track->sectionCount <= 0) return 0;
+    nativeScene = 0;
+    if (renderer == RENDER_AUTO || renderer == RENDER_PS1 || !track || track->sectionCount <= 0) {
+        PortNativeShipsReset(); /* Port: re-enabling Native starts fresh per-view history. */
+        return 0;
+    }
+    if (renderer == RENDER_PC) PortPcNativeView(&limit, &scenery);
     if (capacity < track->sectionCount) {
         unsigned char *next = realloc(details, (size_t)track->sectionCount);
         if (!next) return 0;
@@ -439,11 +487,39 @@ int PortPcDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allVi
     }
     memset(details, 0, (size_t)track->sectionCount);
     TrackSection *section = camera->section;
-    if (allView) {
+    if (renderer == RENDER_N64) {
+        N64NativeSection *sections = malloc((size_t)track->sectionCount * sizeof(*sections));
+        if (!sections) return 0;
+        for (int i = 0; i < track->sectionCount; i++) {
+            TrackSection *source = &track->sections[i];
+            sections[i].previous = NativeSectionIndex(source->prevSection.ptr);
+            sections[i].next = NativeSectionIndex(source->nextSection.ptr);
+            sections[i].junction = NativeSectionIndex(source->junction.ptr);
+            sections[i].junctionFace = source->faceCount >= 2 &&
+                ((track->faces[(u_short)source->faceStart].flags |
+                  track->faces[(u_short)source->faceStart + 1].flags) & 0x40);
+        }
+        TrackSection *next = section->nextSection.ptr;
+        int angle = N64NativeRoadAngle(camera->hdg, next->centre.vx - section->centre.vx,
+                                      next->centre.vz - section->centre.vz);
+        extern CameraUpdateFunc CameraUpdate;
+        int authored = N64NativeRoadSelect(sections, track->sectionCount, NativeSectionIndex(section),
+            1, PortOriginalN64Course(), PortOriginalN64SectionNumber(NativeSectionIndex(section)),
+            angle, 0, CameraUpdate == UpdateCameraRaceStart, 0, NativeN64Section, details);
+        if (authored) SaturnViewRuns(section->southViewSection, section->southViewCount, 100, details);
+        free(sections);
+    } else if (renderer == RENDER_SATURN) {
+        if (allView) SaturnViewRuns(section->allViewSection, section->allViewCount, 65535, details);
+        else {
+            int dir = SaturnTrackDirection(camera);
+            if (dir & 1) SaturnViewRuns(section->northViewSection, section->northViewCount, 65535, details);
+            if (dir & 2) SaturnViewRuns(section->southViewSection, section->southViewCount, 65535, details);
+            if (dir & 4) SaturnViewRuns(section->westViewSection, section->westViewCount, 65535, details);
+            if (dir & 8) SaturnViewRuns(section->eastViewSection, section->eastViewCount, 65535, details);
+        }
+    } else if (allView) {
         PcViewRuns(section->allViewSection, section->allViewCount, 65535, details);
     } else {
-        /* The retail PC race uses all four lists when DIRECTION is clear,
-           except on Sagarmatha and Vostok Island. */
         int dir = (shipIndex[ownShip].attr & DIRECTION) || clipLevel == 1 || clipLevel == 6 ? TrackDirection(camera) : 15;
         if (dir & 1) PcViewRuns(section->northViewSection, section->northViewCount, limit, details);
         if (dir & 2) PcViewRuns(section->southViewSection, section->southViewCount, 65535, details);
@@ -458,11 +534,17 @@ int PortPcDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allVi
     if (faceMarks) memset(faceMarks, 0, (size_t)faceMarkCount * sizeof(*faceMarks));
     PortView view;
     CameraView(camera, &view);
-    pcNativeScene = 1;
+    nativeScene = 1;
     for (int i = 0; i < track->sectionCount; i++) {
         if (!details[i]) continue;
         section = &track->sections[i];
-        PcNearSection(section, camera, autoMesh, details[i]);
+        if (renderer == RENDER_PC) PcNearSection(section, camera, autoMesh, details[i]);
+        if (renderer == RENDER_SATURN) {
+            int inside = 1;
+            for (int j = 0; j < section->faceCount; j++)
+                if (!PortNativeTrackFaceVisible(&track->faces[(u_short)section->faceStart + j], &view)) inside = 0;
+            if (inside) PcNearSection(section, camera, autoMesh, details[i]);
+        }
         PortTrackFar(section, &view);
     }
     PortTrackPackets(arena[CurrentScreen], arena[CurrentScreen] + arenaUsed);
@@ -470,13 +552,170 @@ int PortPcDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allVi
     return 1;
 }
 
-int PortPcDrawNativeScenery(Object *object)
+typedef struct NativeSceneSection {
+    unsigned short count;
+    Object *objects[128];
+} NativeSceneSection;
+static NativeSceneSection *nativeSceneSections[2];
+static TrackData *nativeSceneTrack;
+static int nativeSceneCount;
+
+static int NativeObjectRadius(const Object *object, const TrackSection *centre, int radius, int wide, int profile)
 {
-    if (!pcNativeScene) return 0;
+    const MATRIX *matrix = &object->skeleton->relative;
+    if (!profile) return PcNativeObjectInRadius(
+        (int32_t)((uint32_t)matrix->t[0] - (uint32_t)centre->centre.vx),
+        (int32_t)((uint32_t)matrix->t[1] - (uint32_t)centre->centre.vy),
+        (int32_t)((uint32_t)matrix->t[2] - (uint32_t)centre->centre.vz), object->extent, radius, wide);
+    /* Port: original loader first rounds each object translation down to its
+       half-world rendering coordinate, then RadiusCheck doubles it again. */
+    int32_t dx = (int32_t)((uint32_t)(matrix->t[0] >> 1) * 2u - (uint32_t)centre->centre.vx);
+    int32_t dy = (int32_t)((uint32_t)(matrix->t[1] >> 1) * 2u - (uint32_t)centre->centre.vy);
+    int32_t dz = (int32_t)((uint32_t)(matrix->t[2] >> 1) * 2u - (uint32_t)centre->centre.vz);
+    return N64NativeObjectInRadius(dx, dy, dz, object->extent, radius, wide);
+}
+
+void PortBuildNativeScene(Object *objects)
+{
+    for (int profile = 0; profile < 2; profile++) {
+        free(nativeSceneSections[profile]);
+        nativeSceneSections[profile] = NULL;
+    }
+    nativeSceneTrack = NULL;
+    nativeSceneCount = 0;
+    if (!track || track->sectionCount <= 0) return;
+    nativeSceneTrack = track;
+    nativeSceneCount = track->sectionCount;
+    for (int profile = 0; profile < 2; profile++) {
+        nativeSceneSections[profile] = calloc((size_t)track->sectionCount, sizeof(*nativeSceneSections[profile]));
+        if (!nativeSceneSections[profile]) continue;
+        for (int i = 0; i < track->sectionCount; i++) {
+            TrackSection *section = &track->sections[i];
+            NativeSceneSection *list = &nativeSceneSections[profile][i];
+            for (Object *object = objects; object; object = object->next) {
+                int within = 0;
+                if (!NativeObjectRadius(object, section, section->globalRadius, !!(section->flags & 1), profile)) continue;
+                for (int direction = 0; direction < 2 && !within; direction++) {
+                    TrackSection *test = section;
+                    for (int step = 0; step < 30 && !within; step++) {
+                        within = NativeObjectRadius(object, test, section->localRadius, 0, profile);
+                        test = direction ? test->prevSection.ptr : test->nextSection.ptr;
+                    }
+                }
+                if (within && list->count < 128) list->objects[list->count++] = object;
+            }
+        }
+    }
+}
+
+int PortDrawNativeLandscape(TrackCamera *camera)
+{
+    int section = NativeSectionIndex(camera->section);
+    int renderer = PortNativeRenderer(), profile = renderer == RENDER_N64;
+    if (!nativeScene || (renderer != RENDER_N64 && renderer != RENDER_PC) || nativeSceneTrack != track ||
+        !nativeSceneSections[profile] || section < 0 || section >= nativeSceneCount) return 0;
+    NativeSceneSection *list = &nativeSceneSections[profile][section];
+    for (int i = list->count - 1; i >= 0; i--) PortDrawNativeScenery(list->objects[i]);
+    return 1;
+}
+
+/* Port: the Saturn traverses its authored section list, in stored order. */
+int PortDrawSaturnNativeLandscape(TrackCamera *camera)
+{
+    if (!nativeScene || PortNativeRenderer() != RENDER_SATURN || !gameData || PortOriginalTrack() >= 0) return 0;
+    int count;
+    const unsigned short *list = PortSaturnNativeSceneObjects(gameData->actTrackNum, NativeSectionIndex(camera->section), &count);
+    if (!list) return 0;
+    for (int i = 0; i < count; i++) {
+        int index = list[i] & 0x0fff;
+        Object *object = trackObjects ? trackObjects[0] : NULL;
+        while (object && index--) object = object->next;
+        if (object) PortDrawNativeScenery(object);
+    }
+    return 1;
+}
+
+/* Port: the N64 loader/camera halve each relative translation before composing
+   skeletons. Halving the final floating view depth changes boundary rounding. */
+static void NativeN64SkeletonMatrix(const Skeleton *skeleton, N64NativeMatrix *out)
+{
+    N64NativeMatrix relative;
+    memcpy(relative.m, skeleton->relative.m, sizeof(relative.m));
+    for (int i = 0; i < 3; i++) relative.t[i] = skeleton->relative.t[i] >> 1;
+    if (skeleton->super) {
+        N64NativeMatrix parent;
+        NativeN64SkeletonMatrix(skeleton->super, &parent);
+        N64NativeCompose(&parent, &relative, out);
+    } else *out = relative;
+}
+
+/* PC skeleton composition uses the same wrapped dot products as N64, at full world scale. */
+static void NativePcSkeletonMatrix(const Skeleton *skeleton, N64NativeMatrix *out)
+{
+    N64NativeMatrix relative;
+    memcpy(relative.m, skeleton->relative.m, sizeof(relative.m));
+    for (int i = 0; i < 3; i++) relative.t[i] = skeleton->relative.t[i];
+    if (skeleton->super) {
+        N64NativeMatrix parent;
+        NativePcSkeletonMatrix(skeleton->super, &parent);
+        N64NativeCompose(&parent, &relative, out);
+    } else *out = relative;
+}
+
+int PortDrawNativeScenery(Object *object)
+{
+    if (!nativeScene) return 0;
     PortView view;
     SkeletonView(object->skeleton, &view);
+    int renderer = PortNativeRenderer();
+    if (renderer == RENDER_PC) {
+        N64NativeMatrix native;
+        int sections, distance;
+        NativePcSkeletonMatrix(object->skeleton, &native);
+        PortPcNativeView(&sections, &distance);
+        if (!PcNativeSceneryVisible(native.t, object->extent, distance)) return 1;
+    }
+    if (renderer == RENDER_N64) {
+        N64NativeMatrix native;
+        NativeN64SkeletonMatrix(object->skeleton, &native);
+        if (!N64NativeSceneryBoundsVisible(native.t, object->extent, PortOriginalN64Course() - 1)) return 1;
+    }
+    if (renderer == RENDER_SATURN) {
+        int32_t radius;
+        if (!SaturnNativeRadius(SaturnNativeObjectTag((uint32_t)object->scratch), &radius))
+            radius = (int32_t)((uint32_t)object->extent * 8192u);
+        if (!SaturnNativeBillboard(SaturnNativeObjectTag((uint32_t)object->scratch)) &&
+            !SaturnSphereDepthVisible((int32_t)(uint32_t)(int64_t)(view.t[2] * 8192.0), radius,
+                                     NativeSaturnCourse())) return 1;
+    }
     PortDrawObjectFar(object, &view, NULL);
     return 1;
+}
+
+/* Port: Saturn rejects the whole road tile at its farthest corner's depth bucket. */
+int PortNativeTrackFaceVisible(const Face *face, const PortView *view)
+{
+    int32_t z[4];
+    if (PortNativeRenderer() != RENDER_SATURN) return 1;
+    for (int i = 0; i < 4; i++) {
+        const VECTOR *v = &track->vertices[face->vertex[i]];
+        double depth = view->t[2] + view->m[2][0] * v->vx + view->m[2][1] * v->vy + view->m[2][2] * v->vz;
+        z[i] = (int32_t)(uint32_t)(int64_t)(depth * 8192.0);
+    }
+    return SaturnTrackDepthVisible(z, NativeSaturnCourse());
+}
+
+/* Port: Saturn model groups choose average, maximum, minimum, or biased maximum depth. */
+int PortNativeObjectDepthVisible(const double depths[4], unsigned int tag, int index)
+{
+    if (PortNativeRenderer() != RENDER_SATURN) return 1;
+    const SaturnNativePoly *poly = SaturnNativeModelPoly(SaturnNativeObjectTag(tag), index);
+    int32_t z[4];
+    for (int i = 0; i < 4; i++) {
+        int corner = poly ? poly->corners[i] : i;
+        z[i] = (int32_t)(uint32_t)(int64_t)(depths[corner] * 8192.0);
+    }
+    return SaturnModelDepthVisible(z, poly ? poly->depthMode : 0, NativeSaturnCourse());
 }
 
 static void DrawFarTrack(TrackCamera *camera)
@@ -525,6 +764,122 @@ static void DrawFarScenery(void)
             PortDrawObjectFar(object, &view, NULL);
         }
     }
+}
+
+/* Saturn course descriptors follow the arcade order, not the host file number. */
+static int NativeSaturnCourse(void)
+{
+    static const int tracks[8] = {1, 8, 13, 20, 2, 17, 6, 7};
+    int i;
+    if (PortOriginalTrack() >= 0 || !gameData) return 0;
+    for (i = 0; i < 8; i++) if (tracks[i] == gameData->actTrackNum) return i;
+    return 0;
+}
+
+/* POWERVR.EXE 435e30 (exact-matched AddShipRenderObjects). Its DrawShips' 4800/80
+   gate updates combat visibility; this 1200/40 gate selects actual rendered hulls. */
+static int PcNativeShipVisible(int32_t dx, int32_t dy, int32_t dz, double viewZ,
+                               int cameraShip, int destroyed, int deathCount, int difference, int sections)
+{
+    float x = dx >> 3, y = dy >> 3, z = dz >> 3;
+    float square = y * y;
+    int diff = (short)difference;
+    square += x * x;
+    square += z * z;
+    if (diff < 0) diff += sections;
+    if (diff > sections / 2) diff -= sections;
+    return (((int)sqrt((double)square) < 1200 && viewZ > 0) || cameraShip) &&
+           diff > -40 && diff < 40 && (!destroyed || deathCount >= 11);
+}
+
+/* Port: profile visibility never writes the PS1 flags used by AI, weapons and sound. */
+static N64NativeShipState nativeShipState[15];
+static int nativeShipProfile;
+
+void PortNativeShipsReset(void)
+{
+    int i;
+    for (i = 0; i < 15; i++) nativeShipState[i].remembered = 1;
+    nativeShipProfile = 0;
+}
+
+int PortNativeShipsEnabled(void)
+{
+    int renderer = PortNativeRenderer();
+    return nativeScene && renderer != RENDER_PS1 && renderer != RENDER_AUTO;
+}
+
+static void DrawFarShadows(TrackCamera *camera, ShipData *ships);
+
+void PortDrawNativeShips(TrackCamera *camera, ShipData *ships, Object **shapes, int cameraShip)
+{
+    PortView cameraView;
+    int i, renderer = PortNativeRenderer();
+
+    if (!PortNativeShipsEnabled()) return;
+    if (nativeShipProfile != renderer) {
+        PortNativeShipsReset();
+        nativeShipProfile = renderer;
+    }
+    CameraView(camera, &cameraView);
+    for (i = 0; i < 15; i++) {
+        ShipData *ship = &ships[i];
+        Object *object;
+        Skeleton skeleton;
+        PortView view;
+        Face *face;
+        int visible, destroyed = !!(ship->combatAttr & DESTROYED);
+        int32_t dx = ship->ppivot.vx + camera->camPos->relative.t[0];
+        int32_t dy = ship->ppivot.vy + camera->camPos->relative.t[1];
+        int32_t dz = ship->ppivot.vz + camera->camPos->relative.t[2];
+        double z = cameraView.t[2] + cameraView.m[2][0] * ship->ppivot.vx +
+                   cameraView.m[2][1] * ship->ppivot.vy + cameraView.m[2][2] * ship->ppivot.vz;
+
+        if (!ship->nearTrkSect) continue;
+        object = shapes[ship->highResTableIndex];
+        if (renderer == RENDER_PC) {
+            /* PC RotTrans 431dd0 has the same per-product shifts as N64. */
+            MATRIX *matrix = GetSkeletonMatrix(camera->camPos->super);
+            int32_t gateZ = N64NativeViewZ(matrix->m[2], matrix->t[2], dx, dy, dz);
+            visible = PcNativeShipVisible(dx, dy, dz, gateZ, i == cameraShip, destroyed, shipTargetIndex[i],
+                raceLines[camera->section->secNo].distance - raceLines[ship->nearTrkSect->secNo].distance,
+                numTrackSections);
+        } else if (renderer == RENDER_N64) {
+            /* Original camera translation is halved before storage. The ship gate
+               narrows its relative vector and shifts each matrix product separately. */
+            MATRIX *matrix = GetSkeletonMatrix(camera->camPos->super);
+            dx = ship->ppivot.vx + (camera->camPos->relative.t[0] >> 1) * 2;
+            dy = ship->ppivot.vy + (camera->camPos->relative.t[1] >> 1) * 2;
+            dz = ship->ppivot.vz + (camera->camPos->relative.t[2] >> 1) * 2;
+            int32_t gateZ = N64NativeViewZ(matrix->m[2], matrix->t[2], dx, dy, dz);
+            visible = N64NativeShipVisible(&nativeShipState[i], dx, dy, dz, gateZ,
+                                           i == cameraShip, destroyed, 1);
+        } else {
+            int32_t radius;
+            if (!SaturnNativeRadius(SaturnNativeObjectTag((uint32_t)object->scratch), &radius))
+                radius = (int32_t)((uint32_t)object->extent * 8192u);
+            visible = !destroyed && SaturnShipDepthVisible((int32_t)(uint32_t)(int64_t)(z * 8192.0),
+                                                          i == cameraShip, radius, NativeSaturnCourse());
+        }
+        if (!visible || !ship->nearTrkSect ||
+            (ship->attr & (REMOTE_VIEW | VIEW_IN)) == VIEW_IN ||
+            (raceType == 1 && i != ownShip && i != ghostShip) ||
+            (raceType == 3 && i != ownShip && i != remoteShip)) continue;
+        skeleton = *object->skeleton;
+        SetSkeletonPosition(&skeleton, ship->ppivot.vx, ship->ppivot.vy, ship->ppivot.vz);
+        SetSkeletonDirectionHPR(&skeleton, ship->hdg, ship->pitch, ship->roll);
+        SkeletonView(&skeleton, &view);
+        face = track->faces + ship->nearTrkSect->faceStart;
+        while (!(face->flags & TRACK_BASE)) face++;
+        if (!(ship->attr & LSIDE)) face++;
+        farShips |= 1 << i;
+        PortInterpInstance(i);
+        if (raceType == 1 && i == ghostShip) InitTransShip(object, 1);
+        PortDrawObjectFar(object, &view, (const CVECTOR *)&face->red);
+        if (raceType == 1 && i == ghostShip) InitTransShip(object, 0);
+        PortInterpInstance(-1);
+    }
+    DrawFarShadows(camera, ships);
 }
 
 /* The ships the game left out for their distance, drawn as DrawShips draws the near ones. */
@@ -806,7 +1161,7 @@ static void DrawFarShadows(TrackCamera *camera, ShipData *ships)
 void PortFarDraw(TrackCamera *camera, ShipData *ships, Object **shipShapes)
 {
     if (!Enabled() || !track) {
-        pcNativeScene = 0;
+        nativeScene = 0;
         frame++;
         return;
     }

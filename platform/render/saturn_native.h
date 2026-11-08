@@ -13,6 +13,8 @@ typedef enum SaturnMaterialAnimation {
 typedef struct SaturnNativePoly {
     uint16_t palette[16], gouraud[4], colour, mode;
     int width, height, textured, dynamicLight, corners[4]; /* VDP1 A B C D -> packet corner */
+    int billboardVertex[4][3]; /* original billboard corners in host world units */
+    int depthMode; /* model group bits 14..15: average/max/min/max+32 */
     int trackTile; /* projected road tile uses bounded, perspective-correct triangles */
     int clipped; /* host near-plane triangle; bounded inverse rasterization */
     int vertexAttributes; /* native UV and additive shades carried through clipping */
@@ -25,6 +27,32 @@ enum { SATURN_MODEL_FRAMES = 16 };
 uint64_t SaturnNativeMaterialRevision(void);
 uint32_t SaturnNativeModel(const SaturnNativePoly *polys, int count,
                            const SaturnNativePoly *frames, int frameCount);
+/* Port: Object.scratch preserves the PRM's big-endian bytes. Registry tags use
+   host byte order; packet tagging accepts the stored object representation. */
+static inline uint32_t SaturnNativeObjectTag(uint32_t stored)
+{
+    const uint8_t *bytes = (const uint8_t *)&stored;
+    return (uint32_t)bytes[0] << 24 | (uint32_t)bytes[1] << 16 |
+           (uint32_t)bytes[2] << 8 | bytes[3];
+}
+
+static inline uint32_t SaturnNativeStoredTag(uint32_t tag)
+{
+    uint32_t stored;
+    uint8_t *bytes = (uint8_t *)&stored;
+    bytes[0] = (uint8_t)(tag >> 24); bytes[1] = (uint8_t)(tag >> 16);
+    bytes[2] = (uint8_t)(tag >> 8); bytes[3] = (uint8_t)tag;
+    return stored;
+}
+
+/* Authored model-header radius in Saturn 16.16 units (host units * 8192). */
+void SaturnNativeSetRadius(uint32_t tag, int32_t radius);
+int SaturnNativeRadius(uint32_t tag, int32_t *radius);
+void SaturnNativeSetBillboard(uint32_t tag);
+void SaturnNativeSetBillboardParts(uint32_t tag, uint32_t parts);
+uint32_t SaturnNativeBillboardParts(uint32_t tag, int *count);
+int SaturnNativeBillboard(uint32_t tag);
+const SaturnNativePoly *SaturnNativeModelPoly(uint32_t tag, int index);
 uint32_t SaturnNativeFrameTag(uint32_t modelTag, unsigned frame);
 void SaturnNativeTrack(const SaturnNativePoly *polys, int count, const uint16_t *weaponPalettes);
 void PortWeaponGridVisual(int leftFace, int rightFace, int angle, int depleted);

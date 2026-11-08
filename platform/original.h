@@ -24,6 +24,9 @@ void PortWipeout64Close(void);
 const char *PortWipeout64Source(void); /* "" when none */
 int PortWipeout64TrackCount(void);
 int PortOriginalTrackIs64(void);
+/* Port: original cartridge course and section ordinals for native visibility. */
+int PortOriginalN64Course(void); /* 1..7, or zero outside a cartridge course */
+int PortOriginalN64SectionNumber(int index); /* zero when unavailable */
 int PortOriginalTrack(void);
 
 /* The games' compression of texture sequences (.cmp): unpacked into out (size bytes at most; returns how many),

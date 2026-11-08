@@ -7,6 +7,9 @@
 typedef struct Model {
     SaturnNativePoly *polys;
     int count, frameCount; /* additional materials for primitive zero */
+    int32_t radius;
+    int haveRadius, billboard;
+    uint32_t billboardParts;
 } Model;
 static Model *models;
 static uint32_t modelCount, modelCapacity;
@@ -69,6 +72,7 @@ uint32_t SaturnNativeModel(const SaturnNativePoly *polys, int count,
         if (!grown) abort();
         models = grown;
     }
+    memset(&models[modelCount], 0, sizeof(*models));
     CopyPolys(&models[modelCount++], polys, count, frames, frameCount);
     return MODEL_TAG_BASE + modelCount;
 }
@@ -199,6 +203,52 @@ static const Model *ModelForTag(uint32_t modelTag)
 {
     uint32_t id = (modelTag & ~MODEL_FRAME_MASK) - MODEL_TAG_BASE;
     return id && id <= modelCount ? &models[id - 1] : NULL;
+}
+
+void SaturnNativeSetRadius(uint32_t tag, int32_t radius)
+{
+    Model *model = (Model *)ModelForTag(tag);
+    if (model) { model->radius = radius; model->haveRadius = 1; }
+}
+
+int SaturnNativeRadius(uint32_t tag, int32_t *radius)
+{
+    const Model *model = ModelForTag(tag);
+    if (!model || !model->haveRadius) return 0;
+    *radius = model->radius;
+    return 1;
+}
+
+void SaturnNativeSetBillboard(uint32_t tag)
+{
+    Model *model = (Model *)ModelForTag(tag);
+    if (model) model->billboard = 1;
+}
+
+void SaturnNativeSetBillboardParts(uint32_t tag, uint32_t parts)
+{
+    Model *model = (Model *)ModelForTag(tag);
+    if (model) model->billboardParts = parts;
+}
+
+uint32_t SaturnNativeBillboardParts(uint32_t tag, int *count)
+{
+    const Model *model = ModelForTag(tag);
+    const Model *parts = model ? ModelForTag(model->billboardParts) : NULL;
+    *count = parts ? parts->count : 0;
+    return parts ? model->billboardParts : 0;
+}
+
+int SaturnNativeBillboard(uint32_t tag)
+{
+    const Model *model = ModelForTag(tag);
+    return model && model->billboard;
+}
+
+const SaturnNativePoly *SaturnNativeModelPoly(uint32_t tag, int index)
+{
+    const Model *model = ModelForTag(tag);
+    return model && index >= 0 && index < model->count ? &model->polys[index] : NULL;
 }
 
 uint32_t SaturnNativeFrameTag(uint32_t modelTag, unsigned frame)
