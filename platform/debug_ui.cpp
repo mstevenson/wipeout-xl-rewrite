@@ -1735,9 +1735,13 @@ static void HdTextures(void)
         SDL_strlcpy(packEdit, portSettings.hdPackPath, sizeof(packEdit));
     }
     bool on = portSettings.hdTextures != 0;
+    bool native = GpuScale() == 1;
     if (ImGui::Checkbox("HD textures (from your texture pack)", &on)) {
         portSettings.hdTextures = on;
         Changed();
+    }
+    if (on && native) {
+        ImGui::TextDisabled("HD textures require a render scale above native resolution.");
     }
     ImGui::TextWrapped("NR74W's pack (a copy is kept with the port's source, in texture-packs) or any DuckStation "
                        "texture pack for SCUS-94351.");
@@ -1752,8 +1756,8 @@ static void HdTextures(void)
             ImGui::TextDisabled("%s", HdTexAbout());
             ImGui::Unindent();
         }
-    } else if (portSettings.hdPackPath[0] && !portSettings.hdTextures) {
-        ImGui::TextDisabled("Opened when HD textures are on.");
+    } else if (portSettings.hdPackPath[0] && (!on || native)) {
+        ImGui::TextDisabled("Pack opens when HD textures are used.");
     } else {
         ImGui::TextDisabled("No pack chosen.");
     }

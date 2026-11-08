@@ -867,7 +867,7 @@ static void FindHd(const GpuDrawState *state, const GpuVertex *vertices, int cou
         primitiveHdTexels[3] = (int16_t)v1;
         return;
     }
-    if (!HdTexActive()) {
+    if (scale == 1 || !HdTexActive()) {
         return;
     }
     if (!HdTexFind(state->pageX, state->pageY, state->depth, state->clutX, state->clutY, u0, v0, u1, v1, &hit) ||

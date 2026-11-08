@@ -20,6 +20,7 @@ base dimensions; **Auto** follows the window size. Widescreen adds columns while
 presentation preserves the 4:3 base aspect ratio. Switching profiles also switches
 resolution; restoring a profile's defaults restores its 1× resolution.
 Widescreen, frame rate, draw distance, fading and HD textures are shared.
+HD texture replacements apply only above 1×, including when Auto selects a higher scale.
 
 The shared **Frame rate > Original** mode follows the **active renderer profile**,
 including overrides chosen for another platform. Its label shows the profile and

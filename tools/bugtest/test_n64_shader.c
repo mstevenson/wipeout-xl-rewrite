@@ -51,13 +51,19 @@ const struct Disc *PsxIoDisc(void) { return NULL; }
 int PortN64TextureInfo(int px,int py,int depth,int cx,int cy,float u,float v,int bounds[4],int *flags)
 { (void)px;(void)py;(void)depth;(void)cx;(void)cy;(void)u;(void)v;(void)bounds;(void)flags;return 0; }
 
-/* No replacement pack or imported texture registry in this synthetic scene. */
-int HdTexActive(void) { return 0; }
+/* The synthetic scene can enable replacement lookups without loading a pack. */
+static int hdLookups;
+int HdTexActive(void) { return portSettings.hdTextures; }
 unsigned HdTexEpoch(void) { return 0; }
 int HdTexImageCount(void) { return 0; }
 const uint8_t *HdTexImage(int image, int *w, int *h) { (void)image;*w=*h=0;return NULL; }
-int HdTexFind(int px,int py,int depth,int cx,int cy,float u0,float v0,float u1,float v1,HdTexHit *hit)
-{ (void)px;(void)py;(void)depth;(void)cx;(void)cy;(void)u0;(void)v0;(void)u1;(void)v1;(void)hit;return 0; }
+int HdTexFind(int px, int py, int depth, int cx, int cy, float u0, float v0, float u1, float v1, HdTexHit *hit)
+{
+    (void)px; (void)py; (void)depth; (void)cx; (void)cy;
+    (void)u0; (void)v0; (void)u1; (void)v1; (void)hit;
+    hdLookups++;
+    return 0;
+}
 
 uint16_t psxVram[VRAM_HEIGHT][VRAM_WIDTH];
 uint16_t psxVramHigh[VRAM_HEIGHT][VRAM_WIDTH];
@@ -1913,6 +1919,15 @@ static void ScreenBufferOwnership(void)
     puts("VI cache: crops spanning both buffers, depth-only clears and framebuffer reallocations: OK");
 }
 
+static void CheckHdLookup(int expected)
+{
+    GpuDrawState draw = {.textured = 1, .depth = 2};
+    GpuVertex vertex = {0};
+    hdLookups = 0;
+    FindHd(&draw, &vertex, 1);
+    assert(hdLookups == expected);
+}
+
 static void ProfileNativeResolution(void)
 {
     Flush();
@@ -1922,12 +1937,14 @@ static void ProfileNativeResolution(void)
     assert(CreateFramebuffer());
     initialised = 1;
     portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.hdTextures = 1;
     for (portPal = 0; portPal <= 1; portPal++) {
         for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
             portSettings.render.selection = (RendererId)id;
             for (int multiplier = 1; multiplier <= 2; multiplier++) {
                 *RenderScaleSetting(&portSettings.render, (RendererId)id) = multiplier;
                 RenderCommit(); GpuUpdateResolution();
+                CheckHdLookup(multiplier > 1);
                 int nativeW, nativeH, width, height;
                 RenderNativeSize((RendererId)id, portPal, &nativeW, &nativeH);
                 GpuPixelSize(320, GPU_LINES, &width, &height);
@@ -1990,8 +2007,14 @@ static void ProfileNativeResolution(void)
     portSettings.render.saturn.scale = 0;
     RenderCommit(); GpuUpdateResolution();
     assert(scale == 4 && PixelX(320) == 1408 && PixelY(240) == 960);
+    CheckHdLookup(1);
+    testWindowWidth = 352; testWindowHeight = 240;
+    GpuUpdateResolution();
+    assert(scale == 1);
+    CheckHdLookup(0);
     initialised = 0;
-    puts("Native profile grids: PS1 NTSC/PAL, N64, Saturn and PC; switches, scales, both buffers, quads, readback and widescreen: OK");
+    puts("Native profile grids: PS1 NTSC/PAL, N64, Saturn and PC; switches, scales, both buffers, quads, "
+         "readback, widescreen and HD texture gating: OK");
 }
 
 int main(void)
