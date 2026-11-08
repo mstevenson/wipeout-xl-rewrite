@@ -97,6 +97,9 @@ static bool PcSettings(PcRenderSettings *s)
     changed |= Check("Depth buffer", &s->depth,
         "Uses polygon depth to help nearer surfaces hide farther ones, reducing draw-order errors. "
         "Disable to use ordering-table visibility.");
+    changed |= Check("Correct menu model aspect", &s->correctMenuAspect,
+        "Enhancement for the Windows menus. Removes the original horizontal stretch from 3D models "
+        "while keeping their height and placement. Disabled by default.");
     changed |= DisplaySettings(&s->resample);
     return changed;
 }

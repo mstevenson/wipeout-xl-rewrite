@@ -114,6 +114,8 @@ int main()
     assert(!portSettings.render.pc.bilinear && !portSettings.render.ps1.quantizeVertices);
     Activate("Dithered RGB565", 1, RENDER_PC);
     assert(!portSettings.render.pc.rgb565);
+    Activate("Correct menu model aspect", 1, RENDER_PC);
+    assert(portSettings.render.pc.correctMenuAspect && RenderCurrent()->id == RENDER_N64);
     Focus("##PC draw distance", 1, RENDER_PC);
     Key(ImGuiKey_Space); Key(ImGuiKey_RightArrow); Key(ImGuiKey_Space);
     assert(portSettings.render.pc.drawDistance == 2);
@@ -123,6 +125,7 @@ int main()
     assert(portSettings.render.pc.bilinear && !portSettings.render.n64.divot);
     assert(portSettings.render.pc.rgb565);
     assert(portSettings.render.pc.drawDistance == 1);
+    assert(!portSettings.render.pc.correctMenuAspect);
     SelectNext(2);
     assert(portSettings.render.n64Selection == RENDER_SATURN && RenderCurrent()->id == RENDER_SATURN);
     Activate("Checkerboard transparency", 3, RENDER_SATURN);

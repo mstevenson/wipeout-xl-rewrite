@@ -335,8 +335,10 @@ int main(void)
     assert(RenderCurrent()->id == RENDER_PS1 && !portSettings.render.ps1.depth);
     assert(portSettings.render.pc.rgb565);
     assert(portSettings.render.pc.drawDistance == 1);
-    Load("pc_mipmapping = 1\npc_rgb565 = 0\npc_draw_distance = 8\n");
+    assert(!portSettings.render.pc.correctMenuAspect);
+    Load("pc_mipmapping = 1\npc_rgb565 = 0\npc_draw_distance = 8\npc_correct_menu_aspect = 1\n");
     assert(!portSettings.render.pc.rgb565 && portSettings.render.pc.drawDistance == 8);
+    assert(portSettings.render.pc.correctMenuAspect);
     assert(PortSettingsSave());
     char *acceleratorSettings = SDL_LoadFile(PortSettingsPath(), NULL);
     assert(acceleratorSettings && !strstr(acceleratorSettings, "pc_mipmapping"));
@@ -344,8 +346,10 @@ int main(void)
     SDL_free(acceleratorSettings);
     PortSettingsLoad();
     assert(!portSettings.render.pc.rgb565 && portSettings.render.pc.drawDistance == 8);
+    assert(portSettings.render.pc.correctMenuAspect);
     RenderDefaults(&portSettings.render, RENDER_PC);
     assert(portSettings.render.pc.rgb565 && portSettings.render.pc.drawDistance == 1);
+    assert(!portSettings.render.pc.correctMenuAspect);
     Load("pc_draw_distance = 9\n");
     assert(portSettings.render.pc.drawDistance == 1);
     Load("smooth_textures = 1\n"); assert(RenderCurrent()->id == RENDER_PC);

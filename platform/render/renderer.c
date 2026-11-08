@@ -186,6 +186,7 @@ static const struct {
     OPTION("ps1_resample", ps1.resample),
     OPTION("pc_bilinear", pc.bilinear), OPTION("pc_lighting", pc.lighting), OPTION("pc_depth", pc.depth),
     OPTION("pc_resample", pc.resample), OPTION("pc_rgb565", pc.rgb565),
+    OPTION("pc_correct_menu_aspect", pc.correctMenuAspect),
     OPTION("n64_three_point", n64.threePoint), OPTION("n64_colour_precision", n64.colourPrecision),
     OPTION("n64_dither", n64.dither), OPTION("n64_dedither", n64.dedither),
     OPTION("n64_divot", n64.divot), OPTION("n64_resample", n64.resample)

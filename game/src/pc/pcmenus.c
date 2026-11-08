@@ -21,6 +21,7 @@
 #include "../../include/pad.h"
 #include "../../include/port_platform.h"
 #include "../../../platform/controls.h"
+#include "../../../platform/render/renderer.h"
 
 extern int currMenu;
 extern MenuEntry *menu;
@@ -178,12 +179,19 @@ static void DrawTitle(void)
    DrawTeamShips). */
 static void DrawMenuModel(int x, int y, int z, short dir, short scale, Object *obj)
 {
+    const RenderFrame *render = RenderCurrent();
     int i;
 
     SetSkeletonPosition(obj->skeleton, x, y * 3 / 4, z + PC_VIEW_BACK);
     SetSkeletonDirection(obj->skeleton, scale, dir, 0);
     for (i = 0; i < 3; i++) {
         obj->skeleton->relative.m[1][i] = (short)(obj->skeleton->relative.m[1][i] * 3 / 4);
+    }
+    if (render->id == RENDER_PC && render->settings.pc.correctMenuAspect) {
+        /* Port: match the displayed Y scale, including PAL's extra lines, while keeping the model's anchor. */
+        for (i = 0; i < 3; i++) {
+            obj->skeleton->relative.m[0][i] = (short)(obj->skeleton->relative.m[0][i] * (240 * 3 / 4) / SCREEN_HEIGHT);
+        }
     }
     if (scale == -1) {
         if (preCalcObject != obj) {

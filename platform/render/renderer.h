@@ -13,7 +13,7 @@ typedef struct Ps1RenderSettings {
 enum { PC_DRAW_DISTANCE_LEVELS = 8 };
 typedef struct PcRenderSettings {
     int bilinear, lighting, depth, resample, scale;
-    int rgb565, drawDistance;
+    int rgb565, drawDistance, correctMenuAspect;
 } PcRenderSettings;
 typedef struct N64RenderSettings {
     int threePoint, colourPrecision, dither, dedither, divot, resample, scale;
@@ -30,7 +30,7 @@ typedef struct RenderSettings {
     N64RenderSettings n64;
     SaturnRenderSettings saturn;
 } RenderSettings;
-#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0,1}, {1,1,1,1,1,1,1}, {1,1,1,1,1,1,1}, {1,1,1,1,0,0,0,1} }
+#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0,1}, {1,1,1,1,1,1,1,0}, {1,1,1,1,1,1,1}, {1,1,1,1,0,0,0,1} }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef struct RenderFrame { RenderSettings settings; RendererId id; int n64Track; } RenderFrame;
