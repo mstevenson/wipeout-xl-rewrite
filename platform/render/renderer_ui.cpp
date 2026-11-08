@@ -84,6 +84,13 @@ static bool PcSettings(PcRenderSettings *s)
     bool changed = Check("Bilinear texture filtering", &s->bilinear,
         "Blends four neighbouring texels to smooth textures, softening their pixel edges. "
         "Disable for sharp, nearest-neighbour sampling.");
+    changed |= Check("Dithered RGB565", &s->rgb565,
+        "Applies ordered dithering and 16-bit colour to the finished picture before display scaling.");
+    ImGui::TextUnformatted("PC draw distance");
+    ImGui::SetNextItemWidth(-1);
+    changed |= ImGui::SliderInt("##PC draw distance", &s->drawDistance, 1, PC_DRAW_DISTANCE_LEVELS,
+                                "%d", ImGuiSliderFlags_NoInput);
+    Tooltip("Selects the original PC road and scenery limits in Native mode. The default is level 1.");
     changed |= Check("PC scenery and ship lighting", &s->lighting,
         "Uses PC-style scenery shading and applies the track's lighting colour to every ship vertex. "
         "Disable for PS1-style scenery and ship lighting.");

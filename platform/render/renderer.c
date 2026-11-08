@@ -21,6 +21,19 @@ int RenderOriginalFrameRate(int pal)
     }
 }
 
+int RenderPcViewLimits(const RenderFrame *frame, int *sections, int *scenery)
+{
+    /* POWERVR.EXE, indexed by the original F3 view-detail level. */
+    static const int sectionLimits[] = {50, 45, 40, 36, 32, 28, 24, 20};
+    static const int sceneryLimits[] = {36000, 29000, 23000, 17000, 12000, 8000, 5000, 3000};
+    if (frame->id != RENDER_PC) return 0;
+    int level = frame->settings.pc.drawDistance - 1;
+    if (level < 0 || level >= PC_DRAW_DISTANCE_LEVELS) level = 0;
+    *sections = sectionLimits[level];
+    *scenery = sceneryLimits[level];
+    return 1;
+}
+
 const Renderer *RenderGet(RendererId id)
 {
     switch (id) {
@@ -172,7 +185,7 @@ static const struct {
     OPTION("ps1_colour_precision", ps1.colourPrecision), OPTION("ps1_dither", ps1.dither), OPTION("ps1_depth", ps1.depth),
     OPTION("ps1_resample", ps1.resample),
     OPTION("pc_bilinear", pc.bilinear), OPTION("pc_lighting", pc.lighting), OPTION("pc_depth", pc.depth),
-    OPTION("pc_resample", pc.resample),
+    OPTION("pc_resample", pc.resample), OPTION("pc_rgb565", pc.rgb565),
     OPTION("n64_three_point", n64.threePoint), OPTION("n64_colour_precision", n64.colourPrecision),
     OPTION("n64_dither", n64.dither), OPTION("n64_dedither", n64.dedither),
     OPTION("n64_divot", n64.divot), OPTION("n64_resample", n64.resample)
@@ -191,6 +204,13 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
                 *RenderScaleSetting(s, (RendererId)id) = (int)scale;
             return 1;
         }
+    }
+    if (!strcmp(key, "pc_draw_distance")) {
+        char *end;
+        long level = strtol(value, &end, 10);
+        if (end != value && !*end && level >= 1 && level <= PC_DRAW_DISTANCE_LEVELS)
+            s->pc.drawDistance = (int)level;
+        return 1;
     }
     RendererId *platform = !strcmp(key, "ps1_renderer") ? &s->ps1Selection :
         !strcmp(key, "pc_renderer") ? &s->pcSelection :
@@ -233,6 +253,7 @@ void RenderSave(FILE *file, const RenderSettings *s)
         RenderFrame frame = {.settings = *s, .id = (RendererId)id};
         fprintf(file, "%s = %d\n", scaleKeys[id], RenderScale(&frame));
     }
+    fprintf(file, "pc_draw_distance = %d\n", s->pc.drawDistance);
     fprintf(file, "ps1_renderer = %s\npc_renderer = %s\nn64_renderer = %s\nsaturn_renderer = %s\n",
             names[s->ps1Selection], names[s->pcSelection], names[s->n64Selection], names[s->saturnSelection]);
     for (size_t i = 0; i < sizeof(options) / sizeof(options[0]); i++) {

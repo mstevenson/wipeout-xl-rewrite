@@ -199,7 +199,8 @@ uses perspective-correct track tiles with Saturn palettes,
 and samples the VDP2 race sky at the selected render resolution. Choose **352x240 (native)** in the Saturn profile for the console pixel grid.
 see [implementation and fidelity limits](docs/RENDERERS.md#saturn-profile).
 PS1 exposes vertex snapping, affine mapping, colour precision,
-dithering and optional depth buffering; PC exposes filtering, lighting and depth;
+dithering and optional depth buffering. PC exposes filtering, lighting and depth,
+plus [dithered RGB565 and the original PC draw-distance levels](docs/RENDERERS.md#pc-profile).
 N64 exposes three-point filtering, RGB5 precision, dithering and VI filters;
 its depth buffering is always enabled.
 Frame rate, draw distance and HD replacements remain shared.

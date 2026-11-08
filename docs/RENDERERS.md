@@ -19,7 +19,10 @@ Saturn uses 352×240, and PC uses 640×480. Higher choices multiply that profile
 base dimensions; **Auto** follows the window size. Widescreen adds columns while
 presentation preserves the 4:3 base aspect ratio. Switching profiles also switches
 resolution; restoring a profile's defaults restores its 1× resolution.
-Widescreen, frame rate, draw distance, fading and HD textures are shared.
+Widescreen, frame rate, the Native/Full draw-distance choice, fading and HD
+textures are shared. Native draw distance follows the active renderer. PC uses
+its original F3 road and scenery limits. The console profiles use the loaded
+course's visibility lists through the console compatibility renderer.
 HD texture replacements apply only above 1×, including when Auto selects a higher scale.
 
 The shared **Frame rate > Original** mode follows the **active renderer profile**,
@@ -42,7 +45,7 @@ linked games share the main player's presentation policy.
 | --- | --- |
 | PS1 | Vertex snapping, affine textures, RGB5 precision and eligible primitive dithering on; depth enhancement off (ordering tables); nearest display scaling |
 | Saturn | Vertex snapping, affine textures, undithered RGB5 colour and checkerboard transparency on; original sky scrolling; depth enhancement off; nearest display scaling |
-| PC | Bilinear texture filtering, scenery/ship lighting, depth and linear display resampling on |
+| PC | Bilinear texture filtering, dithered RGB565, scenery/ship lighting, depth and linear display resampling on |
 | N64 | Three-point filtering, RGB5 precision, magic-square dithering, VI dedithering, approximate divot filtering and linear display resampling on; depth always on |
 
 Snapping and colour precision are independent. Dithering requires RGB5 precision;
@@ -63,6 +66,19 @@ menus and glyphs with nearest filtering; its display processing includes the HUD
 World shaders use explicit texel reads and explicit dithering, with driver
 dithering disabled. See [PC evidence and limits](PC.md#rendering-evidence-and-limits)
 and [N64 rendering](N64_RENDERING.md) for fidelity limits.
+
+## PC profile
+
+**Dithered RGB565** (`pc_rgb565`, default on) applies 4×4 ordered dithering to the
+composited picture at the selected render resolution, with five bits each for
+red and blue and six for green. Display scaling and capture use the quantized
+picture. The scene still blends at RGBA8 precision, so overlapping effects can
+differ from a real 16-bit framebuffer.
+
+**PC draw distance** (`pc_draw_distance`, default 1) selects the original F3
+level from 1 to 8 for road and scenery visibility in Native mode. Full mode
+extends the scene independently of this level and supports the shared scenery fade.
+See [PC rendering evidence](PC.md#rendering-evidence-and-limits).
 
 ## Saturn profile
 
@@ -233,7 +249,7 @@ affine/perspective interpolation and snapped coverage, with perspective fade.
 The live inspector and `tools/framecap.py` use these flags. Python also reads older
 formats, using available INI policy for interim version 3 and historical defaults
 otherwise. Texture inspection estimates one native texel; it does not replay HD,
-filtering or VI effects.
+filtering or presentation effects.
 
 ## Validation
 

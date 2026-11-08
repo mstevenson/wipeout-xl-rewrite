@@ -1,6 +1,7 @@
 #include "functions.h"
 #include "track.h"
 #include "racectrl.h"
+#include "portfar.h"
 #define TrackVersion 8
 extern Object     **trackObjects;
 extern int          raceType;
@@ -55,8 +56,13 @@ void DrawLandscape(ShipData *playerShip, TrackCamera *camera)
     int          roll = 0;
     int          farZ;
     int          nearZ;
+    int          pcSections, pcScenery;
+    int          pcNative = PortPcNativeView(&pcSections, &pcScenery); /* Port: active renderer's native range. */
 
-    if (portPal) {
+    if (pcNative) {
+        minDistance = 0x800;
+        maxDistance = pcScenery;
+    } else if (portPal) {
         /* The European program has no per-track range: one fixed landscape range. */
         minDistance = 0x800;
         maxDistance = 0x9538;
@@ -74,7 +80,7 @@ void DrawLandscape(ShipData *playerShip, TrackCamera *camera)
     /* Port: an object whose far side is nearer than minDistance is left out, but a big one beside the camera (a wall
        section) still showed its front part: it popped out at the side of the screen. The renderer cuts what reaches
        behind the camera (DrawNearPrimitive), so it is drawn while any of it is in front. */
-    if (!PortTracing()) {
+    if (!pcNative && !PortTracing()) {
         minDistance = 0;
     }
 
@@ -101,7 +107,7 @@ void DrawLandscape(ShipData *playerShip, TrackCamera *camera)
                 extent = (extent * 160) / result.vz;
                 if ((result.vx >= -(extent + 160)) && (result.vx <= (extent + 160)) &&
                     (result.vy >= -(extent + 120)) && (result.vy <= (extent + 120))) {
-                    AsmDrawObject(object, camera->camPos, roll);
+                    if (!pcNative || !PortPcDrawNativeScenery(object)) AsmDrawObject(object, camera->camPos, roll);
                 }
             }
         }

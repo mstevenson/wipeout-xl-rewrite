@@ -301,8 +301,28 @@ static void OriginalFrameRates(void)
     puts("Original frame rate follows the committed renderer, including cross-platform overrides: OK");
 }
 
+static void NativeViewLimits(void)
+{
+    const int road[] = {50, 45, 40, 36, 32, 28, 24, 20};
+    const int scenery[] = {36000, 29000, 23000, 17000, 12000, 8000, 5000, 3000};
+    RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = RENDER_PC};
+    int sections, distance;
+    for (int i = 0; i < PC_DRAW_DISTANCE_LEVELS; i++) {
+        frame.settings.pc.drawDistance = i + 1;
+        assert(RenderPcViewLimits(&frame, &sections, &distance));
+        assert(sections == road[i] && distance == scenery[i]);
+    }
+    for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+        if (id == RENDER_PC) continue;
+        frame.id = (RendererId)id;
+        assert(!RenderPcViewLimits(&frame, &sections, &distance));
+    }
+    puts("PC native road and scenery limits follow F3 and the active profile: OK");
+}
+
 int main(void)
 {
+    NativeViewLimits();
     Policies();
     ProfileIsolation();
     SDL_Environment *env = SDL_GetEnvironment();
@@ -313,6 +333,21 @@ int main(void)
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_DEPTH_BUFFER");
     PortSettingsLoad();
     assert(RenderCurrent()->id == RENDER_PS1 && !portSettings.render.ps1.depth);
+    assert(portSettings.render.pc.rgb565);
+    assert(portSettings.render.pc.drawDistance == 1);
+    Load("pc_mipmapping = 1\npc_rgb565 = 0\npc_draw_distance = 8\n");
+    assert(!portSettings.render.pc.rgb565 && portSettings.render.pc.drawDistance == 8);
+    assert(PortSettingsSave());
+    char *acceleratorSettings = SDL_LoadFile(PortSettingsPath(), NULL);
+    assert(acceleratorSettings && !strstr(acceleratorSettings, "pc_mipmapping"));
+    assert(strstr(acceleratorSettings, "pc_draw_distance = 8\n"));
+    SDL_free(acceleratorSettings);
+    PortSettingsLoad();
+    assert(!portSettings.render.pc.rgb565 && portSettings.render.pc.drawDistance == 8);
+    RenderDefaults(&portSettings.render, RENDER_PC);
+    assert(portSettings.render.pc.rgb565 && portSettings.render.pc.drawDistance == 1);
+    Load("pc_draw_distance = 9\n");
+    assert(portSettings.render.pc.drawDistance == 1);
     Load("smooth_textures = 1\n"); assert(RenderCurrent()->id == RENDER_PC);
     Load("pc_rendering = 0\nsmooth_textures = 1\n"); assert(RenderCurrent()->id != RENDER_PC);
     Load("smooth_textures = 1\npc_rendering = 0\n"); assert(RenderCurrent()->id != RENDER_PC);

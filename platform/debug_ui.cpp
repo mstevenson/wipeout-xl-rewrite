@@ -1875,7 +1875,9 @@ static void Console(void)
         if (ImGui::BeginTabItem("Graphics", nullptr, FirstTab("graphics"))) {
             if (RenderSettingsUi(&portSettings.render)) Changed();
             ImGui::SeparatorText("Display and scene");
-            static const char *const distances[] = {"Console (pop-in at the original distance)", "Full (the whole track)"};
+            char nativeDistance[64];
+            SDL_snprintf(nativeDistance, sizeof(nativeDistance), "Native (%s)", RenderGet(RenderCurrent()->id)->name);
+            const char *const distances[] = {nativeDistance, "Full (the whole track)"};
             int distance = portSettings.farView ? 1 : 0;
             if (ImGui::Combo("Draw distance", &distance, distances, IM_ARRAYSIZE(distances))) {
                 portSettings.farView = distance;
@@ -1892,7 +1894,7 @@ static void Console(void)
                 portSettings.farFlares = farFlares;
                 Changed();
             }
-            ImGui::TextDisabled("The ships beyond the console's draw distance (it drew no flares there).");
+            ImGui::TextDisabled("Draw engine flares beyond the native distance.");
             ImGui::EndDisabled();
             ImGui::Separator();
             char originalRate[96];

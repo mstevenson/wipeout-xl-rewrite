@@ -1,6 +1,7 @@
 #include "functions.h"
 #include "track.h"
 #include "port_widen.h"
+#include "portfar.h"
 #define TrackVersion 8
 
 
@@ -315,6 +316,7 @@ void DrawNewTrack(TrackCamera *camera, AutoMeshData *autoMesh)
     autoMesh->attemptedAutos = 0;
     GsGetVcount();
     AsmNextFrame();
+    if (PortPcDrawNativeTrack(camera, autoMesh, 0)) return; /* Port: PC F3 visibility. */
     dir = TrackDirection(camera);
     if (dir == 1) {
         for (i = 0; i < camera->section->northViewCount[2]; i += 2) {
@@ -427,6 +429,7 @@ void DrawAllTrack(TrackCamera *camera, AutoMeshData *autoMesh)
     autoMesh->quadCount = 0;
     autoMesh->attemptedAutos = 0;
     AsmNextFrame();
+    if (PortPcDrawNativeTrack(camera, autoMesh, 1)) return; /* Port: PC's full camera view list. */
     for (i = 0; i < camera->section->allViewCount[2]; i += 2) {
         AsmTrackLo(track->sections + camera->section->allViewSection[2][i], camera->camPos, camera->section->allViewSection[2][i + 1]);
         loCount += camera->section->allViewSection[2][i + 1];

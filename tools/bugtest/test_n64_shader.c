@@ -1468,6 +1468,8 @@ static void ViFiltering(void)
     assert(!memcmp(source, pixels, sizeof(source)));
     framebuffer = raw;
     N64RenderSettings savedN64 = portSettings.render.n64;
+    /* Isolate the VI from the PC renderer's own presentation effect. */
+    portSettings.render.pc.rgb565 = 0;
     /* Explicit PS1/PC selection on an N64 track must bypass every N64 display control. */
     for (int id = RENDER_PS1; id <= RENDER_PC; id++) for (int other = 0; other < 2; other++) {
         portSettings.render.selection = (RendererId)id;
@@ -1928,6 +1930,42 @@ static void CheckHdLookup(int expected)
     assert(hdLookups == expected);
 }
 
+static void PcRgb565(void)
+{
+    uint8_t source[4 * 8 * 8], pixels[sizeof(source)];
+    memset(source, 128, sizeof(source));
+    GLuint input, output, raw = ViTarget(&input, 8, 8, source), dest = ViTarget(&output, 8, 8, NULL);
+    RenderPresent p = {input, raw, 1, 1, 0, 0, 0, 8, 8, 0, 0, 8, 8};
+    PcRenderSettings settings = {.rgb565 = 1};
+    pcPipeline.present(&settings, &p);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, dest);
+    glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(pixels[0] == 123 && pixels[1] == 125 && pixels[2] == 123 && pixels[3] == 128);
+    assert(pixels[4] == 132 && pixels[5] == 130 && pixels[6] == 132 && pixels[7] == 128);
+    uint8_t full[sizeof(pixels)];
+    memcpy(full, pixels, sizeof(full));
+    p.left = p.top = 1;
+    p.x1 = p.y1 = 7;
+    pcPipeline.present(&settings, &p);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, dest);
+    glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    for (int y = 0; y < 7; y++) assert(!memcmp(pixels + y * 32, full + (y + 1) * 32 + 4, 7 * 4));
+    p.left = p.top = 0;
+    p.x1 = p.y1 = 8;
+    settings.rgb565 = 0;
+    pcPipeline.present(&settings, &p);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, dest);
+    glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(!memcmp(pixels, source, sizeof(source)));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, raw);
+    glReadPixels(0, 0, 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(!memcmp(pixels, source, sizeof(source)));
+    assert(glGetError() == GL_NO_ERROR);
+    glDeleteFramebuffers(1, &raw); glDeleteFramebuffers(1, &dest);
+    glDeleteTextures(1, &input); glDeleteTextures(1, &output);
+    puts("PC dithered RGB565 quantizes both channel precisions, keeps crop phase and preserves its source: OK");
+}
+
 static void ProfileNativeResolution(void)
 {
     Flush();
@@ -2180,6 +2218,7 @@ int main(void)
     SaturnPresentation();
     RendererLifecycle();
     ScreenBufferOwnership();
+    PcRgb565();
     ProfileNativeResolution();
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
     puts("Production GL shaders: N64 three-point, optional bilinear native/HD, bounds/wrapping/windows, coverage/blend passes and default PS1 sampling: OK");

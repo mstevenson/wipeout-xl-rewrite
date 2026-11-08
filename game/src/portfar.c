@@ -1,8 +1,10 @@
 /* Port: the whole track in view (see portfar.h). */
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "functions.h"
+#include "drawasm.h"
 #include "portfar.h"
 #include "trails.h"
 #include "effects.h"
@@ -18,6 +20,7 @@ extern int        ghostShip;
 extern int        raceType;
 extern ShipData  *shipIndex;
 extern Shadow    *shadowData;
+extern short      loTileCount, medTileCount, hiTileCount;
 
 /* The game's ordering table has 0x2000 entries; the sky is linked into the last. Primitives the game
    would put at or beyond FAR_ENTRY go into the far table, linked in at FAR_ENTRY: drawn after the sky,
@@ -40,6 +43,7 @@ static uint32_t nearFrame[2];
 static uint32_t frame = 1;
 static uint32_t *faceMarks;      /* the frame each track face was last drawn by the game */
 static int      faceMarkCount;
+static int      pcNativeScene;
 static uint32_t shipMarks[15];
 static int      farShips;        /* the ships the far view drew this frame, until their engine flares are drawn */
 static int      shadowShips;     /* the ships DrawShadow gave a shadow this frame */
@@ -54,19 +58,23 @@ static struct {
     unsigned char *drawn;
     int            count, capacity;
 } objectMarks[MARK_SLOTS];
-static int enabled = -1;
+static void LinkArenas(void)
+{
+    static int linked;
+
+    if (!linked) {
+        linked = 1;
+        PsxLinkRegion(arena, sizeof(arena));
+        PsxLinkRegion(farTable, sizeof(farTable));
+        PsxLinkRegion(nearArena, sizeof(nearArena));
+    }
+}
 
 /* Live: the debug console turns it on and off. */
 static int Enabled(void)
 {
     int on = PortFarViewEnabled();
-
-    if (on && enabled < 0) {
-        enabled = 1;
-        PsxLinkRegion(arena, sizeof(arena));
-        PsxLinkRegion(farTable, sizeof(farTable));
-        PsxLinkRegion(nearArena, sizeof(nearArena));
-    }
+    if (on) LinkArenas();
     return on;
 }
 
@@ -74,11 +82,13 @@ void PortFarMarkFace(Face *face)
 {
     int index;
 
-    if (!track || !Enabled()) {
+    if (!track || (!pcNativeScene && !Enabled())) {
         return;
     }
     if (faceMarkCount < track->faceCount) {
-        faceMarks = realloc(faceMarks, (size_t)track->faceCount * sizeof(*faceMarks));
+        uint32_t *next = realloc(faceMarks, (size_t)track->faceCount * sizeof(*faceMarks));
+        if (!next) return;
+        faceMarks = next;
         memset(faceMarks + faceMarkCount, 0, (size_t)(track->faceCount - faceMarkCount) * sizeof(*faceMarks));
         faceMarkCount = track->faceCount;
     }
@@ -372,6 +382,101 @@ static void CameraView(TrackCamera *camera, PortView *view)
         view->t[i] += view->m[i][0] * camPos->relative.t[0] + view->m[i][1] * camPos->relative.t[1] +
                       view->m[i][2] * camPos->relative.t[2];
     }
+}
+
+/* PC runs follow the authored next-section links, including across the start line. */
+static void PcViewRuns(short *const spans[3], const short sizes[3], int limit, unsigned char *details)
+{
+    for (int lod = 0; lod < 3; lod++) {
+        for (int i = 0; i + 1 < sizes[lod]; i += 2) {
+            int index = spans[lod][i], count = spans[lod][i + 1];
+            if (lod == 2 && count > limit) count = limit;
+            if (index < 0 || index >= track->sectionCount) continue;
+            TrackSection *section = &track->sections[index];
+            for (int j = 0; j < count && section; j++, section = section->nextSection.ptr) {
+                int detail = 3 - lod;
+                if (details[section - track->sections] < detail) details[section - track->sections] = (unsigned char)detail;
+            }
+        }
+    }
+}
+
+/* Keep the compatibility tiles where their projection and packet pools can represent the section. */
+static void PcNearSection(TrackSection *section, TrackCamera *camera, AutoMeshData *autoMesh, int detail)
+{
+    int faces = section->faceCount;
+    if (faces <= 0) return;
+    if ((detail == 1 && faces > 0x230 - loTileCount) || (detail == 2 && faces * 4 > 0x70 - medTileCount) ||
+        (detail == 3 && faces * 16 > 0x1c0 - hiTileCount)) return;
+    const Face *face = track->faces + (u_short)section->faceStart;
+    for (int i = 0; i < faces; i++, face++) {
+        for (int j = 0; j < 4; j++) {
+            const VECTOR *v = &track->vertices[face->vertex[j]];
+            int x = v->vx + camera->camPos->relative.t[0];
+            int y = v->vy + camera->camPos->relative.t[1];
+            int z = v->vz + camera->camPos->relative.t[2];
+            if (!FitsInHalfword(x) || !FitsInHalfword(y) || !FitsInHalfword(z)) return;
+        }
+    }
+    if (detail == 3) AsmTrackHi(section, camera->camPos, autoMesh, 1);
+    else if (detail == 2) AsmTrackMed(section, camera->camPos, 1);
+    else AsmTrackLo(section, camera->camPos, 1);
+}
+
+int PortPcDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView)
+{
+    static unsigned char *details;
+    static int capacity;
+    int limit, scenery;
+
+    pcNativeScene = 0;
+    if (!PortPcNativeView(&limit, &scenery) || !track || track->sectionCount <= 0) return 0;
+    if (capacity < track->sectionCount) {
+        unsigned char *next = realloc(details, (size_t)track->sectionCount);
+        if (!next) return 0;
+        details = next;
+        capacity = track->sectionCount;
+    }
+    memset(details, 0, (size_t)track->sectionCount);
+    TrackSection *section = camera->section;
+    if (allView) {
+        PcViewRuns(section->allViewSection, section->allViewCount, 65535, details);
+    } else {
+        /* The retail PC race uses all four lists when DIRECTION is clear,
+           except on Sagarmatha and Vostok Island. */
+        int dir = (shipIndex[ownShip].attr & DIRECTION) || clipLevel == 1 || clipLevel == 6 ? TrackDirection(camera) : 15;
+        if (dir & 1) PcViewRuns(section->northViewSection, section->northViewCount, limit, details);
+        if (dir & 2) PcViewRuns(section->southViewSection, section->southViewCount, 65535, details);
+        if (dir & 4) PcViewRuns(section->westViewSection, section->westViewCount, 65535, details);
+        if (dir & 8) PcViewRuns(section->eastViewSection, section->eastViewCount, 65535, details);
+    }
+
+    LinkArenas();
+    ClearOTagR(farTable[CurrentScreen], FAR_BUCKETS);
+    arenaUsed = 0;
+    farShips = 0;
+    if (faceMarks) memset(faceMarks, 0, (size_t)faceMarkCount * sizeof(*faceMarks));
+    PortView view;
+    CameraView(camera, &view);
+    pcNativeScene = 1;
+    for (int i = 0; i < track->sectionCount; i++) {
+        if (!details[i]) continue;
+        section = &track->sections[i];
+        PcNearSection(section, camera, autoMesh, details[i]);
+        PortTrackFar(section, &view);
+    }
+    PortTrackPackets(arena[CurrentScreen], arena[CurrentScreen] + arenaUsed);
+    AddPrims(OT[CurrentScreen] + FAR_ENTRY, farTable[CurrentScreen] + FAR_BUCKETS - 1, farTable[CurrentScreen]);
+    return 1;
+}
+
+int PortPcDrawNativeScenery(Object *object)
+{
+    if (!pcNativeScene) return 0;
+    PortView view;
+    SkeletonView(object->skeleton, &view);
+    PortDrawObjectFar(object, &view, NULL);
+    return 1;
 }
 
 static void DrawFarTrack(TrackCamera *camera)
@@ -701,6 +806,7 @@ static void DrawFarShadows(TrackCamera *camera, ShipData *ships)
 void PortFarDraw(TrackCamera *camera, ShipData *ships, Object **shipShapes)
 {
     if (!Enabled() || !track) {
+        pcNativeScene = 0;
         frame++;
         return;
     }

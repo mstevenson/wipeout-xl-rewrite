@@ -100,6 +100,18 @@ cannot supply PC-only textures/scenery; their palette precision, transparency-bi
 classification and blend modes remain. PC colour-key/alpha cases and the port's
 depth bias are not exact retail matches.
 
+The PC profile adds [independent accelerator-style options](RENDERERS.md#pc-profile).
+The rewrite's dithered RGB565 presentation is inspired by
+[3dfx Voodoo Graphics](https://device.report/m/e3306908ac4da148a70fcc27f6847fce6ee2fe7b959953a463dd53c424c2bdbf).
+Native draw distance uses the F3 scenery limits at `0x48a598` and north
+low-detail run caps at `0x495310` in `POWERVR.EXE`. The scenery cutoff ranges
+from 36,000 at level 1 to 3,000 at level 8, measured at the object's near edge.
+Native mode follows the course's section links and uses full-precision
+projection where the console track renderer cannot draw the selected faces.
+Free cameras use the authored all-view list. Full mode extends the scene
+independently of the F3 visibility limits.
+[Original PC track routines](https://github.com/Yash-Singh1/wipeout-xl-decomp/blob/9d0e3bbb10fdcd18c281533c0d9148f9384ca891/pc/src/track.c#L201-L337)
+
 PS1 rendering likewise retains precise projection, near clipping and optional
 interpolation/extended distance. Its colour arithmetic follows the
 [PS1 GPU description](https://psx-spx.consoledev.net/graphicsprocessingunitgpu/)

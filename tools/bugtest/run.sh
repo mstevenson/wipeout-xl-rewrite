@@ -116,6 +116,11 @@ ${CXX:-c++} -std=c++17 -O1 -Iplatform -I"$imgui" tools/bugtest/test_renderer_ui.
     -o "$test_build/renderer_ui"
 "$test_build/renderer_ui"
 
+# The PC native road's view runs follow authored links, with a cap on the distant north list.
+${CC:-cc} -std=gnu11 -O1 -ffunction-sections -fdata-sections $discard \
+    -include platform/include/port.h -iquote game/include tools/bugtest/test_pc_native_view.c -lm -o "$test_build/pc_native_view"
+"$test_build/pc_native_view"
+
 # Run track reaction on a steep guest descent with the production integer helpers.
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
     -include platform/include/port.h -iquote game/include tools/bugtest/test_guest_descent.c \

@@ -32,6 +32,10 @@ typedef struct PortFarVertex {
 /* The distance fade (as wipeout-rewrite's), on during a race's 3D drawing. */
 void PortFade(int on);
 
+/* The PC renderer's native visibility lists and full-precision scenery projection. */
+int PortPcDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView);
+int PortPcDrawNativeScenery(Object *object);
+
 /* The game marks what it drew this frame. */
 void PortFarMarkFace(Face *face);     /* a track face the game drew (some of) */
 int PortFarFaceDrawn(Face *face);

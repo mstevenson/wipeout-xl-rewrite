@@ -37,6 +37,8 @@ void PsxLinkRegion(void *start, size_t bytes);
 /* Whether the port draws the whole track in view (portfar.h): not in the lockstep tests (WIPEOUT_TRACE)
    or with WIPEOUT_FAR_VIEW=0. */
 int PortFarViewEnabled(void);
+/* Native PC road and scenery limits from the active renderer's F3 level. */
+int PortPcNativeView(int *sections, int *scenery);
 /* ... and whether the ships it draws beyond the console's distance have their engine flares (off: as the console,
    which drew none there). */
 int PortFarFlaresEnabled(void);

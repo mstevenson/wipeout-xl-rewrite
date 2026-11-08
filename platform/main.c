@@ -42,7 +42,7 @@ static void Usage(void)
             "  WIPEOUT_CD_SPEED (drive speed-up; 1 = the console's, default 1000), WIPEOUT_SAVE_DIR (memory cards; default: the user's data folder),\n"
             "  WIPEOUT_KEYS (scripted keys and gamepad), WIPEOUT_VRAM_DUMP (video memory picture at the end of a run),\n"
             "  WIPEOUT_RUMBLE_LOG (what the pads' motors are asked, one line a request),\n"
-            "  WIPEOUT_FAR_VIEW (0: the console's draw distance; 2: the whole track even while tracing), WIPEOUT_FAR_FLARES,\n"
+            "  WIPEOUT_FAR_VIEW (0: native draw distance; 2: the whole track even while tracing), WIPEOUT_FAR_FLARES,\n"
             "  WIPEOUT_MOVIES (play the movies in fixed-step runs too), WIPEOUT_WAV (the mixed audio, fixed-step),\n"
             "  WIPEOUT_MUSIC (a music folder in place of the disc's music)\n");
 }
@@ -532,6 +532,11 @@ int PortFarViewEnabled(void)
 int PortFarFlaresEnabled(void)
 {
     return portSettings.farFlares;
+}
+
+int PortPcNativeView(int *sections, int *scenery)
+{
+    return !PortFarViewEnabled() && !PortTracing() && RenderPcViewLimits(RenderCurrent(), sections, scenery);
 }
 
 int PortFadeRange(int *nearDistance, int *farDistance)
