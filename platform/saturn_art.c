@@ -13,6 +13,7 @@
    - the weapon icons (wepicon.cmp): pieces 16-29, the same 14, the PlayStation's first last;
    - the pilot icon (pilot.tim): sprite 44;
    - the explosions (explode.cmp: a fireball of 16 frames, then a flash of 16): sprites 0-15 and 17-32;
+   - the birds (bird.cmp): birds.rbh block 0 and birds.vri, 16 frames mapped to pairs of the game's 32 slots;
    - the menus' panel, text box, arrow, sound icons and logo (menutims.cmp): the front end's sprites (art\super\super.rbh
      block 2 and .vri) 24, 8, 9, 10, 11 and 0 (1 for 2097), the same drawings;
    - the ships' shadows (shadow1.tim: one ship's outline in each bit of a pixel, shadow2.tim the fifth): sprites
@@ -222,6 +223,32 @@ static void Sprite(Canvas *c, int sprite, int x, int y, unsigned alpha)
 static void MenuSprite(Canvas *c, int sprite, int x, int y)
 {
     SpriteOf(c, menuVideo, menuSprites, menuSpritesSize, sprite, x, y, 255);
+}
+
+/* The Saturn advances one of 16 wing poses per update; DrawBirds advances two of 32.
+   Pair the slots so both starting parities play the whole cycle, including the
+   gliding pose (Saturn frame 4, the game's frame 8). Keep this video image separate
+   from the common race art: the bird archive has its own VDP1 memory contents. */
+static int BirdFrame(Canvas *c, int frame)
+{
+    static int birdLoaded;
+    static SaturnVideo *birdVideo;
+    static unsigned char *birdSprites;
+    static size_t birdSpritesSize;
+
+    if (frame < 0 || frame >= 32) return 0;
+    if (!birdLoaded) {
+        birdLoaded = 1;
+        birdVideo = SaturnLoadVideo("art\\common\\birds.vri");
+        birdSprites = SaturnBlock("art\\common\\birds.rbh", 0, &birdSpritesSize);
+    }
+    const unsigned char *entry = SaturnSpriteRecord(birdSprites, birdSpritesSize, frame / 2, NULL);
+    if (!birdVideo || !entry || Be16(entry) != 1 || ((Be16(entry + 4) >> 3) & 7) != 1 ||
+        Be16(entry + 14) != 0x0840 ||
+        !SaturnVideoAt(birdVideo, VDP1_RAM + Be16(entry + 6) * 8u, 32) ||
+        !SaturnVideoAt(birdVideo, VDP1_RAM + Be16(entry + 12) * 8u, 64 * 64 / 2)) return 0;
+    SpriteOf(c, birdVideo, birdSprites, birdSpritesSize, frame / 2, 0, 0, 255);
+    return 1;
 }
 
 /* ---- the font ---- */
@@ -714,6 +741,8 @@ static int Draw(const char *name, int index, Canvas *c)
         StartScreen(c, 16 + index);
     } else if (!strcmp(name, "smoke.cmp")) {
         Smoke(c, index);
+    } else if (!strcmp(name, "bird.cmp")) {
+        return BirdFrame(c, index);
     } else if (!strcmp(name, "link.tim")) {
         LinkArrow(c);
     } else if (!strcmp(name, "chrome.tim")) {

@@ -9,6 +9,21 @@ ${CC:-cc} -O1 -Iplatform tools/bugtest/test_saturn_native.c platform/render/satu
 render_sources="platform/render/renderer.c platform/render/ps1_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c platform/render/saturn_native.c"
 case $(uname -s) in Darwin) discard='-Wl,-dead_strip';; *) discard='-Wl,--gc-sections';; esac
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform $(pkg-config --cflags sdl3) \
+    tools/bugtest/test_saturn_art.c $(pkg-config --libs sdl3) -o "$test_build/saturn_art"
+"$test_build/saturn_art"
+# Optional local Saturn disc: verify bird animation pixels and the train/scenery assets.
+if [ -n "${WIPEOUT_SATURN_DISC:-}" ]; then
+    ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform $(pkg-config --cflags sdl3) \
+        tools/bugtest/test_saturn_birds_disc.c platform/saturn_art.c platform/saturn.c platform/psx/disc.c \
+        $(pkg-config --libs sdl3) -o "$test_build/saturn_birds_disc"
+    "$test_build/saturn_birds_disc" "$WIPEOUT_SATURN_DISC"
+    ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform -iquote game/include \
+        $(pkg-config --cflags sdl3) tools/bugtest/test_saturn_train_disc.c platform/saturn.c \
+        platform/saturn_art.c platform/psx/disc.c platform/original.c platform/saturn_scene_names.c \
+        platform/render/saturn_native.c $(pkg-config --libs sdl3) -lm -o "$test_build/saturn_train_disc"
+    "$test_build/saturn_train_disc" "$WIPEOUT_SATURN_DISC"
+fi
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform $(pkg-config --cflags sdl3) \
     tools/bugtest/test_saturn_model.c platform/render/saturn_native.c $(pkg-config --libs sdl3) -lm -o "$test_build/saturn_model"
 "$test_build/saturn_model"
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform $(pkg-config --cflags sdl3) \

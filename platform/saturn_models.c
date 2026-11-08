@@ -598,7 +598,7 @@ static void AddCluts(Region *r, int x0, int x1, int y)
 
 /* Video memory plan (the second half: rows 512 on; the track's tiles take x 0-183 to row 959 and palettes 1019-1023;
    page rows 512-767 and 768-1003, palettes 1004-1018). */
-enum { R_TERRY, R_RESCU, R_WRECK, R_WEAPONS, R_SROID, R_LIGHT, R_SKY, R_SCENE };
+enum { R_TERRY, R_RESCU, R_WRECK, R_WEAPONS, R_SROID, R_LIGHT, R_SKY, R_SCENE, R_TRAIN };
 
 static void MakeRegion(Region *r, int which)
 {
@@ -653,11 +653,15 @@ static void MakeRegion(Region *r, int which)
     case R_SCENE:
         for (x = 448; x < 1024; x += 64) {
             AddPage(r, x, 512, 256);
-            AddPage(r, x, 768, 236);
+            if (x != 960) AddPage(r, x, 768, 236); /* the separately loaded train */
         }
         for (x = 1011; x < 1019; x++) {
-            AddCluts(r, 0, 1024, x);
+            AddCluts(r, 0, x == 1018 ? 960 : 1024, x);
         }
+        break;
+    case R_TRAIN:
+        AddPage(r, 960, 768, 236);
+        AddCluts(r, 960, 1024, 1018);
         break;
     }
 }
@@ -1857,6 +1861,71 @@ static uint8_t *MakeMenu(const Part *parts, int count, int half, size_t *size)
     return prm;
 }
 
+/* Gare d'Europa keeps one carriage before the scenery instance table. The
+   game loads six independent objects from train.prm and moves their skeletons.
+   Port: retain the original train.prm names/translations (in game units),
+   supplying the Saturn carriage geometry, lights and course textures. No
+   PlayStation disc is needed at runtime. See port-notes/saturn-train.md. */
+static uint8_t *MakeTrain(int wantCmp, size_t *size)
+{
+    static const char *names[] = {"grid9", "grid6", "grid18", "grid15", "grid12", "grid1"};
+    static const int positions[6][3] = {
+        {98791, -8592, 10949}, {101164, -9186, 16263}, {91692, -6818, -4946},
+        {94061, -7410, 358}, {96414, -7998, 5626}, {103529, -9777, 21559}
+    };
+    static const int zero[3] = {0, 0, 0};
+    size_t modelSize, vertexSize, prmSize = 0, *timSizes = NULL;
+    uint8_t *models = SaturnBlock("art\\track02\\course02.rbh", 2, &modelSize);
+    uint8_t *vertices = SaturnBlock("art\\track02\\course02.rbh", 4, &vertexSize);
+    SaturnVideo *video = SaturnLoadVideo("art\\track02\\course02.vri");
+    Model carriage = {0};
+    uint8_t *out = NULL, *prm;
+    Buffer tims = {0};
+    Converter cv;
+    int timCount = 0;
+
+    /* A header offset, not an instance: reject an incompatible course layout. */
+    if (!models || !vertices || !video || modelSize < 4 ||
+        (size_t)Be32(models) + 32 > modelSize ||
+        Be32(models + Be32(models) + 8) != Be32(models) ||
+        !ReadModel(models, modelSize, vertices, vertexSize, Be32(models), zero, &carriage)) {
+        goto done;
+    }
+    /* InitTrainLights walks the first twelve G3/G4 records in each carriage. */
+    if (carriage.polyCount < 12) goto done;
+    for (int i = 0; i < 12; i++) {
+        if (carriage.poly[i].flags & TEXTURED) goto done;
+        int distinct = 0;
+        for (int k = 0; k < 4; k++) {
+            int j;
+            for (j = 0; j < k && carriage.poly[i].corner[j] != carriage.poly[i].corner[k]; j++) {}
+            distinct += j == k;
+        }
+        if (distinct < 3) goto done;
+    }
+    StartConverter(&cv, R_TRAIN, 1);
+    PrepareModel(&cv, &carriage, video);
+    AssignPalettes(&cv);
+    for (int i = 0; i < 6; i++) AddModel(&cv, names[i], &carriage, video, positions[i]);
+    prm = BuildPrm(&cv, &prmSize, &tims, &timSizes, &timCount, wantCmp);
+    if (wantCmp) {
+        out = MakeCmp(&tims, timSizes, timCount, size);
+        SDL_free(prm);
+    } else {
+        out = prm;
+        *size = prmSize;
+    }
+    SDL_free(tims.data);
+    SDL_free(timSizes);
+    FreeConverter(&cv);
+done:
+    FreeModel(&carriage);
+    SDL_free(models);
+    SDL_free(vertices);
+    SDL_free(video);
+    return out;
+}
+
 unsigned char *SaturnMakeModel(const char *name, size_t *size)
 {
     static const Part terry[] = {{"quirex1", 40, -1, -1}, {"fiesar1", 41, -1, -1}, {"auricom2", 39, -1, -1},
@@ -1902,6 +1971,9 @@ unsigned char *SaturnMakeModel(const char *name, size_t *size)
     size_t i;
 
     *size = 0;
+    if (!SDL_strcasecmp(name, "train.prm") || !SDL_strcasecmp(name, "train.cmp")) {
+        return MakeTrain(!SDL_strcasecmp(name, "train.cmp"), size);
+    }
     for (i = 0; i < SDL_arraysize(files); i++) {
         if (!SDL_strcasecmp(name, files[i].file)) {
             char rbh[64], vri[64];

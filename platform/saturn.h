@@ -52,7 +52,7 @@ void SaturnDrawFont(unsigned char *page, int pageWidth, int size);
 /* The Saturn's models as the PlayStation's files (saturn_models.c), NULL for others; the caller frees (SDL_free).
    Common: terry.prm/.cmp, telco.prm, rescu.prm/.cmp, wierd.prm/.cmp, wreck.prm/.cmp, harry.prm, june.prm, vecto.prm,
    venom.prm, rapie.prm, phant.prm, and the race-start WAD's mine.prm/.cmp, shld.prm, sroid.prm/.cmp, light.prm/.cmp,
-   rock.prm, miss.prm, ebolt.prm. A track's (PlayStation track folders 1 2 6 7 8 13 17 20): scene.prm/.cmp,
+   rock.prm, miss.prm, ebolt.prm, train.prm/.cmp. A track's (PlayStation track folders 1 2 6 7 8 13 17 20): scene.prm/.cmp,
    sky.prm/.cmp. */
 unsigned char *SaturnMakeModel(const char *name, size_t *size);
 unsigned char *SaturnMakeTrackModel(int track, const char *name, size_t *size);
