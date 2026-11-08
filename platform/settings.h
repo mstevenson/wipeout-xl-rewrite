@@ -16,7 +16,7 @@ typedef struct PortSettings {
     int fade;             /* distant geometry fades into the sky */
     int fadeNear, fadeFar;
     int widescreen;       /* the picture fills a wider window: more of the scene at the sides (render/gl_backend.c) */
-    int frameRate;        /* the display: FRAME_RATE_*; the game itself keeps its 30 frames a second */
+    int frameRate;        /* the display: FRAME_RATE_*; simulation keeps its original NTSC/PAL timing */
     int frameCap;         /* pictures a second with FRAME_RATE_CAPPED */
     int skipIntro;        /* no intro movie at start-up */
     int recordFrames;     /* the frame recorder (psx/framecap.h): RECORD_* */
@@ -35,7 +35,6 @@ typedef struct PortSettings {
     int rumbleStrength;   /* ... how hard they shake, in percent (0: 100) */
     int negconPad;        /* which pad is in the first port: 0 whatever its controls look like, 1 a digital
                              pad, 2 a neGcon (psx/pad.h's PsxPadSetType) */
-    int renderScale;      /* the framebuffer's pixels per console pixel; 0: as many as the window shows (render/gl_backend.c) */
     int hdTextures;       /* the HD texture pack is drawn (hdtex.c) */
     char hdPackPath[1024]; /* ... the player's pack: its .zip or folder */
     int touchControls;    /* the touch controls (touch.h): TOUCH_AUTO, TOUCH_ON or TOUCH_OFF */
@@ -75,7 +74,7 @@ enum {
     FRAME_RATE_UNCAPPED, /* as many pictures as the computer draws, moving between the game's frames */
     FRAME_RATE_VSYNC,    /* ... one per refresh of the display */
     FRAME_RATE_CAPPED,   /* ... at most frameCap a second */
-    FRAME_RATE_CONSOLE   /* the console's: each field shows the game's last frame */
+    FRAME_RATE_CONSOLE   /* Original: the active renderer profile's presentation rate */
 };
 
 extern PortSettings portSettings;

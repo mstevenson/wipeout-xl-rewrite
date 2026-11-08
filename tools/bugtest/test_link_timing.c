@@ -5,7 +5,12 @@
 #include <assert.h>
 
 PortConfig portConfig;
-PortSettings portSettings;
+PortSettings portSettings = {.render = RENDER_DEFAULTS};
+int PortOriginalTrackIs64(void) { return 0; }
+int PortOriginalTrack(void) { return -1; }
+int PortPcData(void) { return 0; }
+int PortSaturnDisc(void) { return 0; }
+const struct Disc *PsxIoDisc(void) { return NULL; }
 int portPal;
 static uint64_t now = 1000000000ull;
 static uint64_t presentationCost = 40000000ull;
@@ -97,6 +102,34 @@ int main(void)
         assert(presentations / elapsed <= caps[i] + 0.2);
     }
     portPal = 0;
+    /* Original changes presentation cadence without changing the game's clock. */
+    portSettings.frameRate = FRAME_RATE_CONSOLE;
+    presentationCost = 2000000ull;
+    for (portPal = 0; portPal <= 1; portPal++) {
+        for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+            portSettings.render.selection = (RendererId)id; RenderCommit();
+            interpolate = id != RENDER_PS1;
+            int updates = portPal ? 250 : 300;
+            int expected = id == RENDER_PC ? 60 : id == RENDER_SATURN ? 20 : id == RENDER_PS1 && portPal ? 25 : 30;
+            elapsed = Run(updates);
+            double fps = presentations / elapsed;
+            printf("Original %s %s: %.2f displayed FPS, %.2f race updates/sec\n",
+                   RenderGet((RendererId)id)->name, portPal ? "PAL" : "NTSC", fps, updates / elapsed);
+            assert(fps <= expected + .2 && fps > expected - 1);
+            assert(elapsed > 9.95 && elapsed < 10.15);
+        }
+    }
+    portPal = 0;
+    portSettings.render.selection = RENDER_SATURN; RenderCommit();
+    assert(PresentationPeriod() == 1000000000ull / 20);
+    now += 1000000000ull;
+    assert(PsxBeginPresentation()); PsxEndPresentation();
+    assert(!PsxBeginPresentation());
+    portSettings.render.selection = RENDER_PC; /* uncommitted edits do not change cadence */
+    assert(PresentationPeriod() == 1000000000ull / 20);
+    RenderCommit();
+    assert(PresentationPeriod() == 1000000000ull / 60 && PsxBeginPresentation());
+    PsxEndPresentation();
     portSettings.frameRate = FRAME_RATE_UNCAPPED;
     presentationCost = 40000000ull;
     interpolate = 0;

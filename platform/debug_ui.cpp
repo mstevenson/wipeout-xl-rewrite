@@ -539,10 +539,13 @@ static void RecorderTab(void)
     int picturePixelsW = 0, picturePixelsH = 0;
     const uint8_t *picture = f->shown ? FrameCapPicture(frameShown, &picturePixelsW, &picturePixelsH) : nullptr;
     bool hasPicture = picture != nullptr;
-    // pictureW: the picture's console columns (its pixels are pictureScale times as many each way)
-    int pictureScale = hasPicture ? SDL_max(f->pictureScale, 1) : 1;
-    int pictureW = hasPicture ? f->pictureW / pictureScale : 320, pictureX = hasPicture ? f->pictureX : 0;
-    int pictureH = hasPicture ? f->pictureH / pictureScale : GPU_LINES; // (PAL's 256 lines)
+    // Keep picking and overlays in game coordinates, even with non-square native pixels.
+    int pictureX = hasPicture ? f->pictureX : 0;
+    int pictureW = hasPicture && f->pictureGameW ? f->pictureGameW : 320;
+    int pictureH = hasPicture && f->pictureGameH ? f->pictureGameH : GPU_LINES;
+    float pictureScaleX = hasPicture ? picturePixelsW / (float)pictureW : 1;
+    float pictureScaleY = hasPicture ? picturePixelsH / (float)pictureH : 1;
+    float pictureScale = SDL_max(pictureScaleX, pictureScaleY);
     // below the picture, the pixel's primitives: at least a few rows and the details (zoomed in, the picture
     // takes the rest)
     float below = SDL_min(240 * ui, room.y * 0.35f), belowZoomed = SDL_min(170 * ui, room.y * 0.3f);
@@ -679,8 +682,9 @@ static void RecorderTab(void)
         ImGui::GetWindowDrawList()->AddRect(a, ImVec2(a.x + cell, a.y + cell), IM_COL32(255, 0, 255, 255), 0.0f, 0, 1.5f);
         if (hasPicture) {
             // (the middle of the console pixel's picture pixels)
-            const uint8_t *rgb = &picture[((size_t)(py * pictureScale + pictureScale / 2) * picturePixelsW +
-                                           (size_t)(px * pictureScale + pictureScale / 2)) * 3];
+            int sampleX = SDL_min((int)((px + 0.5f) * pictureScaleX), picturePixelsW - 1);
+            int sampleY = SDL_min((int)((py + 0.5f) * pictureScaleY), picturePixelsH - 1);
+            const uint8_t *rgb = &picture[((size_t)sampleY * picturePixelsW + sampleX) * 3];
             ImGui::Text("pixel %d, %d   colour %d, %d, %d", x, y, rgb[0], rgb[1], rgb[2]);
         } else {
             ImGui::Text("pixel %d, %d", x, y);
@@ -1706,31 +1710,6 @@ static void VideoStandard(void)
     }
 }
 
-static void Resolution(void)
-{
-    char auto_[64], labels[16][48];
-    const char *items[17];
-    int count = GpuMaxScale(), choice = SDL_min(portSettings.renderScale, count), i, w = 0, h = 0, columns = 320;
-    bool saturn = RenderCurrent()->id == RENDER_SATURN;
-
-    // the console's 240 lines (PAL 256), and its 320 columns or, with widescreen, as many as the window's shape gives
-    PortDrawableSize(&w, &h);
-    if (portSettings.widescreen && h > 0) {
-        columns = SDL_clamp((int)SDL_ceil(240.0 * w / h), 320, 320 + 2 * 400);
-    }
-    SDL_snprintf(auto_, sizeof(auto_), "Auto (%dx%d)", columns * GpuWindowScale(), GPU_LINES * GpuWindowScale());
-    items[0] = auto_;
-    for (i = 1; i <= count && i <= 16; i++) {
-        SDL_snprintf(labels[i - 1], sizeof(labels[i - 1]), "%dx%d%s", columns * i, GPU_LINES * i,
-                     i == 1 ? (saturn ? " (Saturn native)" : " (PS1 original resolution)") : "");
-        items[i] = labels[i - 1];
-    }
-    if (ImGui::Combo("Resolution", &choice, items, SDL_min(count, 16) + 1)) {
-        portSettings.renderScale = choice;
-        Changed();
-    }
-}
-
 static void UsePack(const char *path)
 {
     SDL_strlcpy(packEdit, path, sizeof(packEdit));
@@ -1892,7 +1871,6 @@ static void Console(void)
         if (ImGui::BeginTabItem("Graphics", nullptr, FirstTab("graphics"))) {
             if (RenderSettingsUi(&portSettings.render)) Changed();
             ImGui::SeparatorText("Display and scene");
-            Resolution();
             static const char *const distances[] = {"Console (pop-in at the original distance)", "Full (the whole track)"};
             int distance = portSettings.farView ? 1 : 0;
             if (ImGui::Combo("Draw distance", &distance, distances, IM_ARRAYSIZE(distances))) {
@@ -1913,13 +1891,18 @@ static void Console(void)
             ImGui::TextDisabled("The ships beyond the console's draw distance (it drew no flares there).");
             ImGui::EndDisabled();
             ImGui::Separator();
-            const char *const rates[] = {"Uncapped", "Display refresh (VSync)", "Capped",
-                                         portPal ? "PS1 original (25 fps)" : "PS1 original (30 fps)"};
+            char originalRate[96];
+            SDL_snprintf(originalRate, sizeof(originalRate), "Original (%s, %d fps)",
+                         RenderGet(RenderCurrent()->id)->name, RenderOriginalFrameRate(portPal));
+            const char *const rates[] = {"Uncapped", "Display refresh (VSync)", "Capped", originalRate};
             int rate = portSettings.frameRate;
             if (ImGui::Combo("Frame rate", &rate, rates, IM_ARRAYSIZE(rates))) {
                 portSettings.frameRate = rate;
                 Changed();
             }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(
+                "Original follows the active renderer profile: PS1 30/25, N64 30, Saturn 20, PC 60 fps.\n"
+                "Game simulation keeps its original timing; other platforms use interpolated display frames.");
             if (portSettings.frameRate == FRAME_RATE_CAPPED) {
                 int cap = portSettings.frameCap;
                 if (ImGui::DragInt("Frames per second", &cap, 1.0f, 15, 1000)) {

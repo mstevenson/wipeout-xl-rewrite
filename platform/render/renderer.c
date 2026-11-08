@@ -6,9 +6,20 @@
 #include "../psx/psx_io.h"
 #include <stddef.h>
 #include <string.h>
+#include <stdlib.h>
 
 static RenderFrame current;
 static int valid;
+
+int RenderOriginalFrameRate(int pal)
+{
+    switch (RenderCurrent()->id) {
+    case RENDER_SATURN: return 20;
+    case RENDER_PC: return 60;
+    case RENDER_N64: return 30; /* the supported USA Wipeout 64 import */
+    default: return pal ? 25 : 30;
+    }
+}
 
 const Renderer *RenderGet(RendererId id)
 {
@@ -33,6 +44,32 @@ const void *RenderProfile(const RenderFrame *f)
 int RenderDepth(const RenderFrame *f)
 {
     return RenderGet(f->id)->depth(RenderProfile(f));
+}
+
+int *RenderScaleSetting(RenderSettings *s, RendererId id)
+{
+    switch (id) {
+    case RENDER_PC: return &s->pc.scale;
+    case RENDER_N64: return &s->n64.scale;
+    case RENDER_SATURN: return &s->saturn.scale;
+    default: return &s->ps1.scale;
+    }
+}
+
+int RenderScale(const RenderFrame *f)
+{
+    switch (f->id) {
+    case RENDER_PC: return f->settings.pc.scale;
+    case RENDER_N64: return f->settings.n64.scale;
+    case RENDER_SATURN: return f->settings.saturn.scale;
+    default: return f->settings.ps1.scale;
+    }
+}
+
+void RenderNativeSize(RendererId id, int pal, int *width, int *height)
+{
+    *width = id == RENDER_PC ? 640 : id == RENDER_SATURN ? 352 : 320;
+    *height = id == RENDER_PC ? 480 : id == RENDER_PS1 && pal ? 256 : 240;
 }
 
 RenderStyle RenderPrepare(const RenderFrame *f, const RenderMaterial *m)
@@ -142,8 +179,19 @@ static const struct {
 #undef OPTION
 };
 
+static const char *const scaleKeys[] = {"", "ps1_render_scale", "pc_render_scale", "n64_render_scale", "saturn_render_scale"};
+
 int RenderSet(RenderSettings *s, const char *key, const char *value)
 {
+    for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+        if (!strcmp(key, scaleKeys[id])) {
+            char *end;
+            long scale = strtol(value, &end, 10);
+            if (end != value && !*end && scale >= 0 && scale <= 16)
+                *RenderScaleSetting(s, (RendererId)id) = (int)scale;
+            return 1;
+        }
+    }
     RendererId *platform = !strcmp(key, "ps1_renderer") ? &s->ps1Selection :
         !strcmp(key, "pc_renderer") ? &s->pcSelection :
         !strcmp(key, "n64_renderer") ? &s->n64Selection :
@@ -181,6 +229,10 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
 
 void RenderSave(FILE *file, const RenderSettings *s)
 {
+    for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+        RenderFrame frame = {.settings = *s, .id = (RendererId)id};
+        fprintf(file, "%s = %d\n", scaleKeys[id], RenderScale(&frame));
+    }
     fprintf(file, "ps1_renderer = %s\npc_renderer = %s\nn64_renderer = %s\nsaturn_renderer = %s\n",
             names[s->ps1Selection], names[s->pcSelection], names[s->n64Selection], names[s->saturnSelection]);
     for (size_t i = 0; i < sizeof(options) / sizeof(options[0]); i++) {

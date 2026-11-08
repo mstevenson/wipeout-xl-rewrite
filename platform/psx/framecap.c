@@ -564,7 +564,10 @@ void PortObjectVisualFrame(int *assetTag, unsigned frame)
 static void TakePicture(FrameCapFrame *f, int x, int y, int w, int h)
 {
     int margin = GpuShownMargin(x, w), scale = SDL_max(GpuScale(), 1);
-    int width = (PICTURE_W + 2 * margin) * scale, height = GPU_LINES * scale; /* (240 lines, or PAL's 256) */
+    int width, height;
+    GpuPixelSize(PICTURE_W + 2 * margin, GPU_LINES, &width, &height);
+    f->pictureGameW = PICTURE_W + 2 * margin;
+    f->pictureGameH = GPU_LINES;
 
     FinishRead(1); /* (the picture before's: back by now) */
     ForgetPicture(f);
@@ -798,7 +801,7 @@ static void WriteFrames(FILE *file)
     int i, k;
     /* header: magic, version, frames; per frame its fields, then its primitives (see tools/framecap.py) */
     Put(file, "XLFC", 4);
-    PutI32(file, 4); /* version 4: per-primitive shading operations */
+    PutI32(file, 5); /* version 5: logical picture extent, independent of native pixel dimensions */
     PutI32(file, count);
     for (i = 0; i < count; i++) {
         const FrameCapFrame *f = FrameCapFrameAt(i);
@@ -816,6 +819,8 @@ static void WriteFrames(FILE *file)
         PutI32(file, f->count);
         PutI32(file, f->pictureX); /* version 2 */
         Put(file, &f->between, 4); /* version 3 */
+        PutI32(file, f->pictureGameW ? f->pictureGameW : PICTURE_W - 2 * f->pictureX);
+        PutI32(file, f->pictureGameH ? f->pictureGameH : f->areaH == 256 ? 256 : 240);
         for (k = 0; k < f->count; k++) {
             const FrameCapPrim *p = &f->prims[k];
             int j;

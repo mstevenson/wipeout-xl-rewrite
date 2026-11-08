@@ -12,7 +12,7 @@
     "precision highp usampler2D;\n" \
     "#endif\n"
 
-#define RENDER_POSITION "    vec2 pixel = (modeIn.y & 128u) != 0u ? floor(position.xy) : position.xy;\n    if (pointSize > 0.0) pixel += vec2(0.5);\n    gl_PointSize = max(pointSize, 1.0);\n"
+#define RENDER_POSITION "    vec2 pixel = (modeIn.y & 128u) != 0u ? floor(position.xy * nativeGrid) / nativeGrid : position.xy;\n    if (pointSize > 0.0) pixel += vec2(0.5) / nativeGrid;\n    gl_PointSize = max(pointSize, 1.0);\n"
 #define RENDER_TEXCOORD "    vTexel = (modeIn.y & 32u) != 0u ? vec3(texel * w, w) : vec3(texel, 1.0);\n"
 #define RENDER_VERTEX_COLOUR "    return (mode.y & 4) != 0 ? floor(c * 255.0 + 0.0001) / 255.0 : c;\n"
 #define RENDER_TINT "vec3 TextureTint() { return VertexColour() * ((mode.y & 64) != 0 && ps1Light == 0 ? 1.0 : 255.0 / 128.0); }\n"
@@ -29,7 +29,7 @@
     "    if (filtered != 0 && blended && semiMode != 2) {\n" \
     "        if (semiMode != 0 && all(equal(col, vec3(0.0)))) discard;\n" \
     "        if (filtered == 3) {\n" \
-    "            ivec2 p = ivec2(floor(vPixel.xy / vPixel.z));\n" \
+    "            ivec2 p = ivec2(floor(vPixel.xy / vPixel.z * nativeGrid));\n" \
     "            if (((p.x + p.y) & 1) != 0) discard;\n" \
     "        } else {\n" \
     "            col *= 0.5;\n" \
@@ -38,10 +38,10 @@
     "        if (semiMode == 0) blended = false;\n" \
     "    }\n"
 
-static const char *saturnVertexSource = "uniform float pointSize;\n"
+static const char *saturnVertexSource = "uniform float pointSize; uniform vec2 nativeGrid;\n"
 #include "shaders/scene_vertex.h"
 ;
-static const char *saturnFragmentSource =
+static const char *saturnFragmentSource = "uniform vec2 nativeGrid;\n"
 #include "shaders/material_fragment.h"
 ;
 static RenderProgram saturnProgram, backgroundProgram;
@@ -84,7 +84,7 @@ const RenderPipeline saturnPipeline = {SaturnScene, SaturnPresent, SaturnDestroy
    resolution. The literal RBG0 reference keeps the native dot grid. */
 void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int width, int height,
     uint64_t revision, const GpuDrawState *state, int originalScroll, int left, int top, int right, int bottom,
-    float cx, float cy, int targetW, int targetH, int originX, int scale)
+    float cx, float cy, float targetW, float targetH, float originX, float scaleX, float scaleY, int scale)
 {
     static const char *vertex =
         "uniform vec2 target, origin; uniform ivec4 bounds;\n"
@@ -96,7 +96,7 @@ void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int 
     static const char *fragment = SATURN_FRAGMENT_PRECISION
         "uniform sampler2D picture; uniform vec2 origin, centre, rotation, scroll;\n"
         "uniform vec2 pitchRotation; uniform float heading, focal; uniform int originalScroll;\n"
-        "uniform float scale; out vec4 result;\n"
+        "uniform vec2 scale, nativeGrid; uniform float nativeScale; out vec4 result;\n"
         "void main() {\n"
         " vec2 p=floor(gl_FragCoord.xy)/scale+origin-centre;\n"
         " vec2 q; if(originalScroll!=0) {\n"
@@ -104,8 +104,7 @@ void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int 
            320x240. Widescreen extends that scene without stretching its centre. */
         /* Keep integral source dots exact, including half-dot viewport centres.
            Floating 1.1 can put X=0 just below zero and wrap to texel 2047. */
-        " p=floor(gl_FragCoord.xy/scale)+origin-centre;\n"
-        " int dotX=int(p.x*2.0)*11; p.x=float(dotX/20)+float(dotX%20)/20.0;\n"
+        " p=(floor(gl_FragCoord.xy/nativeScale)/nativeGrid+origin-centre)*vec2(1.1,nativeGrid.y);\n"
         " q=vec2(rotation.x*p.x+rotation.y*p.y,-rotation.y*p.x+rotation.x*p.y)+scroll;\n"
         " } else {\n"
         /* Invert the view rotation on the same perspective ray as the world.
@@ -115,7 +114,7 @@ void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int 
         " ray.yz=vec2(pitchRotation.x*ray.y-pitchRotation.y*ray.z,pitchRotation.y*ray.y+pitchRotation.x*ray.z);\n"
         " q=vec2(176.0+(heading+atan(ray.x,ray.z))*(2048.0/6.28318530718),\n"
         "        240.0+atan(ray.y,length(ray.xz))*(4096.0/(3.0*6.28318530718)));\n"
-        " } q=floor(q);\n"
+        " } q=floor(q+vec2(0.00001));\n"
         " ivec2 size=textureSize(picture,0); ivec2 at=ivec2(mod(q,vec2(size)));\n"
         " result=texelFetch(picture,at,0); }\n";
     if (!backgroundProgram.program) {
@@ -155,14 +154,16 @@ void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int 
     glUniform2f(glGetUniformLocation(program,"pitchRotation"),cosf(pitch),sinf(pitch));
     glUniform1f(glGetUniformLocation(program,"heading"),state->skyYaw*(6.28318530718f/4096));
     glUniform1f(glGetUniformLocation(program,"focal"),state->skyFocal>0 ? state->skyFocal : 160);
-    glUniform1f(glGetUniformLocation(program,"scale"),(float)scale);
+    glUniform2f(glGetUniformLocation(program,"scale"),scaleX,scaleY);
+    glUniform2f(glGetUniformLocation(program,"nativeGrid"),scaleX/scale,scaleY/scale);
+    glUniform1f(glGetUniformLocation(program,"nativeScale"),(float)scale);
     glDisable(GL_BLEND); glDisable(GL_DEPTH_TEST);
     glBindVertexArray(backgroundArray);
     glDrawArrays(GL_TRIANGLES,0,6);
 }
 
 void RenderSaturnPixels(const uint8_t *rgba, int width, int height, int margin,
-    int left, int top, int right, int bottom, int targetW, int originX, int scale)
+    int left, int top, int right, int bottom, float targetW, float targetH, float originX, float scaleX, float scaleY)
 {
     static const char *vertex=
         "uniform vec2 target,origin; uniform ivec4 bounds;\n"
@@ -170,7 +171,7 @@ void RenderSaturnPixels(const uint8_t *rgba, int width, int height, int margin,
         "(gl_VertexID==2 || gl_VertexID==4 || gl_VertexID==5)?1:0);\n"
         "gl_Position=vec4((mix(vec2(bounds.xy),vec2(bounds.zw),uv)-origin)/target*2.0-1.0,0,1); }\n";
     static const char *fragment=SATURN_FRAGMENT_PRECISION
-        "uniform sampler2D picture; uniform vec2 origin; uniform float scale; uniform int margin;\n"
+        "uniform sampler2D picture; uniform vec2 origin, scale; uniform int margin;\n"
         "out vec4 result; void main(){ivec2 at=ivec2(floor(gl_FragCoord.xy/scale)+origin)+ivec2(margin,0);"
         "result=texelFetch(picture,at,0); }\n";
     if(!pixelsProgram.program) {
@@ -189,8 +190,8 @@ void RenderSaturnPixels(const uint8_t *rgba, int width, int height, int margin,
     GLuint program=pixelsProgram.program;glUseProgram(program);
     glUniform1i(glGetUniformLocation(program,"picture"),0);
     glUniform1i(glGetUniformLocation(program,"margin"),margin);
-    glUniform1f(glGetUniformLocation(program,"scale"),(float)scale);
-    glUniform2f(pixelsProgram.uniformTarget,(float)targetW,(float)height);
+    glUniform2f(glGetUniformLocation(program,"scale"),scaleX,scaleY);
+    glUniform2f(pixelsProgram.uniformTarget,targetW,targetH);
     glUniform2f(pixelsProgram.uniformOrigin,(float)originX,0);
     glUniform4i(glGetUniformLocation(program,"bounds"),left,top,right,bottom);
     glDisable(GL_DEPTH_TEST);glEnable(GL_BLEND);glBlendEquation(GL_FUNC_ADD);
@@ -260,10 +261,10 @@ int RenderSaturnQuadsPending(void) { return rowCount!=0; }
 
 /* 0 requests a flush before retrying, including atlas reuse and depth-state changes. */
 int RenderSaturnQuad(const SaturnNativePoly *p,const GpuVertex *v,const GpuDrawState *state,
-                     uint64_t revision,int depth,int scale,int left,int top,int right,int bottom)
+                     uint64_t revision,int depth,float scaleX,float scaleY,int left,int top,int right,int bottom)
 {
     GpuVertex q[4];
-    const int limit=QUAD_COORD_LIMIT*scale;
+    const int limit=(int)(QUAD_COORD_LIMIT*fmaxf(scaleX,scaleY));
     int forward = !p->clipped && !p->trackTile;
     int edge=0,write=depth && !v[0].noDepth && !p->alphaMesh && (p->mode&3)!=1 && (p->mode&3)!=3;
     for(int k=0;k<4;k++) {
@@ -272,8 +273,8 @@ int RenderSaturnQuad(const SaturnNativePoly *p,const GpuVertex *v,const GpuDrawS
         if(!isfinite(q[k].x) || !isfinite(q[k].y)) return 1;
         /* Snap joining lines on the framebuffer grid. UVs and Gouraud offsets
            still interpolate across the original four corners. */
-        q[k].x*=scale;
-        q[k].y*=scale;
+        q[k].x*=scaleX;
+        q[k].y*=scaleY;
         if(forward) {
             q[k].x=floorf(q[k].x);q[k].y=floorf(q[k].y);
             if(fabsf(q[k].x)>limit || fabsf(q[k].y)>limit) return 1;
@@ -343,7 +344,8 @@ int RenderSaturnQuad(const SaturnNativePoly *p,const GpuVertex *v,const GpuDrawS
     cmd[16][2]=(state->windowMaskX&255)|((state->windowMaskY&255)<<8);
     cmd[16][3]=(state->windowOffsetX&255)|((state->windowOffsetY&255)<<8);
     cmd[17][0]=edge;cmd[17][2]=p->vertexAttributes;cmd[17][3]=v[0].noDepth;
-    left*=scale;top*=scale;right*=scale;bottom*=scale;
+    left=(int)lroundf(left*scaleX);top=(int)lroundf(top*scaleY);
+    right=(int)lroundf(right*scaleX);bottom=(int)lroundf(bottom*scaleY);
     if (!forward && (cmd[0][2] <= left || cmd[0][0] >= right ||
                      cmd[0][3] <= top || cmd[0][1] >= bottom)) return 1;
     int firstRow=rowCount;
@@ -364,7 +366,7 @@ int RenderSaturnQuad(const SaturnNativePoly *p,const GpuVertex *v,const GpuDrawS
     return 1;
 }
 
-void RenderSaturnFlushQuads(GLuint vram,int targetW,int targetH,int originX,int scale,
+void RenderSaturnFlushQuads(GLuint vram,int targetW,int targetH,float originX,float scaleX,float scaleY,int scale,
                             int left,int top,int right,int bottom)
 {
     if(!rowCount) return;
@@ -376,9 +378,9 @@ void RenderSaturnFlushQuads(GLuint vram,int targetW,int targetH,int originX,int 
     glBindBufferBase(GL_UNIFORM_BUFFER,0,quadCommands);
     glActiveTexture(GL_TEXTURE2);glBindTexture(GL_TEXTURE_2D,quadAtlas);glUniform1i(quadSourceUniform,2);
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,vram);glUniform1i(quadProgram.uniformVram,0);
-    glUniform2f(quadProgram.uniformTarget,(float)(targetW*scale),(float)(targetH*scale));
-    glUniform2f(quadProgram.uniformOrigin,(float)(originX*scale),0);
-    glUniform4i(quadClipUniform,left*scale,top*scale,right*scale,bottom*scale);
+    glUniform2f(quadProgram.uniformTarget,(float)targetW,(float)targetH);
+    glUniform2f(quadProgram.uniformOrigin,roundf(originX*scaleX),0);
+    glUniform4i(quadClipUniform,(int)lroundf(left*scaleX),(int)lroundf(top*scaleY),(int)lroundf(right*scaleX),(int)lroundf(bottom*scaleY));
     glUniform1f(quadScaleUniform,(float)scale);
     glDisable(GL_DITHER);glEnable(GL_BLEND);glBlendEquation(GL_FUNC_ADD);
     glBlendFuncSeparate(GL_ONE,GL_ONE_MINUS_SRC_ALPHA,GL_ZERO,GL_ONE);

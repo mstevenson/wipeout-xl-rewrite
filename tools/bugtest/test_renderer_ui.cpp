@@ -5,6 +5,9 @@
 #include <cassert>
 #include <cstdio>
 PortSettings portSettings;
+int portPal;
+extern "C" int GpuMaxScale(RendererId id) { return id == RENDER_PC ? 6 : 12; }
+extern "C" int GpuWindowScale(RendererId id) { return id == RENDER_PC ? 2 : 4; }
 static int n64Track;
 extern "C" int PortOriginalTrackIs64(void) { return n64Track; }
 extern "C" int PortOriginalTrack(void) { return -1; }
@@ -98,6 +101,11 @@ int main()
     assert(RenderCurrent()->id == RENDER_PS1);
     Activate("PS1 vertex snapping", 0, RENDER_PS1);
     assert(!portSettings.render.ps1.quantizeVertices && portSettings.render.ps1.dither);
+    Focus("##Resolution", 3, RENDER_SATURN);
+    Key(ImGuiKey_Enter); Key(ImGuiKey_DownArrow); Key(ImGuiKey_Enter);
+    assert(portSettings.render.saturn.scale == 2 && portSettings.render.ps1.scale == 1);
+    Activate("Restore renderer defaults", 3, RENDER_SATURN);
+    assert(portSettings.render.saturn.scale == 1);
     SelectNext(0);
     assert(portSettings.render.ps1Selection == RENDER_PC && RenderCurrent()->id == RENDER_PC);
     n64Track = 1; RenderCommit(); Frame();

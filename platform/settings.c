@@ -77,8 +77,6 @@ static void Set(const char *key, const char *value)
         SDL_strlcpy(portSettings.saveSlot, value, sizeof(portSettings.saveSlot));
     } else if (!strcmp(key, "autosave")) {
         portSettings.noAutoSave = number == 0;
-    } else if (!strcmp(key, "render_scale")) {
-        portSettings.renderScale = SDL_clamp(number, 0, 16);
     } else if (!strcmp(key, "hd_textures")) {
         portSettings.hdTextures = number != 0;
     } else if (!strcmp(key, "hd_pack")) {
@@ -114,6 +112,7 @@ void PortSettingsLoad(void)
     RenderSettings platformRender = RENDER_DEFAULTS;
     int legacyRendering = -1, legacyPc = -1, legacyDepth = -1, havePcDepth = 0, haveAuto = 0;
     int havePs1Renderer = 0, haveN64Renderer = 0;
+    int legacyScale = -1, haveScale[5] = {0};
     RenderDefaults(&portSettings.render, RENDER_AUTO);
     RenderInvalidate();
 
@@ -148,13 +147,17 @@ void PortSettingsLoad(void)
             for (end = (char *)value + strlen(value); end > value && (end[-1] == '\r' || end[-1] == ' '); end--) {
                 end[-1] = 0;
             }
-            if (!strcmp(line, "pc_rendering")) {
+            if (!strcmp(line, "render_scale")) {
+                legacyScale = SDL_clamp(SDL_atoi(value), 0, 16);
+            } else if (!strcmp(line, "pc_rendering")) {
                 legacyPc = SDL_atoi(value) != 0;
             } else if (!strcmp(line, "depth_buffer")) {
                 legacyDepth = SDL_atoi(value) != 0;
             } else if (!strcmp(line, "smooth_textures")) {
                 legacyRendering = SDL_atoi(value) != 0;
             } else {
+                const char *scaleKeys[] = {"", "ps1_render_scale", "pc_render_scale", "n64_render_scale", "saturn_render_scale"};
+                for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) haveScale[id] |= !strcmp(line, scaleKeys[id]);
                 havePcDepth |= !strcmp(line, "pc_depth");
                 haveAuto |= !strcmp(line, "automatic_renderer");
                 havePs1Renderer |= !strcmp(line, "ps1_renderer");
@@ -180,6 +183,14 @@ void PortSettingsLoad(void)
     if (havePs1Renderer) portSettings.render.ps1Selection = platformRender.ps1Selection;
     if (haveN64Renderer) portSettings.render.n64Selection = platformRender.n64Selection;
     portSettings.render.selection = RENDER_AUTO;
+    /* The former default Auto setting gives way to native defaults. Retain explicit
+       positive scales where no profile preference exists (PC's base is now 2x). */
+    if (legacyScale > 0) {
+        for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+            if (!haveScale[id]) *RenderScaleSetting(&portSettings.render, (RendererId)id) =
+                id == RENDER_PC ? (legacyScale + 1) / 2 : legacyScale;
+        }
+    }
     /* the environment overrides the file for this run */
     if ((value = SDL_getenv("WIPEOUT_SKIP_INTRO"))) {
         portSettings.skipIntro = SDL_atoi(value) != 0;
@@ -195,7 +206,8 @@ void PortSettingsLoad(void)
         SDL_strlcpy(portSettings.saveSlot, value, sizeof(portSettings.saveSlot));
     }
     if ((value = SDL_getenv("WIPEOUT_RENDER_SCALE"))) {
-        portSettings.renderScale = SDL_clamp(SDL_atoi(value), 0, 16);
+        for (int id = RENDER_PS1; id <= RENDER_SATURN; id++)
+            *RenderScaleSetting(&portSettings.render, (RendererId)id) = SDL_clamp(SDL_atoi(value), 0, 16);
     }
     /* The old texture-only option migrates to the complete rendering mode. */
     value = SDL_getenv("WIPEOUT_PC_RENDERING");
@@ -280,7 +292,7 @@ int PortSettingsSave(void)
             "# Wipeout XL settings (the ~ key opens the debug console that changes them)\n"
             "show_fps = %d\nfar_view = %d\nfade = %d\nfade_near = %d\nfade_far = %d\n"
             "widescreen = %d\nframe_rate = %d\nframe_cap = %d\nskip_intro = %d\nrecord_frames = %d\nrecord_replays = %d\nsave_dir = %s\ndisc = %s\noriginal = %s\n"
-            "render_scale = %d\nhd_textures = %d\nhd_pack = %s\nwipeout64 = %s\n"
+            "hd_textures = %d\nhd_pack = %s\nwipeout64 = %s\n"
             "custom_music = %d\nmusic_shuffle = %d\nmusic_folder = %s\nsave_slot = %s\nautosave = %d\n"
             "touch_controls = %d\ntouch_size = %d\ntouch_opacity = %d\nskip_logos = %d\nrecord_rate = %d\n"
             "video_standard = %d\nvibration = %d\nvibration_strength = %d\nfar_flares = %d\npause_unfocused = %d\n"
@@ -290,7 +302,7 @@ int PortSettingsSave(void)
             portSettings.frameCap, portSettings.skipIntro,
             portSettings.recordFrames,
             portSettings.recordReplays,
-            portSettings.saveDir, portSettings.discPath, portSettings.originalPath, portSettings.renderScale,
+            portSettings.saveDir, portSettings.discPath, portSettings.originalPath,
             portSettings.hdTextures, portSettings.hdPackPath, portSettings.wipeout64Path, portSettings.customMusic,
             portSettings.musicShuffle, portSettings.musicFolder, portSettings.saveSlot, !portSettings.noAutoSave,
             portSettings.touchControls, portSettings.touchSize ? portSettings.touchSize : 100,

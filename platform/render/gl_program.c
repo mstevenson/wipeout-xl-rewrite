@@ -59,9 +59,11 @@ int RenderGlProgramInit(RenderProgram *s, const char *vertexSource, const char *
     s->uniformDepthPass = glGetUniformLocation(s->program, "depthPass");
     s->uniformTarget = glGetUniformLocation(s->program, "target");
     s->uniformPointSize = glGetUniformLocation(s->program, "pointSize");
+    s->uniformNativeGrid = glGetUniformLocation(s->program, "nativeGrid");
     s->uniformOrigin = glGetUniformLocation(s->program, "origin");
     /* each sampler its own unit from the start (an integer and a float texture may not share one) */
     glUseProgram(s->program);
+    glUniform2f(s->uniformNativeGrid, 1, 1);
     glUniform1i(s->uniformVram, 0);
     glUniform1i(s->uniformGlyphs, 1);
     glUniform1i(s->uniformHdAtlas, 2);

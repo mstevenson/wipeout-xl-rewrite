@@ -20,7 +20,7 @@ for mode, frame in enumerate(frames):
     assert math.isclose(result['alpha'], 480/7)
     assert len(fc.hits(frame, 0, 0)) == (1 if mode < 2 else 0)
 
-# Version 4 operations take precedence over sidecar/current policy.
+# Version 5 operations take precedence over sidecar/current policy.
 (folder / 'renderer.ini').write_text('# Active renderer: PC\nrenderer = pc\n')
 assert fc.load(folder)[0]['prims'][0].shade == frames[0]['prims'][0].shade
 
@@ -30,11 +30,25 @@ frame_size = fc.FRAME.size + 8
 prim_size = fc.PRIM_HEAD.size + 4 * fc.VERTEX.size + fc.DRAW.size + fc.PRIM_TAIL.size
 with tempfile.TemporaryDirectory() as old:
     old = Path(old)
+    data = bytearray(b'XLFC' + struct.pack('<ii', 4, 4))
+    pos = 12
+    for _ in range(4):
+        data.extend(raw[pos:pos + frame_size])
+        data.extend(raw[pos + frame_size + 8:pos + frame_size + 8 + prim_size + 4])
+        pos += frame_size + 8 + prim_size + 4
+    (old / 'frames.bin').write_bytes(data)
+    legacy = fc.load(old)
+    for mode, frame in enumerate(legacy):
+        assert frame['prims'][0].shade == frames[mode]['prims'][0].shade
+        assert frame['picture_extent'] == (320, 240)
+with tempfile.TemporaryDirectory() as old:
+    old = Path(old)
     data = bytearray(b'XLFC' + struct.pack('<ii', 3, 4))
     pos = 12
     for _ in range(4):
-        data.extend(raw[pos:pos + frame_size + prim_size])
-        pos += frame_size + prim_size + 4
+        data.extend(raw[pos:pos + frame_size])
+        data.extend(raw[pos + frame_size + 8:pos + frame_size + 8 + prim_size])
+        pos += frame_size + 8 + prim_size + 4
     (old / 'frames.bin').write_bytes(data)
     legacy = fc.load(old)
     p = legacy[0]['prims'][0]
@@ -50,4 +64,12 @@ with tempfile.TemporaryDirectory() as old:
     assert math.isclose(result['rgb'][0], 120)
     assert math.isclose(result['u'], 100/3)
     assert len(fc.hits(legacy[0], 0, 0)) == 1
-print('Python frame reader: production v4 captures, immutable policy and legacy v3 compatibility: OK')
+# A native Saturn image and a PC image map back to the same game-coordinate samples.
+for width, height, game_height in [(352, 240, 240), (640, 480, 256), (320, 240, 256)]:
+    frame = dict(frames[0], picture_extent=(320, game_height))
+    pixels = bytes(v for y in range(height) for x in range(width) for v in (x % 256, y % 256, 0))
+    fc._pictures[str(folder / 'picture_000')] = (width, height, pixels)
+    for x, y in [(0, 0), (159, 119), (319, game_height - 1)]:
+        expected = (int((x + .5) * width / 320) % 256, int((y + .5) * height / game_height) % 256, 0)
+        assert fc.pixel_rgb(frame, x, y) == expected
+print('Python frame reader: production v5 captures, immutable policy and legacy v3/v4 compatibility: OK')

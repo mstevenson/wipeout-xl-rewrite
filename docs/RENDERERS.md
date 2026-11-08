@@ -13,7 +13,29 @@ All four platform selectors stay visible. Below them, each renderer profile has
 its own controls and reset button. Profiles keep their settings; platforms
 choosing the same profile share those controls. The profile panels scroll
 horizontally in narrow windows and with larger fonts.
-Resolution, widescreen, frame rate, draw distance, fading and HD textures are shared.
+Each profile has its own **Resolution** selector and remembers its scale. The
+default is 1×: PS1 uses 320×240 (320×256 in PAL mode), N64 uses 320×240,
+Saturn uses 352×240, and PC uses 640×480. Higher choices multiply that profile's
+base dimensions; **Auto** follows the window size. Widescreen adds columns while
+presentation preserves the 4:3 base aspect ratio. Switching profiles also switches
+resolution; restoring a profile's defaults restores its 1× resolution.
+Widescreen, frame rate, draw distance, fading and HD textures are shared.
+
+The shared **Frame rate > Original** mode follows the **active renderer profile**,
+including overrides chosen for another platform. Its label shows the profile and
+target: PlayStation 30 fps (25 in PAL mode), Nintendo 64 30 fps, Sega Saturn 20 fps,
+and PC 60 fps. Changing profiles switches the target at the frame boundary.
+The Saturn target follows [developer David Swan's account](https://www.arcadeattack.co.uk/david-swan-interview/)
+of the 20 fps cap; N64 uses a 30 fps target for the supported USA release, and PC
+uses a 60 fps presentation default, rather than claiming a fixed historical PC rate.
+These targets do not reproduce hardware slowdowns.
+
+Simulation, audio and disc timing keep their existing NTSC/PAL clock. PS1 Original
+shows the game's frames without interpolation. Other profiles interpolate display
+frames on their presentation clock, allowing PC's 60 fps and Saturn's 20 fps
+without speeding up or slowing down gameplay. Original uses timed presentation
+instead of monitor VSync. Fixed-step captures retain their deterministic behavior;
+linked games share the main player's presentation policy.
 
 | Profile | Defaults |
 | --- | --- |
@@ -86,8 +108,8 @@ mesh stay on the 1× console grid at higher render resolutions. The CPU submits
 commands and row descriptors in streamed buffers. Native source indices are
 cached in a renderer-owned atlas. Optional depth is GPU-tested.
 
-Choose **Saturn native** in **Graphics > Resolution** for the port's 1× console
-pixel grid (320×240 in 4:3 NTSC). Higher resolutions, including **Auto** when it
+Choose **352x240 (native)** in the Saturn profile's **Resolution** setting for
+the console pixel grid. Higher resolutions, including **Auto** when it
 selects a higher scale, give finer VDP1 edges and VDP2 panorama sampling. Native
 model quads keep affine texture mapping and additive Gouraud shading at every scale.
 
@@ -151,6 +173,14 @@ captures validate this implementation; they do not establish console equivalence
 | Old `renderer = auto` or `n64` | `automatic_renderer` migrates to the PlayStation preference; N64 defaults to its own profile |
 | Old `renderer = ps1`, `pc` or `saturn` | Migrates to the PlayStation and N64 preferences (the old N64 override was off) |
 | `ps1_*`, `pc_*`, `saturn_*`, `n64_*` controls | Independent profile settings; obsolete `n64_depth` ignored and no longer saved |
+| `ps1_render_scale`, `pc_render_scale`, `n64_render_scale`, `saturn_render_scale` | Profile resolution multiplier; 1 by default, 0 for Auto; limited by GPU capacity |
+
+The old global `render_scale` migrates only where a profile scale is missing.
+Positive values become native multipliers; PC halves the old multiplier, rounding
+up, because its base is now 640×480. The former default Auto value becomes 1× so
+each platform starts at its native/default resolution. Explicit new profile keys
+win regardless of line order. `WIPEOUT_RENDER_SCALE` overrides all profile
+multipliers for a run, including 0 for Auto.
 
 Migration keeps existing profile controls. The newly independent PC and Saturn
 preferences default to their matching profiles. Old `pc_rendering` (preferred)
@@ -193,8 +223,10 @@ released when neither uses them. Presenting an old screen needs no scene program
 Glyph textures contain only level zero.
 
 Display, screenshot/video readback and linked bands share presentation. Frame
-recordings save `renderer.ini`; binary format 4 adds per-primitive shading flags
-for affine/perspective interpolation and snapped coverage, with perspective fade.
+recordings save `renderer.ini`; binary format 5 stores logical picture extents
+separately from captured pixel dimensions, so Saturn and PC images can be inspected
+in game coordinates. Format 4 added per-primitive shading flags for
+affine/perspective interpolation and snapped coverage, with perspective fade.
 The live inspector and `tools/framecap.py` use these flags. Python also reads older
 formats, using available INI policy for interim version 3 and historical defaults
 otherwise. Texture inspection estimates one native texel; it does not replay HD,

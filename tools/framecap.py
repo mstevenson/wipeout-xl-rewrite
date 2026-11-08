@@ -82,6 +82,10 @@ def load(folder):
         if version >= 3:
             between, = struct.unpack_from('<f', data, pos)
             pos += 4
+        picture_game_w, picture_game_h = 320 - 2 * picture_x, 256 if ah == 256 else 240
+        if version >= 5:
+            picture_game_w, picture_game_h = struct.unpack_from('<ii', data, pos)
+            pos += 8
         prims = []
         for _ in range(n):
             p = Prim()
@@ -104,7 +108,7 @@ def load(folder):
                 pos += 4
             prims.append(p)
         frames.append(dict(index=index, game=game, shown=shown, offset=(ox, oy), area=(ax, ay, aw, ah), vram=vram,
-                           prims=prims, folder=folder, picture_x=picture_x, between=between))
+                           prims=prims, folder=folder, picture_x=picture_x, between=between, picture_extent=(picture_game_w, picture_game_h)))
     return frames
 
 
@@ -146,11 +150,13 @@ def pixel_rgb(frame, x, y):
     if not pic:
         return None
     w, h, data = pic
-    scale = max(1, h // 240)  # the picture's pixels per console pixel (240 rows of the console's)
+    game_w, game_h = frame['picture_extent']
     x -= frame['picture_x']
-    if not (0 <= x < w // scale and 0 <= y < 240):
+    if not (0 <= x < game_w and 0 <= y < game_h):
         return None
-    i = ((y * scale + scale // 2) * w + x * scale + scale // 2) * 3
+    px = min(int((x + 0.5) * w / game_w), w - 1)
+    py = min(int((y + 0.5) * h / game_h), h - 1)
+    i = (py * w + px) * 3
     return tuple(data[i:i + 3])
 
 
@@ -300,7 +306,7 @@ def flicker(frames, threshold=40):
     for i in range(1, len(shown) - 1):
         a, b, c = shown[i - 1], shown[i], shown[i + 1]
         w, h, _ = picture(b)
-        w, h = w // max(1, h // 240), 240  # in console pixels
+        w, h = b['picture_extent']  # in game coordinates
         spots = []
         for y in range(0, h, 2):
             for x in range(b['picture_x'], b['picture_x'] + w, 2):

@@ -181,6 +181,13 @@ imported PlayStation and Wipeout 64 tracks use their respective platform choices
 All four selectors stay visible. Below them, each profile has its own controls
 and restore-defaults button; these panels scroll horizontally on smaller windows.
 Profile controls are shared by platforms that select the same profile.
+Each profile also has its own **Resolution** selector: PS1 defaults to 320×240
+(320×256 in PAL mode), N64 to 320×240, Saturn to 352×240 and PC to 640×480.
+Choose a higher multiplier or Auto independently for each profile.
+**Frame rate > Original** follows the active renderer profile: PS1 30 fps
+(25 PAL), N64 30 fps, Saturn 20 fps and PC 60 fps. Its label updates when the
+renderer changes, including when a platform uses another platform's profile.
+This changes presentation cadence while keeping the game's simulation timing.
 Each profile includes **Linear display resampling**: turn it off for sharp pixels
 when upscaling the final image, or on for smooth scaling. It defaults to on for
 PC and N64, and off for PS1 and Saturn, independently of texture filtering.
@@ -189,13 +196,13 @@ Turn off **Checkerboard transparency** in the Saturn settings for smooth transpa
 Set `WIPEOUT_SATURN_REFERENCE=1` to use the software quad rasterizer for comparisons.
 With a Saturn disc it draws native model quads with affine mapping and additive Gouraud shading,
 uses perspective-correct track tiles with Saturn palettes,
-and samples the VDP2 race sky at the selected render resolution. Choose **Saturn native** for the 1× console pixel grid.
+and samples the VDP2 race sky at the selected render resolution. Choose **352x240 (native)** in the Saturn profile for the console pixel grid.
 see [implementation and fidelity limits](docs/RENDERERS.md#saturn-profile).
 PS1 exposes vertex snapping, affine mapping, colour precision,
 dithering and optional depth buffering; PC exposes filtering, lighting and depth;
 N64 exposes three-point filtering, RGB5 precision, dithering and VI filters;
 its depth buffering is always enabled.
-Resolution, frame rate, draw distance and HD replacements remain shared.
+Frame rate, draw distance and HD replacements remain shared.
 
 Existing profile parameters are retained. The former global choice migrates to
 the PlayStation preference, along with its N64 override behavior; PC and Saturn

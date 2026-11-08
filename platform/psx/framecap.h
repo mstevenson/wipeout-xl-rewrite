@@ -60,7 +60,8 @@ typedef struct FrameCapFrame {
     size_t jpegSize;
     unsigned pictureToken; /* (its compression on the way: framecap.c) */
     int pictureW, pictureH;
-    int pictureScale;     /* ... its pixels per console pixel (pictureW is the columns times this) */
+    int pictureScale;     /* multiplier of the renderer's native resolution */
+    int pictureGameW, pictureGameH; /* game-coordinate extent, independent of the pixel grid */
     int pictureX;         /* the column of the picture's left edge, from the area's (widescreen: -the margin) */
 } FrameCapFrame;
 

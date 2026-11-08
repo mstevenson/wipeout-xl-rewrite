@@ -1,5 +1,7 @@
 #include "renderer_ui.h"
 #include "imgui.h"
+#include "../psx/gpu.h"
+#include "../region.h"
 
 static void Tooltip(const char *text)
 {
@@ -115,6 +117,31 @@ static bool N64Settings(N64RenderSettings *s)
     return changed;
 }
 
+static bool Resolution(RenderSettings *s, RendererId id)
+{
+    int width, height;
+    RenderNativeSize(id, portPal, &width, &height);
+    int maximum = GpuMaxScale(id), automatic = GpuWindowScale(id);
+    int *setting = RenderScaleSetting(s, id);
+    char labels[17][64];
+    const char *items[17];
+    snprintf(labels[0], sizeof(labels[0]), "Auto (%dx%d)", width * automatic, height * automatic);
+    items[0] = labels[0];
+    for (int i = 1; i <= maximum && i <= 16; i++) {
+        snprintf(labels[i], sizeof(labels[i]), "%dx%d%s", width * i, height * i,
+                 i == 1 ? (id == RENDER_PC ? " (default)" : " (native)") : "");
+        items[i] = labels[i];
+    }
+    int choice = *setting > maximum ? maximum : *setting;
+    ImGui::TextUnformatted("Resolution");
+    ImGui::SetNextItemWidth(-1);
+    bool changed = ImGui::Combo("##Resolution", &choice, items, maximum + 1);
+    Tooltip("Rendering resolution for this profile. Auto follows the window. Widescreen adds columns "
+        "to this 4:3 base; the displayed image keeps its aspect ratio.");
+    if (changed) *setting = choice;
+    return changed;
+}
+
 static bool ProfileSettings(RenderSettings *s, RendererId edit)
 {
     bool changed = false;
@@ -122,6 +149,7 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
     ImGui::PushID((int)edit);
     ImGui::SeparatorText(RenderGet(edit)->name);
     ImGui::PushTextWrapPos(0);
+    changed |= Resolution(s, edit);
     switch (edit) {
     case RENDER_SATURN: changed |= SaturnSettings(&s->saturn); break;
     case RENDER_PC: changed |= PcSettings(&s->pc); break;
@@ -174,7 +202,7 @@ bool RenderSettingsUi(RenderSettings *s)
         ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + style.CellPadding.x * 2;
     float width = panelWidth * 4;
     if (width < ImGui::GetContentRegionAvail().x) width = ImGui::GetContentRegionAvail().x;
-    float height = ImGui::GetFrameHeightWithSpacing() * 11 + style.ScrollbarSize;
+    float height = ImGui::GetFrameHeightWithSpacing() * 13 + style.ScrollbarSize;
     ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings |
         ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollX;
     if (ImGui::BeginTable("Renderer settings", 4, flags, ImVec2(0, height), width)) {

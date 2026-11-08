@@ -37,6 +37,11 @@ static void TestProgram(RendererId id)
 /* Flush uses the real batching/depth code; no game or settings file is needed. */
 PortSettings portSettings = {.render = RENDER_DEFAULTS};
 static int n64Track;
+int portPal;
+static int testWindowWidth = 1280, testWindowHeight = 960;
+void PortDrawableSize(int *w, int *h) { *w = testWindowWidth; *h = testWindowHeight; }
+void HdTexSetScale(int value) { (void)value; }
+void HdTexChanged(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; }
 int PortOriginalTrackIs64(void) { return n64Track; }
 int PortOriginalTrack(void) { return -1; }
 int PortPcData(void) { return 0; }
@@ -1907,6 +1912,87 @@ static void ScreenBufferOwnership(void)
     puts("VI cache: crops spanning both buffers, depth-only clears and framebuffer reallocations: OK");
 }
 
+static void ProfileNativeResolution(void)
+{
+    Flush();
+    wideMargin = areaWide = wideDirty = 0;
+    framebuffer = colour = depthBuffer = 0;
+    scale = 1; rasterX = rasterY = 1;
+    assert(CreateFramebuffer());
+    initialised = 1;
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    for (portPal = 0; portPal <= 1; portPal++) {
+        for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+            portSettings.render.selection = (RendererId)id;
+            for (int multiplier = 1; multiplier <= 2; multiplier++) {
+                *RenderScaleSetting(&portSettings.render, (RendererId)id) = multiplier;
+                RenderCommit(); GpuUpdateResolution();
+                int nativeW, nativeH, width, height;
+                RenderNativeSize((RendererId)id, portPal, &nativeW, &nativeH);
+                GpuPixelSize(320, GPU_LINES, &width, &height);
+                assert(width == nativeW * multiplier && height == nativeH * multiplier);
+                for (int screen = 0; screen < 2; screen++) {
+                    int y = screen * 256;
+                    GpuSetDrawArea(0, y, 320, GPU_LINES, 0, y);
+                    GpuClearArea(0, y, 320, GPU_LINES, 0, 0, 0);
+                    GpuVertex v[4] = {{.x=0,.y=y}, {.x=320,.y=y},
+                                     {.x=0,.y=y+GPU_LINES}, {.x=320,.y=y+GPU_LINES}};
+                    for (int k=0;k<4;k++) { v[k].r=248; v[k].a=255; v[k].w=100; }
+                    GpuDrawState draw = {.semi=-1};
+                    GpuTriangles(&draw, v, 3); GpuTriangles(&draw, v+1, 3); Flush();
+                    const uint8_t *pixels = GpuReadArea(0, y, 320, GPU_LINES, &width, &height);
+                    assert(width == nativeW * multiplier && height == nativeH * multiplier);
+                    const int corners[] = {0, width-1, (height-1)*width, height*width-1};
+                    for (int k=0;k<4;k++) {
+                        if (pixels[corners[k]*4] < 240 || pixels[corners[k]*4+1] != 0)
+                            fprintf(stderr, "profile=%d PAL=%d scale=%d screen=%d corner=%d RGB=%d,%d,%d\n",
+                                id,portPal,multiplier,screen,k,pixels[corners[k]*4],pixels[corners[k]*4+1],pixels[corners[k]*4+2]);
+                        assert(pixels[corners[k]*4] >= 240 && pixels[corners[k]*4+1] == 0);
+                    }
+                    if (id == RENDER_SATURN) {
+                        SaturnNativePoly poly = {.colour=0x83e0,.mode=0xc0,.corners={0,1,3,2}};
+                        draw.saturn = &poly;
+                        GpuTriangles(&draw,v,4); Flush();
+                        pixels = GpuReadArea(0, y, 320, GPU_LINES, &width, &height);
+                        for (int k=0;k<4;k++) assert(pixels[corners[k]*4] == 0 && pixels[corners[k]*4+1] == 248);
+                        SDL_setenv_unsafe("WIPEOUT_SATURN_REFERENCE", "1", 1);
+                        for (int referenceDepth=0;referenceDepth<=1;referenceDepth++) {
+                            portSettings.render.saturn.depth=referenceDepth; RenderCommit();
+                            GpuClearArea(0,y,320,GPU_LINES,0,0,0);
+                            GpuTriangles(&draw,v,4); Flush();
+                            pixels=GpuReadArea(0,y,320,GPU_LINES,&width,&height);
+                            for (int k=0;k<4;k++) assert(pixels[corners[k]*4] == 0 && pixels[corners[k]*4+1] == 248);
+                        }
+                        SDL_unsetenv_unsafe("WIPEOUT_SATURN_REFERENCE");
+                        portSettings.render.saturn.depth=0; RenderCommit();
+                    }
+                }
+                /* Copies, CPU readback and presentation preserve both native extents. */
+                GpuReadBack(0, 256, 320, GPU_LINES);
+                assert((psxVram[256+GPU_LINES-1][319] & 0x7fff) == (id == RENDER_SATURN ? 31 << 5 : 31));
+                GpuMoveFramebuffer(0, 256, 320, GPU_LINES, 0, 0);
+                const uint8_t *shown = GpuReadPicture(0, 0, 320, GPU_LINES, 0, width, height);
+                assert(shown[(height*width-1)*4+(id == RENDER_SATURN ? 1 : 0)] >= 240);
+                SetWideMargin(17);
+                int wideW, wideH;
+                GpuPixelSize(354, GPU_LINES, &wideW, &wideH);
+                shown = GpuReadPicture(0, 0, 320, GPU_LINES, 17, wideW, wideH);
+                assert(shown[((wideH/2)*wideW+wideW/2)*4+(id == RENDER_SATURN ? 1 : 0)] >= 240);
+                SetWideMargin(0);
+                assert(glGetError() == GL_NO_ERROR);
+            }
+        }
+    }
+    portPal = 0;
+    assert(GpuWindowScale(RENDER_PC) == 2 && GpuWindowScale(RENDER_SATURN) == 4);
+    portSettings.render.selection = RENDER_SATURN;
+    portSettings.render.saturn.scale = 0;
+    RenderCommit(); GpuUpdateResolution();
+    assert(scale == 4 && PixelX(320) == 1408 && PixelY(240) == 960);
+    initialised = 0;
+    puts("Native profile grids: PS1 NTSC/PAL, N64, Saturn and PC; switches, scales, both buffers, quads, readback and widescreen: OK");
+}
+
 int main(void)
 {
     assert(SDL_Init(SDL_INIT_VIDEO));
@@ -2070,6 +2156,7 @@ int main(void)
     SaturnPresentation();
     RendererLifecycle();
     ScreenBufferOwnership();
+    ProfileNativeResolution();
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
     puts("Production GL shaders: N64 three-point, optional bilinear native/HD, bounds/wrapping/windows, coverage/blend passes and default PS1 sampling: OK");
     return 0;

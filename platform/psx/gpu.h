@@ -5,6 +5,7 @@
 #define PSX_GPU_H
 
 #include <stdint.h>
+#include "../render/renderer.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,11 +87,12 @@ typedef struct GpuDrawState {
 
 int GpuInit(void);
 void GpuRendererShutdown(void);
-/* The framebuffer's scale (its pixels per console pixel), the largest it can be, and the window's (the
-   settings' resolution 0: what it follows). */
+/* Native-resolution multiplier, profile-specific limits and window fit. */
 int GpuScale(void);
-int GpuMaxScale(void);
-int GpuWindowScale(void);
+int GpuMaxScale(RendererId id);
+int GpuWindowScale(RendererId id);
+void GpuUpdateResolution(void);
+void GpuPixelSize(int w, int h, int *pixelW, int *pixelH);
 /* The drawing area (a rectangle of video memory) the next primitives go to. */
 void GpuSetDrawArea(int x, int y, int w, int h, int offsetX, int offsetY);
 void GpuTriangles(const GpuDrawState *state, const GpuVertex *vertices, int count);

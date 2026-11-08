@@ -238,6 +238,65 @@ static void PlatformSelection(void)
     puts("Platform routing, imported tracks, migration precedence and independent persistence: OK");
 }
 
+static void ProfileResolutions(void)
+{
+    SDL_Environment *env = SDL_GetEnvironment();
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDER_SCALE");
+    Load("");
+    for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+        assert(*RenderScaleSetting(&portSettings.render, (RendererId)id) == 1);
+        for (int pal = 0; pal <= 1; pal++) {
+            int w, h;
+            RenderNativeSize((RendererId)id, pal, &w, &h);
+            assert(w == (id == RENDER_PC ? 640 : id == RENDER_SATURN ? 352 : 320));
+            assert(h == (id == RENDER_PC ? 480 : id == RENDER_PS1 && pal ? 256 : 240));
+        }
+    }
+    Load("render_scale = 0\n");
+    assert(portSettings.render.saturn.scale == 1 && portSettings.render.pc.scale == 1);
+    Load("ps1_render_scale = 3\npc_render_scale = 0\nsaturn_render_scale = 2\nrender_scale = 4\n");
+    assert(portSettings.render.ps1.scale == 3 && portSettings.render.pc.scale == 0);
+    assert(portSettings.render.saturn.scale == 2 && portSettings.render.n64.scale == 4);
+    assert(PortSettingsSave());
+    RenderSettings expected = portSettings.render;
+    PortSettingsLoad();
+    assert(!memcmp(&expected, &portSettings.render, sizeof(expected)));
+    assert(RenderScale(RenderCurrent()) == 3);
+    portSettings.render.saturn.scale = 5;
+    assert(!RenderCommit());
+    portSettings.render.ps1.scale = 2;
+    assert(RenderScale(RenderCurrent()) == 3); /* immutable until the frame boundary */
+    assert(RenderCommit() && RenderScale(RenderCurrent()) == 2);
+    RenderDefaults(&portSettings.render, RENDER_PS1);
+    assert(portSettings.render.ps1.scale == 1 && portSettings.render.saturn.scale == 5);
+    Load("pc_render_scale = bad\nn64_render_scale = -1\nsaturn_render_scale = 17\nps1_render_scale = 2x\n");
+    assert(portSettings.render.ps1.scale == 1 && portSettings.render.pc.scale == 1);
+    assert(portSettings.render.n64.scale == 1 && portSettings.render.saturn.scale == 1);
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDER_SCALE", "2", true);
+    Load("ps1_render_scale = 1\npc_render_scale = 4\n");
+    assert(portSettings.render.ps1.scale == 2 && portSettings.render.pc.scale == 2);
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDER_SCALE");
+    puts("Per-profile native sizes, scale defaults, migration, persistence, reset and frame boundaries: OK");
+}
+
+static void OriginalFrameRates(void)
+{
+    Load("ps1_renderer = saturn\nn64_renderer = pc\n");
+    n64 = 0; RenderCommit();
+    assert(RenderOriginalFrameRate(0) == 20 && RenderOriginalFrameRate(1) == 20);
+    n64 = 1; RenderCommit();
+    assert(RenderOriginalFrameRate(0) == 60 && RenderOriginalFrameRate(1) == 60);
+    portSettings.render.n64Selection = RENDER_N64;
+    assert(RenderOriginalFrameRate(0) == 60); /* committed profile only */
+    RenderCommit();
+    assert(RenderOriginalFrameRate(0) == 30 && RenderOriginalFrameRate(1) == 30);
+    portSettings.render.selection = RENDER_PS1; RenderCommit();
+    assert(RenderOriginalFrameRate(0) == 30 && RenderOriginalFrameRate(1) == 25);
+    n64 = 0; RenderCommit();
+    assert(RenderOriginalFrameRate(1) == 25);
+    puts("Original frame rate follows the committed renderer, including cross-platform overrides: OK");
+}
+
 int main(void)
 {
     Policies();
@@ -314,7 +373,9 @@ int main(void)
     n64 = 0;
     Load("renderer = bogus\nps1_dither = garbage\npc_depth = -1\n");
     assert(portSettings.render.selection == RENDER_AUTO && portSettings.render.ps1.dither && portSettings.render.pc.depth);
+    ProfileResolutions();
     PlatformSelection();
+    OriginalFrameRates();
     SaturnProfile();
     DisplayResampling();
     portConfig.hidden = 1; PortSettingsLoad();

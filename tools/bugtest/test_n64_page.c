@@ -5,6 +5,13 @@
 #include <stddef.h>
 _Static_assert(offsetof(GpuDrawState, fade) == 13 * sizeof(int), "frame recording layout");
 PortSettings portSettings = {.render = RENDER_DEFAULTS};
+PortConfig portConfig;
+static int testLinkRole, testLinkInterpolate, testTracing;
+int PortLinkRole(void) { return testLinkRole; }
+int PortLinkSplit(void) { return testLinkRole != LINK_NONE; }
+int PortLinkInterpolate(void) { return testLinkInterpolate; }
+void PortLinkSetInterpolate(int on) { testLinkInterpolate = on; }
+int PortTracing(void) { return testTracing; }
 int portPal;
 int PortScreenMargin(void) { return 0; }
 static int testSaturnDisc;
@@ -24,6 +31,7 @@ static int testFlareArt;
 const SaturnNativePoly *SaturnArtFlare(int alternate) { return testFlareArt ? &testFlares[alternate] : NULL; }
 static int frameClears, flushes;
 void GpuFlush(void) { flushes++; }
+void GpuUpdateResolution(void) {}
 void FrameCapClear(void) { frameClears++; }
 static FrameCapPrim recorded;
 static int recordNative;
@@ -515,6 +523,28 @@ static void RendererBoundaries(void)
     puts("Inactive profiles preserve interpolation and recordings at the real frame boundary: OK");
 }
 
+static void OriginalInterpolation(void)
+{
+    portSettings.frameRate = FRAME_RATE_CONSOLE;
+    for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+        portSettings.render.selection = (RendererId)id; RenderCommit();
+        assert(PsxInterpolationOn() == (id != RENDER_PS1));
+        portConfig.hidden = 1; assert(!PsxInterpolationOn()); portConfig.hidden = 0;
+        portConfig.fixedStep = 1; assert(!PsxInterpolationOn()); portConfig.fixedStep = 0;
+        testTracing = 1; assert(!PsxInterpolationOn()); testTracing = 0;
+        testLinkRole = LINK_MASTER;
+        assert(PsxInterpolationOn() == (id != RENDER_PS1));
+        testLinkRole = LINK_SLAVE;
+        assert(PsxInterpolationOn() == (id != RENDER_PS1));
+        testLinkRole = LINK_NONE;
+    }
+    portSettings.frameRate = FRAME_RATE_UNCAPPED;
+    portSettings.render.selection = RENDER_PS1; RenderCommit();
+    assert(PsxInterpolationOn());
+    GteKeepPast(0);
+    puts("Original interpolation follows the renderer; fixed-step, tracing and linked-player rules remain intact: OK");
+}
+
 int main(void)
 {
     RendererBoundaries();
@@ -581,5 +611,6 @@ int main(void)
     SaturnShadowPacket();
     ShieldOrdering();
     WorldBillboardClip();
+    OriginalInterpolation();
     return 0;
 }

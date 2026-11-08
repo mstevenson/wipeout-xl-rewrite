@@ -44,7 +44,21 @@
 
 /* ---- state ---- */
 
-static int scale = 1;
+static int scale = 1; /* multiplier of the active profile's native resolution */
+static float rasterX = 1, rasterY = 1; /* native pixels per game-coordinate unit */
+static float ScaleX(void) { return rasterX * scale; }
+static float ScaleY(void) { return rasterY * scale; }
+static int PixelX(float x) { return (int)SDL_lroundf(x * ScaleX()); }
+static int PixelY(float y) { return (int)SDL_lroundf(y * ScaleY()); }
+static float TargetWidth(int width) { return PixelX(width) / ScaleX(); }
+static float TargetHeight(int height) { return PixelY(height) / ScaleY(); }
+static float WideOrigin(int margin) { return -PixelX(margin) / ScaleX(); }
+
+void GpuPixelSize(int w, int h, int *pixelW, int *pixelH)
+{
+    *pixelW = PixelX(w);
+    *pixelH = PixelY(h);
+}
 static GLuint framebuffer, colour;   /* all of video memory, scaled */
 static GLuint depthBuffer;           /* ... its depth (the depth buffer: Flush) */
 static GLuint vramTexture;           /* the CPU copy, R16UI */
@@ -93,7 +107,8 @@ typedef struct BatchVertex {
 static BatchVertex batch[BATCH_VERTICES];
 static int primitiveFilterBounds[4];
 static int batchCount, batchPoints;
-#define SATURN_WIDTH (SCREEN_COLUMNS + 2*MAX_WIDE_MARGIN)
+#define SATURN_MARGIN (MAX_WIDE_MARGIN * 11 / 10)
+#define SATURN_WIDTH (352 + 2*SATURN_MARGIN)
 static uint8_t saturnPixels[VRAM_HEIGHT][SATURN_WIDTH][4];
 static int saturnLeft=SATURN_WIDTH, saturnTop=VRAM_HEIGHT, saturnRight, saturnBottom;
 static void SaturnFlushPixels(void);
@@ -132,38 +147,36 @@ static int batchDepth; /* at least one polygon needs depth writes to hide surfac
 
 /* The largest scale: the wide framebuffer at its widest within the GPU's textures, and at most 12 (the
    framebuffers then take some 560 MB). */
-int GpuMaxScale(void)
+int GpuMaxScale(RendererId id)
 {
-    static int largest;
-
-    if (!largest) {
-        GLint size = 4096;
-
-        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &size);
-        largest = SDL_clamp(size / (SCREEN_COLUMNS + 2 * MAX_WIDE_MARGIN), 1, RENDER_MAX_SCALE);
-    }
-    return largest;
-}
-
-/* The scale the window asks for: enough for its height, at least 1. */
-int GpuWindowScale(void)
-{
+    GLint size = 4096;
     int width, height;
-
-    PortDrawableSize(&width, &height);
-    return SDL_clamp((height + GPU_LINES - 1) / GPU_LINES, 1, SDL_min(8, GpuMaxScale()));
+    RenderNativeSize(id, portPal, &width, &height);
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &size);
+    float x = width / 320.0f, y = height / (float)GPU_LINES;
+    int pixels = (int)SDL_ceilf(SDL_max((SCREEN_COLUMNS + 2 * MAX_WIDE_MARGIN) * x, VRAM_HEIGHT * y));
+    int budget = (int)(RENDER_MAX_SCALE / SDL_max(x, y));
+    return SDL_clamp(size / pixels, 1, budget);
 }
 
-/* The scale wanted: the settings' resolution, or the window's. */
+int GpuWindowScale(RendererId id)
+{
+    int width, height, nativeW, nativeH;
+    PortDrawableSize(&width, &height);
+    RenderNativeSize(id, portPal, &nativeW, &nativeH);
+    if (!portSettings.widescreen) height = SDL_min(height, width * 3 / 4);
+    int maximum = SDL_min(8, GpuMaxScale(id));
+#ifdef PORT_MOBILE
+    maximum = SDL_min(maximum, 3);
+#endif
+    return SDL_clamp((height + nativeH - 1) / nativeH, 1, maximum);
+}
+
 static int ChooseScale(void)
 {
-#ifdef PORT_MOBILE
-    /* a phone or tablet: automatic stops at 3 (all of video memory at 3072x1536; its screen's 6 would be 75 MB
-       drawn into); the settings' resolution goes higher */
-    return portSettings.renderScale > 0 ? SDL_min(portSettings.renderScale, GpuMaxScale()) : SDL_min(GpuWindowScale(), 3);
-#else
-    return portSettings.renderScale > 0 ? SDL_min(portSettings.renderScale, GpuMaxScale()) : GpuWindowScale();
-#endif
+    const RenderFrame *frame = RenderCurrent();
+    int wanted = RenderScale(frame);
+    return wanted > 0 ? SDL_min(wanted, GpuMaxScale(frame->id)) : GpuWindowScale(frame->id);
 }
 
 int GpuScale(void)
@@ -192,14 +205,14 @@ static int CreateFramebuffer(void)
     PictureChanged(0, VRAM_HEIGHT);
     glGenTextures(1, &colour);
     glBindTexture(GL_TEXTURE_2D, colour);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, VRAM_WIDTH * scale, VRAM_HEIGHT * scale, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT), 0, GL_RGBA, GL_UNSIGNED_BYTE,
                  NULL);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glGenFramebuffers(1, &framebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colour, 0);
-    depthBuffer = DepthFor(VRAM_WIDTH * scale, VRAM_HEIGHT * scale);
+    depthBuffer = DepthFor(PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT));
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         SDL_Log("framebuffer incomplete at scale %d", scale);
         return 0;
@@ -305,11 +318,15 @@ int GpuInit(void)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
     scale = ChooseScale();
-    HdTexSetScale(scale);
+    int nativeW, nativeH;
+    RenderNativeSize(RenderCurrent()->id, portPal, &nativeW, &nativeH);
+    rasterX = nativeW / 320.0f;
+    rasterY = nativeH / (float)GPU_LINES;
+    HdTexSetScale((int)SDL_ceilf(SDL_max(ScaleX(), ScaleY())));
     if (!CreateFramebuffer()) {
         return 0;
     }
-    glViewport(0, 0, VRAM_WIDTH * scale, VRAM_HEIGHT * scale);
+    glViewport(0, 0, PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT));
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     initialised = 1;
@@ -425,8 +442,8 @@ static void SyncWide(void)
     glBindFramebuffer(GL_READ_FRAMEBUFFER, wideFramebuffer);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
     glDisable(GL_SCISSOR_TEST);
-    glBlitFramebuffer(wideMargin * scale, 0, (wideMargin + SCREEN_COLUMNS) * scale, VRAM_HEIGHT * scale, 0, 0,
-                      SCREEN_COLUMNS * scale, VRAM_HEIGHT * scale, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(PixelX(wideMargin), 0, PixelX(wideMargin) + PixelX(SCREEN_COLUMNS), PixelY(VRAM_HEIGHT), 0, 0,
+                      PixelX(SCREEN_COLUMNS), PixelY(VRAM_HEIGHT), GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     wideDirty = 0;
 }
@@ -437,9 +454,9 @@ static void ClearWideSides(int y, int h, float r, float g, float b)
     glBindFramebuffer(GL_FRAMEBUFFER, wideFramebuffer);
     glEnable(GL_SCISSOR_TEST);
     glClearColor(r, g, b, 1.0f);
-    glScissor(0, y * scale, wideMargin * scale, h * scale);
+    glScissor(0, PixelY(y), PixelX(wideMargin), PixelY(y + h) - PixelY(y));
     glClear(GL_COLOR_BUFFER_BIT);
-    glScissor((wideMargin + SCREEN_COLUMNS) * scale, y * scale, wideMargin * scale, h * scale);
+    glScissor(PixelX(wideMargin) + PixelX(SCREEN_COLUMNS), PixelY(y), PixelX(wideMargin), PixelY(y + h) - PixelY(y));
     glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
@@ -457,8 +474,8 @@ static void CopyToWide(int x, int y, int w, int h)
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, wideFramebuffer);
     glDisable(GL_SCISSOR_TEST);
-    glBlitFramebuffer(left * scale, y * scale, right * scale, (y + h) * scale, (left + wideMargin) * scale, y * scale,
-                      (right + wideMargin) * scale, (y + h) * scale, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(PixelX(left), PixelY(y), PixelX(right), PixelY((y + h)), PixelX(wideMargin) + PixelX(left), PixelY(y),
+                      PixelX(wideMargin) + PixelX(right), PixelY((y + h)), GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     if (left == 0 && right == SCREEN_COLUMNS) {
         ClearWideSides(y, h, 0, 0, 0);
@@ -511,14 +528,14 @@ static void SetWideMargin(int margin)
     if (margin) {
         glGenTextures(1, &wideColour);
         glBindTexture(GL_TEXTURE_2D, wideColour);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, WideWidth() * scale, VRAM_HEIGHT * scale, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, PixelX(WideWidth()), PixelY(VRAM_HEIGHT), 0, GL_RGBA, GL_UNSIGNED_BYTE,
                      NULL);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glGenFramebuffers(1, &wideFramebuffer);
         glBindFramebuffer(GL_FRAMEBUFFER, wideFramebuffer);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, wideColour, 0);
-        wideDepth = DepthFor(WideWidth() * scale, VRAM_HEIGHT * scale);
+        wideDepth = DepthFor(PixelX(WideWidth()), PixelY(VRAM_HEIGHT));
         glDisable(GL_SCISSOR_TEST);
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -570,27 +587,28 @@ void GpuBackdrop(int on)
 /* The framebuffer the next primitives go to, its viewport and the draw area's scissor. */
 static void BindTarget(void)
 {
+    glUniform2f(scene->uniformNativeGrid, rasterX, rasterY);
     if (areaWide) {
         /* a draw area across the screen reaches over the sides as well: a race's scene, and in a menu what fills
            them and the panels that slide out to the window's edges and back */
         int full = areaX == 0 && areaW == SCREEN_COLUMNS;
 
         glBindFramebuffer(GL_FRAMEBUFFER, wideFramebuffer);
-        glViewport(0, 0, WideWidth() * scale, VRAM_HEIGHT * scale);
+        glViewport(0, 0, PixelX(WideWidth()), PixelY(VRAM_HEIGHT));
         glEnable(GL_SCISSOR_TEST);
-        glScissor(full ? 0 : (areaX + wideMargin) * scale, areaY * scale, (full ? WideWidth() : areaW) * scale,
-                  areaH * scale);
-        glUniform2f(scene->uniformTarget, (float)WideWidth(), (float)VRAM_HEIGHT);
-        glUniform2f(scene->uniformOrigin, (float)-wideMargin, 0.0f);
+        glScissor(full ? 0 : PixelX((areaX + wideMargin)), PixelY(areaY), full ? PixelX(WideWidth()) : PixelX(areaX + wideMargin + areaW) - PixelX(areaX + wideMargin),
+                  PixelY(areaY + areaH) - PixelY(areaY));
+        glUniform2f(scene->uniformTarget, TargetWidth(WideWidth()), TargetHeight(VRAM_HEIGHT));
+        glUniform2f(scene->uniformOrigin, WideOrigin(wideMargin), 0.0f);
         wideDirty = 1;
         drawnSincePresent |= !interpolatingDraw;
         return;
     }
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    glViewport(0, 0, VRAM_WIDTH * scale, VRAM_HEIGHT * scale);
+    glViewport(0, 0, PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT));
     glEnable(GL_SCISSOR_TEST);
-    glScissor(areaX * scale, areaY * scale, areaW * scale, areaH * scale);
-    glUniform2f(scene->uniformTarget, (float)VRAM_WIDTH, (float)VRAM_HEIGHT);
+    glScissor(PixelX(areaX), PixelY(areaY), PixelX(areaX + areaW) - PixelX(areaX), PixelY(areaY + areaH) - PixelY(areaY));
+    glUniform2f(scene->uniformTarget, TargetWidth(VRAM_WIDTH), TargetHeight(VRAM_HEIGHT));
     glUniform2f(scene->uniformOrigin, 0.0f, 0.0f);
     drawnSincePresent |= !interpolatingDraw;
 }
@@ -770,7 +788,7 @@ static int HdPlaced(int image, int *at)
 
     if (HdTexEpoch() != hdEpoch || HdTexImageCount() != hdImages) {
         /* other images (another scale, another pack): an atlas for them */
-        size = SDL_min(scale <= 6 ? 4096 : 8192, GpuMaxScale() * (SCREEN_COLUMNS + 2 * MAX_WIDE_MARGIN));
+        size = SDL_min(scale <= 6 ? 4096 : 8192, GpuMaxScale(RenderCurrent()->id) * (SCREEN_COLUMNS + 2 * MAX_WIDE_MARGIN));
         HdEmpty();
         hdEpoch = HdTexEpoch();
         hdImages = HdTexImageCount();
@@ -990,7 +1008,7 @@ static void SaturnEmit(void *user, int x, int y, uint16_t rgb, int blend, float 
     state.semi = blend == -2 ? 0 : blend; state.fade = alpha < 255;
     if (blend == -2) rgb = 0; /* RGB destination shadow: half the destination. */
     GpuVertex pixel = {0};
-    pixel.x = (float)x; pixel.y = (float)y; pixel.w = depth;
+    pixel.x = x / rasterX; pixel.y = y / rasterY; pixel.w = depth;
     pixel.noDepth = d->noDepth; pixel.world = 1;
     pixel.r = (uint8_t)((rgb & 31)*8); pixel.g = (uint8_t)(((rgb>>5)&31)*8);
     pixel.b = (uint8_t)(((rgb>>10)&31)*8); pixel.a = alpha;
@@ -1005,7 +1023,7 @@ static void SaturnEmit(void *user, int x, int y, uint16_t rgb, int blend, float 
 static void SaturnComposite(void *user, int x, int y, uint16_t rgb, int blend, float depth, uint8_t alpha)
 {
     (void)user; (void)depth;
-    int px=x+MAX_WIDE_MARGIN;
+    int px=x+SATURN_MARGIN;
     if (px<0 || px>=SATURN_WIDTH || y<0 || y>=VRAM_HEIGHT) return;
     uint8_t *out=saturnPixels[y][px];
     unsigned a=blend >= 0 || blend == -2 ? (alpha+1)/2 : alpha;
@@ -1034,13 +1052,13 @@ static void SaturnFlushPixels(void)
     if(saturnRight<=saturnLeft || saturnBottom<=saturnTop) return;
     UsePipeline(RENDER_SATURN);
     glUseProgram(scene->program); BindTarget();
-    int left=saturnLeft-MAX_WIDE_MARGIN, right=saturnRight-MAX_WIDE_MARGIN;
-    RenderSaturnPixels(&saturnPixels[0][0][0], SATURN_WIDTH, VRAM_HEIGHT, MAX_WIDE_MARGIN,
-        left,saturnTop,right,saturnBottom,areaWide ? WideWidth() : VRAM_WIDTH,
-        areaWide ? -wideMargin : 0,scale);
+    int left=saturnLeft-SATURN_MARGIN, right=saturnRight-SATURN_MARGIN;
+    RenderSaturnPixels(&saturnPixels[0][0][0], SATURN_WIDTH, VRAM_HEIGHT, SATURN_MARGIN,
+        left,saturnTop,right,saturnBottom,(areaWide ? TargetWidth(WideWidth()) : TargetWidth(VRAM_WIDTH))*rasterX,
+        TargetHeight(VRAM_HEIGHT)*rasterY,areaWide ? WideOrigin(wideMargin)*rasterX : 0,(float)scale,(float)scale);
     glUseProgram(scene->program);
-    PictureChanged(saturnTop,saturnBottom-saturnTop);
-    RememberPicture(left,saturnTop,right-left,saturnBottom-saturnTop);
+    PictureChanged(saturnTop/rasterY,(saturnBottom-saturnTop)/rasterY);
+    RememberPicture(left/rasterX,saturnTop/rasterY,(right-left)/rasterX,(saturnBottom-saturnTop)/rasterY);
     for(int y=saturnTop;y<saturnBottom;y++)
         memset(saturnPixels[y][saturnLeft],0,(size_t)(saturnRight-saturnLeft)*4);
     saturnLeft=SATURN_WIDTH;saturnTop=VRAM_HEIGHT;saturnRight=saturnBottom=0;
@@ -1054,8 +1072,8 @@ static void SaturnFlushGpu(void)
     glUseProgram(scene->program);BindTarget();
     int left=areaWide ? -wideMargin : areaX;
     int right=areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW;
-    RenderSaturnFlushQuads(vramTexture,areaWide ? WideWidth() : VRAM_WIDTH,VRAM_HEIGHT,
-        areaWide ? -wideMargin : 0,scale,left,areaY,right,areaY+areaH);
+    RenderSaturnFlushQuads(vramTexture,PixelX(areaWide ? WideWidth() : VRAM_WIDTH),PixelY(VRAM_HEIGHT),
+        areaWide ? WideOrigin(wideMargin) : 0,ScaleX(),ScaleY(),scale,left,areaY,right,areaY+areaH);
     glUseProgram(scene->program);
     PictureChanged(areaY,areaH);RememberPicture(left,areaY,right-left,areaH);
 }
@@ -1083,7 +1101,8 @@ static void SaturnBackground(const GpuDrawState *state)
     RenderSaturnBackground(picture, palette, width, height, SaturnNativeSkyRevision(),
         state, RenderCurrent()->settings.saturn.originalSkyScroll, left, areaY, right, areaY + areaH,
         areaX + areaW*.5f, areaY + areaH*.5f,
-        areaWide ? WideWidth() : VRAM_WIDTH, VRAM_HEIGHT, areaWide ? -wideMargin : 0, scale);
+        areaWide ? TargetWidth(WideWidth()) : TargetWidth(VRAM_WIDTH), TargetHeight(VRAM_HEIGHT),
+        areaWide ? WideOrigin(wideMargin) : 0, ScaleX(), ScaleY(), scale);
     glUseProgram(scene->program);
     PictureChanged(areaY, areaH);
     RememberPicture(left, areaY, right-left, areaH);
@@ -1103,8 +1122,15 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
                 SaturnShipLight(SaturnTrackLight(vertices[0].r, vertices[0].g, vertices[0].b), poly.gouraud);
             }
             if(SaturnReference()) {
-                SaturnVdp1Draw(&poly, vertices, areaWide ? -wideMargin : areaX, areaY,
-                              areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW, areaY+areaH,
+                GpuVertex native[4];
+                for (int k = 0; k < 4; k++) {
+                    native[k] = vertices[k < count ? k : 0];
+                    native[k].x *= rasterX; native[k].y *= rasterY;
+                }
+                SaturnVdp1Draw(&poly, native, (int)SDL_lroundf((areaWide ? -wideMargin : areaX)*rasterX),
+                              (int)SDL_lroundf(areaY*rasterY),
+                              (int)SDL_lroundf((areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW)*rasterX),
+                              (int)SDL_lroundf((areaY+areaH)*rasterY),
                               RenderDepth(RenderCurrent()) ? SaturnEmit : SaturnComposite, SaturnSampleIndex, &d);
             } else {
                 /* Pipeline creation precedes submission: switching away destroys
@@ -1113,10 +1139,10 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
                 int clipLeft=areaWide ? -wideMargin : areaX;
                 int clipRight=areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW;
                 if(!RenderSaturnQuad(&poly,vertices,given,SaturnNativeMaterialRevision(),RenderDepth(RenderCurrent()),
-                                    scale,clipLeft,areaY,clipRight,areaY+areaH)) {
+                                    ScaleX(),ScaleY(),clipLeft,areaY,clipRight,areaY+areaH)) {
                     SaturnFlushGpu();
                     if(!RenderSaturnQuad(&poly,vertices,given,SaturnNativeMaterialRevision(),RenderDepth(RenderCurrent()),
-                                        scale,clipLeft,areaY,clipRight,areaY+areaH)) abort();
+                                        ScaleX(),ScaleY(),clipLeft,areaY,clipRight,areaY+areaH)) abort();
                 }
             }
             float left=vertices[0].x,right=left,top=vertices[0].y,bottom=top;
@@ -1251,7 +1277,7 @@ static void Clear(int x, int y, int w, int h, GLbitfield buffers, uint8_t r, uin
     }
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glEnable(GL_SCISSOR_TEST);
-    glScissor(x * scale, y * scale, w * scale, h * scale);
+    glScissor(PixelX(x), PixelY(y), PixelX(x + w) - PixelX(x), PixelY(y + h) - PixelY(y));
     glClearColor(r / 255.0f, g / 255.0f, b / 255.0f, 1.0f);
     glDepthMask(GL_TRUE);
     glClear(buffers);
@@ -1261,7 +1287,7 @@ static void Clear(int x, int y, int w, int h, GLbitfield buffers, uint8_t r, uin
         int right = x <= 0 && x + w >= SCREEN_COLUMNS ? WideWidth() : SDL_min(x + w, SCREEN_COLUMNS) + wideMargin;
 
         glBindFramebuffer(GL_FRAMEBUFFER, wideFramebuffer);
-        glScissor(left * scale, y * scale, (right - left) * scale, h * scale);
+        glScissor(PixelX(left), PixelY(y), PixelX(right) - PixelX(left), PixelY(y + h) - PixelY(y));
         glClear(buffers);
         glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     }
@@ -1315,7 +1341,7 @@ void GpuReadBack(int x, int y, int w, int h)
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, small);
         glDisable(GL_SCISSOR_TEST);
-        glBlitFramebuffer(x * scale, y * scale, (x + w) * scale, (y + h) * scale, 0, 0, w, h, GL_COLOR_BUFFER_BIT,
+        glBlitFramebuffer(PixelX(x), PixelY(y), PixelX((x + w)), PixelY((y + h)), 0, 0, w, h, GL_COLOR_BUFFER_BIT,
                           GL_NEAREST);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, small);
         glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
@@ -1373,7 +1399,7 @@ void GpuWriteFramebuffer(int x, int y, int w, int h)
     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
     glDisable(GL_SCISSOR_TEST);
-    glBlitFramebuffer(0, 0, w, h, x * scale, y * scale, (x + w) * scale, (y + h) * scale, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, w, h, PixelX(x), PixelY(y), PixelX((x + w)), PixelY((y + h)), GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     ClearDrawn(x, y, w, h);
     CopyToWide(x, y, w, h);
@@ -1409,13 +1435,13 @@ void GpuMoveFramebuffer(int x, int y, int w, int h, int toX, int toY)
     }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     glBindTexture(GL_TEXTURE_2D, texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w * scale, h * scale, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, x * scale, y * scale, w * scale, h * scale);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, PixelX(x + w) - PixelX(x), PixelY(y + h) - PixelY(y), 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, PixelX(x), PixelY(y), PixelX(x + w) - PixelX(x), PixelY(y + h) - PixelY(y));
     glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
     glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
     glDisable(GL_SCISSOR_TEST);
-    glBlitFramebuffer(0, 0, w * scale, h * scale, toX * scale, toY * scale, (toX + w) * scale, (toY + h) * scale,
+    glBlitFramebuffer(0, 0, PixelX(x + w) - PixelX(x), PixelY(y + h) - PixelY(y), PixelX(toX), PixelY(toY), PixelX((toX + w)), PixelY((toY + h)),
                       GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     /* both copies now agree in the destination */
@@ -1452,7 +1478,7 @@ static void BarColour(int x, int y, int h, float colour[3])
 {
     static uint8_t *pixels;
     static size_t size;
-    size_t need = (size_t)h * scale * 4;
+    size_t need = (size_t)(PixelY(y + h) - PixelY(y)) * 4;
     size_t i;
 
     colour[0] = colour[1] = colour[2] = 0;
@@ -1462,7 +1488,7 @@ static void BarColour(int x, int y, int h, float colour[3])
     }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glReadPixels(x * scale, y * scale, 1, h * scale, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glReadPixels(PixelX(x), PixelY(y), 1, PixelY(y + h) - PixelY(y), GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     for (i = 4; i < need; i += 4) {
         if (memcmp(pixels + i, pixels, 3) != 0) {
             return;
@@ -1477,11 +1503,11 @@ static void BarColour(int x, int y, int h, float colour[3])
    Presentation must leave the source framebuffer and VRAM untouched. */
 static void BlitShown(int wide, int left, int top, int right, int bottom, int x0, int y0, int x1, int y1)
 {
-    int buffer = SDL_clamp(top / (256 * scale), 0, 1);
+    int buffer = SDL_clamp(top / PixelY(256), 0, 1);
     const PictureOwner *owner = &pictureOwners[buffer];
     const RenderFrame *shown = owner->valid ? &owner->render : RenderCurrent();
     uint64_t revision = pictureRevision[buffer];
-    if (top < 256 * scale && bottom > 256 * scale)
+    if (top < PixelY(256) && bottom > PixelY(256))
         revision = SDL_max(pictureRevision[0], pictureRevision[1]);
     RenderPresent p = {wide ? wideColour : colour, wide ? wideFramebuffer : framebuffer,
                        revision, scale, owner->valid ? owner->race : GpuRaceWide(),
@@ -1535,10 +1561,10 @@ static void Present(int x, int y, int w, int h, int interpolated)
         if (!wide) {
             SyncWide();
         }
-        left = wide ? (int)SDL_lround((WideWidth() - across) / 2 * scale) : x * scale;
-        right = wide ? WideWidth() * scale - left : (x + w) * scale;
+        left = wide ? PixelX((WideWidth() - across) / 2) : PixelX(x);
+        right = wide ? PixelX(WideWidth()) - left : PixelX((x + w));
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, windowFramebuffer);
-        BlitShown(wide, left, y * scale, right, (y + h) * scale, outX, outY + outH, outX + outW, outY);
+        BlitShown(wide, left, PixelY(y), right, PixelY((y + h)), outX, outY + outH, outX + outW, outY);
         if (!wide && portSettings.widescreen && outX > 0) {
             float colour[3];
 
@@ -1567,14 +1593,18 @@ void GpuPictureHandedOver(void)
 
 /* The framebuffers made again at another scale, from what they held (enlarged or reduced: the next picture
    is drawn at the new scale). */
-static void SetScale(int newScale)
+static void SetScale(int newScale, int nativeW, int nativeH)
 {
     GLuint oldColour = colour, oldFramebuffer = framebuffer, oldDepth = depthBuffer;
     int oldScale = scale, margin = wideMargin;
+    float oldX = rasterX, oldY = rasterY;
+    int oldWidth = PixelX(VRAM_WIDTH), oldHeight = PixelY(VRAM_HEIGHT);
 
     Flush();
     SetWideMargin(0); /* (its middle into video memory's first) */
     scale = newScale;
+    rasterX = nativeW / 320.0f;
+    rasterY = nativeH / (float)GPU_LINES;
     if (!CreateFramebuffer()) {
         glDeleteFramebuffers(1, &framebuffer);
         glDeleteTextures(1, &colour);
@@ -1583,19 +1613,20 @@ static void SetScale(int newScale)
         framebuffer = oldFramebuffer;
         depthBuffer = oldDepth;
         scale = oldScale;
+        rasterX = oldX; rasterY = oldY;
     } else {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, oldFramebuffer);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
         glDisable(GL_SCISSOR_TEST);
-        glBlitFramebuffer(0, 0, VRAM_WIDTH * oldScale, VRAM_HEIGHT * oldScale, 0, 0, VRAM_WIDTH * scale,
-                          VRAM_HEIGHT * scale, GL_COLOR_BUFFER_BIT, scale < oldScale ? GL_LINEAR : GL_NEAREST);
+        glBlitFramebuffer(0, 0, oldWidth, oldHeight, 0, 0, PixelX(VRAM_WIDTH),
+                          PixelY(VRAM_HEIGHT), GL_COLOR_BUFFER_BIT, scale < oldScale ? GL_LINEAR : GL_NEAREST);
         glDeleteFramebuffers(1, &oldFramebuffer);
         glDeleteTextures(1, &oldColour);
         glDeleteRenderbuffers(1, &oldDepth);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     SetWideMargin(margin);
-    HdTexSetScale(scale);
+    HdTexSetScale((int)SDL_ceilf(SDL_max(ScaleX(), ScaleY())));
 }
 
 void GpuSetWindowFramebuffer(unsigned int number)
@@ -1619,12 +1650,19 @@ void GpuClearWindow(float r, float g, float b)
 /* After a new picture: the window's shape, the setting or the end of a race may ask for another margin (a
    picture shown again, as each field shows one, or while the frame recorder holds the game, changes nothing),
    or another scale. */
+void GpuUpdateResolution(void)
+{
+    if (!initialised) return;
+    int width, height, wanted = ChooseScale();
+    RenderNativeSize(RenderCurrent()->id, portPal, &width, &height);
+    if (wanted != scale || rasterX != width / 320.0f || rasterY != height / (float)GPU_LINES)
+        SetScale(wanted, width, height);
+}
+
 static void AfterPicture(void)
 {
     pictures++;
-    if (ChooseScale() != scale) {
-        SetScale(ChooseScale());
-    }
+    GpuUpdateResolution();
     if (drawnSincePresent) {
         picturesWithoutScene = sceneWide ? 0 : SDL_min(picturesWithoutScene + 1, 1000);
         picturesWithoutMenu = menuWide ? 0 : SDL_min(picturesWithoutMenu + 1, 1000);
@@ -1652,7 +1690,7 @@ uint8_t *GpuReadArea(int x, int y, int w, int h, int *outW, int *outH)
 {
     static uint8_t *pixels;
     static size_t size;
-    size_t need = (size_t)w * scale * h * scale * 4;
+    size_t need = (size_t)(PixelX(x + w) - PixelX(x)) * (PixelY(y + h) - PixelY(y)) * 4;
 
     Flush();
     SyncWide();
@@ -1662,10 +1700,10 @@ uint8_t *GpuReadArea(int x, int y, int w, int h, int *outW, int *outH)
     }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    glReadPixels(x * scale, y * scale, w * scale, h * scale, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    glReadPixels(PixelX(x), PixelY(y), PixelX(x + w) - PixelX(x), PixelY(y + h) - PixelY(y), GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     glBindFramebuffer(GL_FRAMEBUFFER, windowFramebuffer);
-    *outW = w * scale;
-    *outH = h * scale;
+    *outW = PixelX(x + w) - PixelX(x);
+    *outH = PixelY(y + h) - PixelY(y);
     return pixels;
 }
 
@@ -1702,9 +1740,9 @@ static void ScalePicture(int x, int y, int w, int h, int margin, int outW, int o
     glBindFramebuffer(GL_READ_FRAMEBUFFER, wide ? wideFramebuffer : framebuffer);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, small);
     if (wide) {
-        BlitShown(1, 0, y * scale, WideWidth() * scale, (y + h) * scale, 0, 0, outW, outH);
+        BlitShown(1, 0, PixelY(y), PixelX(WideWidth()), PixelY((y + h)), 0, 0, outW, outH);
     } else {
-        BlitShown(0, x * scale, y * scale, (x + w) * scale, (y + h) * scale, 0, 0, outW, outH);
+        BlitShown(0, PixelX(x), PixelY(y), PixelX((x + w)), PixelY((y + h)), 0, 0, outW, outH);
     }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, small);
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
@@ -1847,7 +1885,7 @@ void GpuPresentSplit(int x, int y, int w, int h, const uint8_t *lower, int lower
     /* the upper half: this game's band (OpenGL's rows go up: the upper half is from height / 2), its pixels as wide
        as the console's are (PAL's 256 lines across the same 4:3 screen: wider than tall) */
     Fit(0, height - height / 2, width, height / 2, across * GPU_LINES, h * 240, &ox, &oy, &ow, &oh);
-    BlitShown(wide, wide ? 0 : x * scale, y * scale, (wide ? across : x + w) * scale, (y + h) * scale,
+    BlitShown(wide, wide ? 0 : PixelX(x), PixelY(y), PixelX((wide ? across : x + w)), PixelY((y + h)),
               ox, oy + oh, ox + ow, oy);
     /* the lower half: the other game's band, as it read it (rows from the bottom) */
     if (lower && lowerW > 0 && lowerH > 0) {

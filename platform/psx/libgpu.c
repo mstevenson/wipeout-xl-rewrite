@@ -2458,7 +2458,8 @@ int PsxInterpolationOn(void)
         on = PortLinkSplit() && PortLinkInterpolate(); /* as the first player's game (whose window it is) does */
     } else {
         on = PsxInterpolationTest() > 0 ||
-             (portSettings.frameRate != FRAME_RATE_CONSOLE && !portConfig.fixedStep && !portConfig.hidden);
+             ((portSettings.frameRate != FRAME_RATE_CONSOLE || RenderCurrent()->id != RENDER_PS1) &&
+              !portConfig.fixedStep && !portConfig.hidden);
         if (role == LINK_MASTER) {
             PortLinkSetInterpolate(on);
             on = on && PortLinkSplit(); /* a linked race only (the window split) */
@@ -2577,6 +2578,7 @@ void PsxRendererBoundary(void)
         shownTables.table = NULL;
         FrameCapClear();
     }
+    GpuUpdateResolution();
 }
 
 void PsxLinkWaiting(void)

@@ -144,7 +144,7 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -iquote game/include 
 "$test_build/steering_recording"
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -iquote game/include \
-    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_link_timing.c \
+    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_link_timing.c $render_sources \
     $(pkg-config --libs sdl3) -o "$test_build/link_timing"
 "$test_build/link_timing"
 

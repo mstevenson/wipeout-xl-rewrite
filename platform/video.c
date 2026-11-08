@@ -12,6 +12,7 @@
 #include "psx/gpu.h"
 #include "psx/psx_io.h"
 #include "settings.h"
+#include "region.h"
 #include "updates.h"
 #include "touch.h"
 #include "trace.h"
@@ -132,7 +133,7 @@ SDL_Window *PortWindow(void)
 
 /* The game paces itself to the console's field rate (libetc.c). On screen each picture also waits for the
    display's refresh, so it never tears (adaptive where the driver offers it), unless the frame rate is
-   uncapped or capped (the settings); tests run unthrottled. */
+   uncapped, capped or Original (paced by the renderer profile); tests run unthrottled. */
 void PortSwapInterval(int vsync)
 {
     static int current = -2;
@@ -282,7 +283,8 @@ static void TimingLog(void)
         double seconds = (now - last) / 1e9;
         fprintf(file, "%.3f,%.3f,%.3f,%.3f,%d,%d\n", now/1e9, (shown-pictures)/seconds,
                 (PortGameFrames()-frames)/seconds, (PsxFieldCount()-fieldCount)/seconds, racing,
-                portSettings.frameRate == FRAME_RATE_CAPPED ? portSettings.frameCap : 0);
+                portSettings.frameRate == FRAME_RATE_CAPPED ? portSettings.frameCap :
+                portSettings.frameRate == FRAME_RATE_CONSOLE ? RenderOriginalFrameRate(portPal) : 0);
         fflush(file);
         last = now; frames = PortGameFrames(); fieldCount = PsxFieldCount(); pictures = shown;
     }
