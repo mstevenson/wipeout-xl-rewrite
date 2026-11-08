@@ -140,41 +140,50 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
 
 bool RenderSettingsUi(RenderSettings *s)
 {
-    const char *names[] = {"PlayStation", "PC", "Sega Saturn"};
-    RendererId base = s->selection == RENDER_PS1 || s->selection == RENDER_PC || s->selection == RENDER_SATURN
-        ? s->selection : s->automaticBase;
-    bool n64Tracks = s->selection == RENDER_AUTO || s->selection == RENDER_N64;
-    int choice = base == RENDER_SATURN ? 2 : base == RENDER_PC;
+    const char *names[] = {"PlayStation", "PC", "Nintendo 64", "Sega Saturn"};
+    RendererId *selections[] = {&s->ps1Selection, &s->pcSelection, &s->n64Selection, &s->saturnSelection};
+    bool changed = false;
 
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
-    bool changed = ImGui::Combo("Global renderer", &choice, names, 3);
-    Tooltip("Selects PlayStation, PC or Saturn rendering. The N64 override below takes priority on Wipeout 64 "
-        "tracks when enabled. Changes rendering only; the loaded game assets stay the same.");
-    changed |= ImGui::Checkbox("Use N64 renderer for Wipeout 64 tracks", &n64Tracks);
-    Tooltip("Automatically uses the N64 renderer on imported Wipeout 64 tracks. "
-        "Disable to use the global renderer on those tracks too. Each renderer keeps its own settings.");
-    if (changed) {
-        base = choice == 2 ? RENDER_SATURN : choice == 1 ? RENDER_PC : RENDER_PS1;
-        /* Retain the existing INI format: Automatic is the track-specific N64 override. */
-        s->automaticBase = base;
-        s->selection = n64Tracks ? RENDER_AUTO : base;
-    }
     ImGui::Text("Active renderer: %s", RenderGet(RenderCurrent()->id)->name);
+    ImGui::TextWrapped("Each platform uses its selected renderer profile when loaded.");
+    if (s->selection != RENDER_AUTO)
+        ImGui::TextWrapped("Environment override: %s", RenderGet(s->selection)->name);
 
-    /* Size from the longest control, so columns also fit when the UI font is scaled. */
+    ImGuiTableFlags selectorFlags = ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings;
+    if (ImGui::BeginTable("Renderer platforms", 4, selectorFlags)) {
+        for (int i = 0; i < 4; i++) {
+            ImGui::TableNextColumn();
+            ImGui::PushID(i);
+            ImGui::TextUnformatted(names[i]);
+            int choice = (int)*selections[i] - RENDER_PS1;
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::Combo("##Renderer", &choice, names, IM_ARRAYSIZE(names))) {
+                *selections[i] = (RendererId)(choice + RENDER_PS1);
+                changed = true;
+            }
+            Tooltip("Renderer profile used for this platform. Profiles keep their settings when switching platforms. "
+                "Changing a profile's controls affects every platform using that profile.");
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    /* Keep platform columns horizontal, with scrolling on smaller windows or larger fonts. */
     const ImGuiStyle &style = ImGui::GetStyle();
     float panelWidth = ImGui::CalcTextSize("VI divot filtering (approximate)").x +
         ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + style.CellPadding.x * 2;
-    bool sideBySide = ImGui::GetContentRegionAvail().x >= panelWidth * 2;
-    ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings;
-    if (sideBySide) flags |= ImGuiTableFlags_BordersInnerV;
-    if (ImGui::BeginTable("Renderer settings", sideBySide ? 2 : 1, flags)) {
-        ImGui::TableNextColumn();
-        changed |= ProfileSettings(s, base);
-        ImGui::TableNextColumn();
-        ImGui::BeginDisabled(!n64Tracks);
-        changed |= ProfileSettings(s, RENDER_N64);
-        ImGui::EndDisabled();
+    float width = panelWidth * 4;
+    if (width < ImGui::GetContentRegionAvail().x) width = ImGui::GetContentRegionAvail().x;
+    float height = ImGui::GetFrameHeightWithSpacing() * 11 + style.ScrollbarSize;
+    ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings |
+        ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollX;
+    if (ImGui::BeginTable("Renderer settings", 4, flags, ImVec2(0, height), width)) {
+        for (int i = 0; i < 4; i++) {
+            ImGui::TableNextColumn();
+            ImGui::PushID(i);
+            changed |= ProfileSettings(s, (RendererId)(i + RENDER_PS1));
+            ImGui::PopID();
+        }
         ImGui::EndTable();
     }
     return changed;

@@ -111,7 +111,9 @@ void PortSettingsLoad(void)
     char *base = SDL_GetPrefPath("Psygnosis", "WipeoutXL");
     char *text, *line, *next;
     const char *value;
+    RenderSettings platformRender = RENDER_DEFAULTS;
     int legacyRendering = -1, legacyPc = -1, legacyDepth = -1, havePcDepth = 0, haveAuto = 0;
+    int havePs1Renderer = 0, haveN64Renderer = 0;
     RenderDefaults(&portSettings.render, RENDER_AUTO);
     RenderInvalidate();
 
@@ -155,16 +157,29 @@ void PortSettingsLoad(void)
             } else {
                 havePcDepth |= !strcmp(line, "pc_depth");
                 haveAuto |= !strcmp(line, "automatic_renderer");
+                havePs1Renderer |= !strcmp(line, "ps1_renderer");
+                haveN64Renderer |= !strcmp(line, "n64_renderer");
+                if (!strcmp(line, "ps1_renderer") || !strcmp(line, "n64_renderer"))
+                    RenderSet(&platformRender, line, value);
                 Set(line, value);
             }
         }
         SDL_free(text);
     }
-    if (!haveAuto && (legacyPc >= 0 || legacyRendering >= 0))
-        portSettings.render.automaticBase = (legacyPc >= 0 ? legacyPc : legacyRendering) ? RENDER_PC : RENDER_PS1;
+    if (!haveAuto && !havePs1Renderer && (legacyPc >= 0 || legacyRendering >= 0))
+        portSettings.render.ps1Selection = (legacyPc >= 0 ? legacyPc : legacyRendering) ? RENDER_PC : RENDER_PS1;
     if (legacyDepth >= 0) {
         if (!havePcDepth) portSettings.render.pc.depth = legacyDepth;
     }
+    /* The former global preference belongs to PlayStation content. Newly independent
+       PC and Saturn choices start with their matching profiles. New keys win in any order. */
+    if (portSettings.render.selection != RENDER_AUTO) {
+        if (!havePs1Renderer) portSettings.render.ps1Selection = portSettings.render.selection;
+        if (!haveN64Renderer) portSettings.render.n64Selection = portSettings.render.selection;
+    }
+    if (havePs1Renderer) portSettings.render.ps1Selection = platformRender.ps1Selection;
+    if (haveN64Renderer) portSettings.render.n64Selection = platformRender.n64Selection;
+    portSettings.render.selection = RENDER_AUTO;
     /* the environment overrides the file for this run */
     if ((value = SDL_getenv("WIPEOUT_SKIP_INTRO"))) {
         portSettings.skipIntro = SDL_atoi(value) != 0;
@@ -186,7 +201,7 @@ void PortSettingsLoad(void)
     value = SDL_getenv("WIPEOUT_PC_RENDERING");
     if (!value) value = SDL_getenv("WIPEOUT_SMOOTH_TEXTURES");
     if (value) {
-        portSettings.render.automaticBase = SDL_atoi(value) ? RENDER_PC : RENDER_PS1;
+        portSettings.render.ps1Selection = SDL_atoi(value) ? RENDER_PC : RENDER_PS1;
     }
     if ((value = SDL_getenv("WIPEOUT_RENDERER"))) RenderSet(&portSettings.render, "renderer", value);
     if ((value = SDL_getenv("WIPEOUT_HD_PACK"))) {

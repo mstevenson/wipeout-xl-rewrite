@@ -38,6 +38,10 @@ static void TestProgram(RendererId id)
 PortSettings portSettings = {.render = RENDER_DEFAULTS};
 static int n64Track;
 int PortOriginalTrackIs64(void) { return n64Track; }
+int PortOriginalTrack(void) { return -1; }
+int PortPcData(void) { return 0; }
+int PortSaturnDisc(void) { return 0; }
+const struct Disc *PsxIoDisc(void) { return NULL; }
 
 int PortN64TextureInfo(int px,int py,int depth,int cx,int cy,float u,float v,int bounds[4],int *flags)
 { (void)px;(void)py;(void)depth;(void)cx;(void)cy;(void)u;(void)v;(void)bounds;(void)flags;return 0; }
@@ -1306,7 +1310,7 @@ static void N64Materials(void)
         GpuDrawState material = {.n64 = 1, .textured = 1, .semi = -1, .depth = 2};
         GpuVertex v = {.w = 7, .r = 137, .g = 137, .b = 137, .a = 255};
         portSettings.render.selection = RENDER_AUTO;
-        portSettings.render.automaticBase = pc ? RENDER_PC : RENDER_PS1; RenderCommit();
+        portSettings.render.ps1Selection = pc ? RENDER_PC : RENDER_PS1; RenderCommit();
         RenderMaterial description = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
         RenderStyle style = RenderPrepare(RenderCurrent(), &description);
         batchCount = 0; Begin(&material, 3); Add(&v, style.shade);
@@ -1428,7 +1432,7 @@ static void ViFiltering(void)
     colour = input; n64Track = sceneWide = 1; memset(pictureOwners, 0, sizeof(pictureOwners));
     for (int pc = 0; pc < 2; pc++) {
         portSettings.render.selection = RENDER_AUTO;
-        portSettings.render.automaticBase = pc ? RENDER_PC : RENDER_PS1; RenderCommit();
+        portSettings.render.ps1Selection = pc ? RENDER_PC : RENDER_PS1; RenderCommit();
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
         BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);

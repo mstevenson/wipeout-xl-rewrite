@@ -1,6 +1,9 @@
 #include "renderer.h"
 #include "../settings.h"
 #include "../original.h"
+#include "../pc.h"
+#include "../saturn.h"
+#include "../psx/psx_io.h"
 #include <stddef.h>
 #include <string.h>
 
@@ -59,7 +62,17 @@ int RenderCommit(void)
     next.n64Track = PortOriginalTrackIs64();
     next.id = next.settings.selection;
     if (next.id == RENDER_AUTO) {
-        next.id = next.n64Track ? RENDER_N64 : next.settings.automaticBase;
+        if (next.n64Track) {
+            next.id = next.settings.n64Selection;
+        } else if (PortOriginalTrack() >= 0) {
+            next.id = next.settings.ps1Selection;
+        } else if (PsxIoDisc() && PortSaturnDisc()) {
+            next.id = next.settings.saturnSelection;
+        } else if (PsxIoDisc() && PortPcData()) {
+            next.id = next.settings.pcSelection;
+        } else {
+            next.id = next.settings.ps1Selection;
+        }
     }
     changed = !valid || current.id != next.id;
     if (!changed) {
@@ -131,6 +144,16 @@ static const struct {
 
 int RenderSet(RenderSettings *s, const char *key, const char *value)
 {
+    RendererId *platform = !strcmp(key, "ps1_renderer") ? &s->ps1Selection :
+        !strcmp(key, "pc_renderer") ? &s->pcSelection :
+        !strcmp(key, "n64_renderer") ? &s->n64Selection :
+        !strcmp(key, "saturn_renderer") ? &s->saturnSelection : NULL;
+    if (platform) {
+        for (int i = RENDER_PS1; i <= RENDER_SATURN; i++) {
+            if (!strcmp(value, names[i])) *platform = (RendererId)i;
+        }
+        return 1;
+    }
     if (!strcmp(key, "renderer") || !strcmp(key, "automatic_renderer")) {
         for (int i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
             if (!strcmp(value, names[i])) {
@@ -138,7 +161,7 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
                     /* The former forced N64 option now applies only to Wipeout 64 tracks. */
                     s->selection = i == RENDER_N64 ? RENDER_AUTO : (RendererId)i;
                 } else if (i == RENDER_PS1 || i == RENDER_PC || i == RENDER_SATURN) {
-                    s->automaticBase = (RendererId)i;
+                    s->ps1Selection = (RendererId)i;
                 }
                 return 1;
             }
@@ -158,7 +181,8 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
 
 void RenderSave(FILE *file, const RenderSettings *s)
 {
-    fprintf(file, "renderer = %s\nautomatic_renderer = %s\n", names[s->selection], names[s->automaticBase]);
+    fprintf(file, "ps1_renderer = %s\npc_renderer = %s\nn64_renderer = %s\nsaturn_renderer = %s\n",
+            names[s->ps1Selection], names[s->pcSelection], names[s->n64Selection], names[s->saturnSelection]);
     for (size_t i = 0; i < sizeof(options) / sizeof(options[0]); i++) {
         fprintf(file, "%s = %d\n", options[i].key, *(const int *)((const char *)s + options[i].offset));
     }

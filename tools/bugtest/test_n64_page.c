@@ -11,6 +11,8 @@ static int testSaturnDisc;
 int PortSaturnDisc(void) { return testSaturnDisc; }
 int PortOriginalTrack(void) { return -1; }
 int PortOriginalTrackIs64(void) { return 0; }
+int PortPcData(void) { return 0; }
+const struct Disc *PsxIoDisc(void) { return NULL; }
 POLY_G4 flare[SHIP_EXHAUSTS + PLASMA_EXHAUSTS][FLARE_RAYS][2];
 Trail Plasma[PLASMA_EXHAUSTS];
 Trail *shipTrails;

@@ -18,13 +18,15 @@ typedef struct SaturnRenderSettings {
     int quantizeVertices, affineTextures, colourPrecision, mesh, depth, originalSkyScroll, resample;
 } SaturnRenderSettings;
 typedef struct RenderSettings {
-    RendererId selection, automaticBase;
+    RendererId selection; /* runtime override; AUTO follows the loaded platform */
+    RendererId ps1Selection; /* PlayStation preference, including legacy automatic_renderer */
+    RendererId pcSelection, n64Selection, saturnSelection;
     Ps1RenderSettings ps1;
     PcRenderSettings pc;
     N64RenderSettings n64;
     SaturnRenderSettings saturn;
 } RenderSettings;
-#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, {1,1,1,1,0,0}, {1,1,1,1}, {1,1,1,1,1,1}, {1,1,1,1,0,0,0} }
+#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0}, {1,1,1,1}, {1,1,1,1,1,1}, {1,1,1,1,0,0,0} }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef struct RenderFrame { RenderSettings settings; RendererId id; int n64Track; } RenderFrame;

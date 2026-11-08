@@ -4,6 +4,10 @@
 
 PortSettings portSettings = {.render = RENDER_DEFAULTS};
 int PortOriginalTrackIs64(void) { return 0; }
+int PortOriginalTrack(void) { return -1; }
+int PortPcData(void) { return 0; }
+int PortSaturnDisc(void) { return 0; }
+const struct Disc *PsxIoDisc(void) { return NULL; }
 
 int main(int argc, char **argv)
 {

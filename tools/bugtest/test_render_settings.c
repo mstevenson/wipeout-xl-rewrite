@@ -15,8 +15,12 @@ static char *TestPrefPath(const char *org, const char *app)
 #include "../../platform/settings.c"
 #undef SDL_GetPrefPath
 PortConfig portConfig;
-static int n64;
+static int n64, saturnDisc, pcData, originalTrack = -1, discLoaded;
 int PortOriginalTrackIs64(void) { return n64; }
+int PortOriginalTrack(void) { return originalTrack; }
+int PortPcData(void) { assert(discLoaded); return pcData; }
+int PortSaturnDisc(void) { assert(discLoaded); return saturnDisc; }
+const struct Disc *PsxIoDisc(void) { return discLoaded ? (const struct Disc *)&discLoaded : NULL; }
 static void Load(const char *contents)
 {
     FILE *file = fopen(PortSettingsPath(), "w"); assert(file);
@@ -189,6 +193,51 @@ static void ProfileIsolation(void)
     puts("All renderer profiles isolate rasterization, depth and lighting from inactive controls and track selection: OK");
 }
 
+static void PlatformSelection(void)
+{
+    Load("renderer = auto\nautomatic_renderer = ps1\n");
+    discLoaded = 1;
+    assert(RenderCurrent()->id == RENDER_PS1);
+    saturnDisc = 1;
+    assert(RenderCommit() && RenderCurrent()->id == RENDER_SATURN);
+    n64 = 1;
+    assert(RenderCommit() && RenderCurrent()->id == RENDER_N64);
+    n64 = 0;
+    assert(RenderCommit() && RenderCurrent()->id == RENDER_SATURN);
+    originalTrack = 0;
+    assert(RenderCommit() && RenderCurrent()->id == RENDER_PS1);
+    originalTrack = -1;
+    saturnDisc = 0; pcData = 1;
+    assert(RenderCommit() && RenderCurrent()->id == RENDER_PC);
+    Load("renderer = pc\n"); /* Legacy global choice does not override Saturn's default. */
+    pcData = 0; saturnDisc = 1;
+    assert(RenderCommit() && RenderCurrent()->id == RENDER_SATURN);
+    Load("ps1_renderer = n64\nn64_renderer = saturn\nrenderer = pc\nautomatic_renderer = ps1\n"
+         "pc_renderer = ps1\nsaturn_renderer = pc\n");
+    assert(RenderCurrent()->id == RENDER_PC);
+    assert(portSettings.render.ps1Selection == RENDER_N64);
+    assert(portSettings.render.n64Selection == RENDER_SATURN);
+    assert(PortSettingsSave());
+    RenderSettings saved = portSettings.render;
+    PortSettingsLoad();
+    assert(!memcmp(&saved, &portSettings.render, sizeof(saved)));
+    assert(RenderCurrent()->id == RENDER_PC);
+    portSettings.render.n64Selection = RENDER_PS1;
+    assert(!RenderCommit()); /* Changing another platform does not reset the active frame. */
+    n64 = 1;
+    assert(RenderCommit() && RenderCurrent()->id == RENDER_PS1);
+    SDL_Environment *env = SDL_GetEnvironment();
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDERER", "saturn", true);
+    Load("saturn_renderer = pc\n");
+    assert(RenderCurrent()->id == RENDER_SATURN);
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDERER");
+    discLoaded = saturnDisc = pcData = n64 = 0;
+    Load("ps1_renderer = auto\npc_renderer = bad\nsaturn_renderer = -1\nn64_renderer = auto\n");
+    assert(portSettings.render.ps1Selection == RENDER_PS1 && portSettings.render.pcSelection == RENDER_PC);
+    assert(portSettings.render.saturnSelection == RENDER_SATURN && portSettings.render.n64Selection == RENDER_N64);
+    puts("Platform routing, imported tracks, migration precedence and independent persistence: OK");
+}
+
 int main(void)
 {
     Policies();
@@ -236,6 +285,8 @@ int main(void)
     assert(!RenderCommit());
     RenderDefaults(&portSettings.render, RENDER_PC);
     assert(portSettings.render.pc.bilinear && !portSettings.render.n64.divot && !portSettings.render.ps1.dither);
+    portSettings.render.selection = RENDER_AUTO;
+    portSettings.render.ps1Selection = RENDER_PC;
     assert(PortSettingsSave());
     char *saved = SDL_LoadFile(PortSettingsPath(), NULL); assert(saved);
     assert(!strstr(saved, "n64_depth"));
@@ -263,6 +314,7 @@ int main(void)
     n64 = 0;
     Load("renderer = bogus\nps1_dither = garbage\npc_depth = -1\n");
     assert(portSettings.render.selection == RENDER_AUTO && portSettings.render.ps1.dither && portSettings.render.pc.depth);
+    PlatformSelection();
     SaturnProfile();
     DisplayResampling();
     portConfig.hidden = 1; PortSettingsLoad();

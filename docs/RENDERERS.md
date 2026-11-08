@@ -1,12 +1,18 @@
 # Rendering profiles
 
-In **Graphics > Global renderer**, choose **PlayStation** (default), **PC** or **Sega Saturn**.
-**Use N64 renderer for Wipeout 64 tracks** is on by default and overrides that
-choice only on imported N64 tracks. **Active renderer** shows the committed
-frame's renderer. Selection changes rendering, not the game version or assets.
+**Graphics** shows a horizontal row of **PlayStation**, **PC**, **Nintendo 64**
+and **Sega Saturn** columns. Each selects the renderer profile to use for that
+platform, defaulting to its matching renderer. Saturn discs use the Saturn
+preference, PC discs/folders use the PC preference, and PlayStation discs use the
+PlayStation preference. Imported PlayStation and Wipeout 64 tracks use their own
+platform preferences, returning to the loaded disc's preference afterwards.
+**Active renderer** shows the committed frame's renderer. Selection changes
+rendering, not the game version or assets.
 
-Each profile keeps its settings and has its own reset button. The global and N64
-panels appear side by side when space allows; the N64 panel is dimmed when off.
+All four platform selectors stay visible. Below them, each renderer profile has
+its own controls and reset button. Profiles keep their settings; platforms
+choosing the same profile share those controls. The profile panels scroll
+horizontally in narrow windows and with larger fonts.
 Resolution, widescreen, frame rate, draw distance, fading and HD textures are shared.
 
 | Profile | Defaults |
@@ -37,9 +43,10 @@ and [N64 rendering](N64_RENDERING.md) for fidelity limits.
 
 ## Saturn profile
 
-Select **Sega Saturn** in the global renderer, or set `WIPEOUT_RENDERER=saturn`.
-It works with any loaded assets; loading a Saturn disc does not change the selection.
-The Wipeout 64 track override still takes priority when enabled.
+Loading a Saturn disc uses **Sega Saturn** by default. Choose another profile in
+the Sega Saturn column to override that platform, or choose the Saturn profile
+for another platform. `WIPEOUT_RENDERER=saturn` forces it for the run, including
+imported tracks. The profile works with any loaded assets.
 
 Independent controls are `saturn_quantize_vertices`, `saturn_affine_textures`,
 `saturn_colour_precision`, `saturn_mesh` (all default 1), and `saturn_depth` (default 0).
@@ -140,19 +147,23 @@ captures validate this implementation; they do not establish console equivalence
 
 | INI value | Meaning |
 | --- | --- |
-| `renderer = auto` | N64 override on; `automatic_renderer = ps1`, `pc` or `saturn` selects global renderer |
-| `renderer = ps1`, `pc` or `saturn` | Global renderer, N64 override off |
-| Old `renderer = n64` | Migrates to `auto` |
-| `ps1_*`, `pc_*`, `saturn_*`, `n64_*` | Independent profile settings; obsolete `n64_depth` ignored and no longer saved |
+| `ps1_renderer`, `pc_renderer`, `n64_renderer`, `saturn_renderer` | Profile for that platform: `ps1`, `pc`, `n64` or `saturn`; defaults to the matching profile |
+| Old `renderer = auto` or `n64` | `automatic_renderer` migrates to the PlayStation preference; N64 defaults to its own profile |
+| Old `renderer = ps1`, `pc` or `saturn` | Migrates to the PlayStation and N64 preferences (the old N64 override was off) |
+| `ps1_*`, `pc_*`, `saturn_*`, `n64_*` controls | Independent profile settings; obsolete `n64_depth` ignored and no longer saved |
 
-Old `pc_rendering` (preferred) or `smooth_textures` selects the global renderer
-when the N64 override is enabled. Old `depth_buffer` initializes PC depth.
-New keys win regardless of line order.
+Migration keeps existing profile controls. The newly independent PC and Saturn
+preferences default to their matching profiles. Old `pc_rendering` (preferred)
+or `smooth_textures` initializes the PlayStation preference when neither
+`automatic_renderer` nor `ps1_renderer` is present. Old `depth_buffer` initializes
+PC depth. New keys win regardless of line order.
 
-`WIPEOUT_RENDERER=ps1|pc|saturn` selects the global renderer and disables the override;
-`auto|n64` enables it. Legacy `WIPEOUT_PC_RENDERING` / `WIPEOUT_SMOOTH_TEXTURES`
-choose the global renderer only with the override enabled; `WIPEOUT_DEPTH_BUFFER`
-sets PC depth for that run. Hidden regression runs neither read nor save player settings.
+`WIPEOUT_RENDERER=ps1|pc|saturn` forces that renderer for the run; `auto|n64`
+follows platform preferences. Legacy `WIPEOUT_PC_RENDERING` /
+`WIPEOUT_SMOOTH_TEXTURES` choose the PlayStation preference;
+`WIPEOUT_DEPTH_BUFFER` sets PC depth for that run. The forced renderer is not
+saved over platform preferences. Hidden regression runs neither read nor save
+player settings.
 
 ## Implementation
 

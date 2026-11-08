@@ -7,6 +7,10 @@
 PortSettings portSettings;
 static int n64Track;
 extern "C" int PortOriginalTrackIs64(void) { return n64Track; }
+extern "C" int PortOriginalTrack(void) { return -1; }
+extern "C" int PortPcData(void) { return 0; }
+extern "C" int PortSaturnDisc(void) { return 0; }
+extern "C" const struct Disc *PsxIoDisc(void) { return nullptr; }
 static bool focusSelector;
 static float windowWidth = 800;
 static void Frame(int count = 3)
@@ -27,38 +31,60 @@ static void Key(ImGuiKey key)
     ImGui::GetIO().AddKeyEvent(key, true); Frame();
     ImGui::GetIO().AddKeyEvent(key, false); Frame();
 }
-static void SelectRenderer(bool pc)
-{
-    focusSelector = true; Frame();
-    Key(ImGuiKey_Enter); Key(pc ? ImGuiKey_DownArrow : ImGuiKey_UpArrow); Key(ImGuiKey_Enter);
-    RendererId expected = pc ? RENDER_PC : RENDER_PS1;
-    assert(portSettings.render.automaticBase == expected);
-    assert(portSettings.render.selection == RENDER_AUTO || portSettings.render.selection == expected);
-}
-static void Layout(int columns)
+static ImGuiTable *Table(const char *name = "Renderer settings")
 {
     ImGuiWindow *w = ImGui::FindWindowByName("Graphics");
-    ImGuiTable *table = ImGui::TableFindByID(ImHashStr("Renderer settings", 0, w->IDStack[0]));
-    assert(table && table->ColumnsCount == columns);
-    for (int i = 0; i < columns; i++) {
-        assert(table->Columns[i].ContentMaxXUnfrozen <= table->Columns[i].MaxX);
+    return ImGui::TableFindByID(ImHashStr(name, 0, w->IDStack[0]));
+}
+static void Layout()
+{
+    ImGuiTable *table = Table();
+    assert(table && table->ColumnsCount == 4);
+    ImGuiTable *selectors = Table("Renderer platforms");
+    assert(selectors && selectors->ColumnsCount == 4);
+    for (int i = 0; i < 4; i++) assert(selectors->Columns[i].IsVisibleX);
+    for (int i = 0; i < 4; i++) {
+        float minimum = ImGui::CalcTextSize("VI divot filtering (approximate)").x +
+            ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
+        assert(table->Columns[i].WidthGiven >= minimum);
+        if (table->Columns[i].IsVisibleX)
+            assert(table->Columns[i].ContentMaxXUnfrozen <= table->Columns[i].MaxX);
+        if (i) assert(table->Columns[i].MinX >= table->Columns[i-1].MaxX);
     }
 }
-static ImGuiID WidgetId(const char *label, RendererId profile = RENDER_AUTO)
+static ImGuiID WidgetId(const char *label, int platform, RendererId profile = RENDER_AUTO)
 {
-    ImGuiWindow *w = ImGui::FindWindowByName("Graphics");
-    int id = profile;
-    if (profile == RENDER_AUTO) return ImHashStr(label, 0, w->IDStack[0]);
-    ImGuiID table = ImHashStr("Renderer settings", 0, w->IDStack[0]);
-    ImGuiID scope = ImHashData(&id, sizeof(id), table);
+    ImGuiID table = Table(profile == RENDER_AUTO ? "Renderer platforms" : "Renderer settings")->ID;
+    ImGuiID scope = ImHashData(&platform, sizeof(platform), table);
+    if (profile != RENDER_AUTO) {
+        int id = profile;
+        scope = ImHashData(&id, sizeof(id), scope);
+    }
     return ImHashStr(label, 0, scope);
 }
-static void Activate(const char *label, RendererId profile = RENDER_AUTO)
+static void Focus(const char *label, int platform, RendererId profile = RENDER_AUTO)
 {
-    ImGuiID target = WidgetId(label, profile);
-    for (int i = 0; i < 32 && ImGui::GetCurrentContext()->NavId != target; i++) Key(ImGuiKey_Tab);
+    ImGuiID target = WidgetId(label, platform, profile);
+    if (profile == RENDER_AUTO && ImGui::GetCurrentContext()->NavWindow == Table()->InnerWindow)
+        Key(ImGuiKey_Escape);
+    for (int i = 0; i < 100 && ImGui::GetCurrentContext()->NavId != target; i++) {
+        if (profile != RENDER_AUTO && ImGui::GetCurrentContext()->NavId == Table()->ID) Key(ImGuiKey_Enter);
+        else Key(ImGuiKey_Tab);
+    }
+    if (ImGui::GetCurrentContext()->NavId != target)
+        fprintf(stderr, "Missing %s platform %d profile %d: wanted %x, nav %x, table %x, inner %s\n",
+                label, platform, profile, target, ImGui::GetCurrentContext()->NavId, Table()->ID, Table()->InnerWindow->Name);
     assert(ImGui::GetCurrentContext()->NavId == target);
+}
+static void Activate(const char *label, int platform, RendererId profile)
+{
+    Focus(label, platform, profile);
     Key(ImGuiKey_Space);
+}
+static void SelectNext(int platform)
+{
+    Focus("##Renderer", platform);
+    Key(ImGuiKey_Enter); Key(ImGuiKey_DownArrow); Key(ImGuiKey_Enter);
 }
 int main()
 {
@@ -68,73 +94,38 @@ int main()
     io.IniFilename = nullptr; io.ConfigNavCursorVisibleAlways = true; io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     unsigned char *pixels; int w, h;
     io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
-    focusSelector = true; Frame();
-    assert(portSettings.render.selection == RENDER_AUTO);
-    Layout(2);
-    Activate("PS1 vertex snapping", RENDER_PS1);
+    focusSelector = true; Frame(); Layout();
+    assert(RenderCurrent()->id == RENDER_PS1);
+    Activate("PS1 vertex snapping", 0, RENDER_PS1);
     assert(!portSettings.render.ps1.quantizeVertices && portSettings.render.ps1.dither);
-    assert(!portSettings.render.ps1.resample);
-    Activate("Linear display resampling", RENDER_PS1);
-    assert(portSettings.render.ps1.resample);
-    Activate("Linear display resampling", RENDER_PS1);
-    assert(!portSettings.render.ps1.resample && portSettings.render.pc.resample);
-    SelectRenderer(true);
-    assert(RenderCurrent()->id == RENDER_PC);
+    SelectNext(0);
+    assert(portSettings.render.ps1Selection == RENDER_PC && RenderCurrent()->id == RENDER_PC);
     n64Track = 1; RenderCommit(); Frame();
     assert(RenderCurrent()->id == RENDER_N64);
-    /* PC controls remain visible while an N64 track is using the override. */
-    Activate("Bilinear texture filtering", RENDER_PC);
+    Activate("Bilinear texture filtering", 1, RENDER_PC);
     assert(!portSettings.render.pc.bilinear && !portSettings.render.ps1.quantizeVertices);
-    Activate("Linear display resampling", RENDER_PC);
-    assert(!portSettings.render.pc.resample && portSettings.render.n64.resample);
-    Activate("VI divot filtering (approximate)", RENDER_N64);
-    assert(!portSettings.render.n64.divot && !portSettings.render.pc.bilinear);
-    Activate("Restore renderer defaults", RENDER_PC);
-    assert(portSettings.render.pc.bilinear && !portSettings.render.n64.divot && !portSettings.render.ps1.quantizeVertices);
-    assert(portSettings.render.pc.resample && !portSettings.render.ps1.resample);
-    Activate("Linear display resampling", RENDER_N64);
-    Key(ImGuiKey_Tab);
-    assert(ImGui::GetCurrentContext()->NavId == WidgetId("Restore renderer defaults", RENDER_N64));
-    /* No depth checkbox between the final N64 control and the reset button. */
-    Key(ImGuiKey_Space);
-    assert(portSettings.render.n64.divot && portSettings.render.n64.resample && !portSettings.render.ps1.quantizeVertices);
-    Activate("Use N64 renderer for Wipeout 64 tracks");
-    assert(portSettings.render.selection == RENDER_PC && RenderCurrent()->id == RENDER_PC);
-    SelectRenderer(false);
-    assert(RenderCurrent()->id == RENDER_PS1);
-    for (int i = 0; i < 20; i++) {
-        Key(ImGuiKey_Tab);
-        assert(ImGui::GetCurrentContext()->NavId != WidgetId("Three-point texture filtering", RENDER_N64));
-        assert(ImGui::GetCurrentContext()->NavId != WidgetId("Restore renderer defaults", RENDER_N64));
-    }
-    Activate("Use N64 renderer for Wipeout 64 tracks");
-    assert(portSettings.render.selection == RENDER_AUTO && RenderCurrent()->id == RENDER_N64);
-    Activate("PS1 vertex snapping", RENDER_PS1);
-    assert(portSettings.render.ps1.quantizeVertices);
-    n64Track = 0; RenderCommit(); Frame();
-    assert(RenderCurrent()->id == RENDER_PS1);
-    windowWidth = 360; Frame(); Layout(1);
-    SelectRenderer(true);
-    Activate("VI divot filtering (approximate)", RENDER_N64);
-    assert(!portSettings.render.n64.divot && RenderCurrent()->id == RENDER_PC);
-    Layout(1);
-    windowWidth = 800; Frame(); Layout(2);
-    /* Font scaling also triggers the stacked layout before controls are clipped. */
-    io.FontGlobalScale = 2; Frame(); Layout(1);
-    io.FontGlobalScale = 1; Frame(); Layout(2);
-    focusSelector = true; Frame();
-    Key(ImGuiKey_Enter); Key(ImGuiKey_DownArrow); Key(ImGuiKey_Enter);
-    assert(portSettings.render.automaticBase == RENDER_SATURN && RenderCurrent()->id == RENDER_SATURN);
-    Activate("Checkerboard transparency", RENDER_SATURN);
+    Activate("VI divot filtering (approximate)", 2, RENDER_N64);
+    assert(!portSettings.render.n64.divot);
+    Activate("Restore renderer defaults", 1, RENDER_PC);
+    assert(portSettings.render.pc.bilinear && !portSettings.render.n64.divot);
+    SelectNext(2);
+    assert(portSettings.render.n64Selection == RENDER_SATURN && RenderCurrent()->id == RENDER_SATURN);
+    Activate("Checkerboard transparency", 3, RENDER_SATURN);
     assert(!RenderCurrent()->settings.saturn.mesh);
-    Activate("Original Saturn sky scrolling", RENDER_SATURN);
+    Activate("Original Saturn sky scrolling", 3, RENDER_SATURN);
     assert(RenderCurrent()->settings.saturn.originalSkyScroll);
-    Activate("Linear display resampling", RENDER_SATURN);
+    Activate("Linear display resampling", 3, RENDER_SATURN);
     assert(RenderCurrent()->settings.saturn.resample && !portSettings.render.ps1.resample);
-    Activate("Restore renderer defaults", RENDER_SATURN);
+    Activate("Restore renderer defaults", 3, RENDER_SATURN);
     assert(portSettings.render.saturn.mesh && !RenderCurrent()->settings.saturn.originalSkyScroll);
-    assert(!portSettings.render.saturn.resample && !portSettings.render.ps1.resample);
-    windowWidth = 360; Frame(); Layout(1);
+    assert(!portSettings.render.saturn.resample && !portSettings.render.ps1.quantizeVertices);
+    n64Track = 0; RenderCommit(); Frame();
+    assert(RenderCurrent()->id == RENDER_PC);
+    windowWidth = 360; Frame(); Layout();
+    Activate("Bilinear texture filtering", 1, RENDER_PC);
+    assert(!portSettings.render.pc.bilinear);
+    io.FontGlobalScale = 2; Frame(); Layout();
+    io.FontGlobalScale = 1; windowWidth = 1600; Frame(); Layout();
     ImGui::DestroyContext();
-    puts("Renderer UI: global selector, track-specific N64 toggle, independent panels/reset and responsive layout: OK");
+    puts("Renderer UI: horizontal platform selectors, shared profiles, independent routing and reset: OK");
 }
