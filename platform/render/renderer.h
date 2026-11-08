@@ -15,7 +15,7 @@ typedef struct N64RenderSettings {
     int threePoint, colourPrecision, dither, dedither, divot, resample, scale;
 } N64RenderSettings;
 typedef struct SaturnRenderSettings {
-    int quantizeVertices, affineTextures, colourPrecision, mesh, depth, originalSkyScroll, resample, scale;
+    int quantizeVertices, affineTextures, colourPrecision, mesh, depth, cameraAlignedSky, resample, scale;
 } SaturnRenderSettings;
 typedef struct RenderSettings {
     RendererId selection; /* runtime override; AUTO follows the loaded platform */

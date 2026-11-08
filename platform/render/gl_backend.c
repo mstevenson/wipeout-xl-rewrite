@@ -1099,7 +1099,7 @@ static void SaturnBackground(const GpuDrawState *state)
     int left = areaWide ? -wideMargin : areaX;
     int right = areaWide ? SCREEN_COLUMNS + wideMargin : areaX + areaW;
     RenderSaturnBackground(picture, palette, width, height, SaturnNativeSkyRevision(),
-        state, RenderCurrent()->settings.saturn.originalSkyScroll, left, areaY, right, areaY + areaH,
+        state, !RenderCurrent()->settings.saturn.cameraAlignedSky, left, areaY, right, areaY + areaH,
         areaX + areaW*.5f, areaY + areaH*.5f,
         areaWide ? TargetWidth(WideWidth()) : TargetWidth(VRAM_WIDTH), TargetHeight(VRAM_HEIGHT),
         areaWide ? WideOrigin(wideMargin) : 0, ScaleX(), ScaleY(), scale);

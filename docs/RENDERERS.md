@@ -40,7 +40,7 @@ linked games share the main player's presentation policy.
 | Profile | Defaults |
 | --- | --- |
 | PS1 | Vertex snapping, affine textures, RGB5 precision and eligible primitive dithering on; depth enhancement off (ordering tables); nearest display scaling |
-| Saturn | Vertex snapping, affine textures, undithered RGB5 colour and checkerboard transparency on; depth enhancement off; nearest display scaling |
+| Saturn | Vertex snapping, affine textures, undithered RGB5 colour and checkerboard transparency on; original sky scrolling; depth enhancement off; nearest display scaling |
 | PC | Bilinear texture filtering, scenery/ship lighting, depth and linear display resampling on |
 | N64 | Three-point filtering, RGB5 precision, magic-square dithering, VI dedithering, approximate divot filtering and linear display resampling on; depth always on |
 
@@ -132,19 +132,21 @@ Ships use the recovered four-corner shade-table recipe: neutral, road light,
 road light minus four, and RGB(12,12,12).
 
 The race sky uses the original 2048×512 VDP2 cell-map panorama and colour RAM,
-without the compatibility cylinder's cropping or downsampling. By default, the
-panorama follows the world camera: the shader maps perspective viewing rays,
-using the captured focal length and inverse camera rotation, to panorama angles.
-Sky landmarks then move with the scenery through yaw, pitch and roll. Enable
-**Graphics > Sega Saturn > Original Saturn sky scrolling** to use the game's
-faster, flat-screen scrolling. The setting is saved as `saturn_original_sky_scroll`.
-The original RBG0 transform uses heading/2, vertical offset 120−pitch/3, roll,
-unit scale and pivot (176,120), with 352 Saturn dots mapped onto the host's
-320-dot scene. It keeps console-pixel sampling at higher resolutions.
-`WIPEOUT_SATURN_VDP2_REFERENCE=1` forces this mode independently of the setting
-and the VDP1 CPU reference switch. In both modes the sky pose interpolates
-between game frames with the world's camera-cut guard, and the sky draws
-behind geometry and outside depth testing.
+without the compatibility cylinder's cropping or downsampling. The default is
+the original Saturn game's faster, flat-screen scrolling. Its RBG0 transform
+uses heading/2, vertical offset 120−pitch/3, roll, unit scale and pivot (176,120),
+with 352 Saturn dots mapped onto the host's 320-dot scene. It keeps console-pixel
+sampling at higher resolutions.
+Enable **Graphics > Sega Saturn > Camera-aligned sky (enhancement)** to make
+sky landmarks move with the scenery through yaw, pitch and roll. The shader
+maps perspective viewing rays to panorama angles using the captured focal
+length and inverse camera rotation. The setting is saved as
+`saturn_camera_aligned_sky`. Settings files with only the retired
+`saturn_original_sky_scroll` key start with the enhancement off.
+`WIPEOUT_SATURN_VDP2_REFERENCE=1` forces original scrolling even when the
+enhancement is enabled, independently of the VDP1 CPU reference switch.
+In both modes the sky pose interpolates between game frames with the world's
+camera-cut guard, and the sky draws behind geometry and outside depth testing.
 
 Disable affine mapping to use the compatibility geometry with perspective
 correction. Native model quads snap to the selected render grid and use RGB555 colour.

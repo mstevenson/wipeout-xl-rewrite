@@ -166,7 +166,7 @@ static const struct {
 #define OPTION(key, field) {key, offsetof(RenderSettings, field)}
     OPTION("saturn_quantize_vertices", saturn.quantizeVertices), OPTION("saturn_affine_textures", saturn.affineTextures),
     OPTION("saturn_colour_precision", saturn.colourPrecision), OPTION("saturn_mesh", saturn.mesh),
-    OPTION("saturn_depth", saturn.depth), OPTION("saturn_original_sky_scroll", saturn.originalSkyScroll),
+    OPTION("saturn_depth", saturn.depth), OPTION("saturn_camera_aligned_sky", saturn.cameraAlignedSky),
     OPTION("saturn_resample", saturn.resample),
     OPTION("ps1_quantize_vertices", ps1.quantizeVertices), OPTION("ps1_affine_textures", ps1.affineTextures),
     OPTION("ps1_colour_precision", ps1.colourPrecision), OPTION("ps1_dither", ps1.dither), OPTION("ps1_depth", ps1.depth),

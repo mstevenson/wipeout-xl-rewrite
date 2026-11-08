@@ -323,14 +323,16 @@ screen centre, heading/2 with the 352:320 dot mapping moves the sky about
 296 pixels/radian, versus the world's 160 pixels/radian. The user explicitly
 selected camera-following motion over literal Saturn scrolling.
 
-The default sky shader now unprojects each scene pixel using the captured GTE
+The camera-aligned sky shader unprojects each scene pixel using the captured GTE
 focal length, applies the inverse view rotation, and samples panorama longitude
 and elevation. It retains the original artwork, neutral sample (176,240), and
 angular extents. It does not simply reduce the heading multiplier: a complete
 camera revolution still wraps through exactly one panorama, with no orientation
 seam. Pitch and roll use the same ray rotation. Widescreen adds viewing rays
-without changing their angular scale. The previous flat mapping remains available
-with `WIPEOUT_SATURN_VDP2_REFERENCE=1`, independently of the VDP1 software reference.
+without changing their angular scale. The Saturn profile defaults to the original
+flat mapping and offers camera alignment as an enhancement.
+`WIPEOUT_SATURN_VDP2_REFERENCE=1` forces flat mapping independently of the
+enhancement and the VDP1 software reference.
 This is an intentional camera adaptation, not a claim of literal VDP2 equivalence.
 
 The sky pose also interpolates between game frames. A single previous sky pose

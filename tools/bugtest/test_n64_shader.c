@@ -574,7 +574,7 @@ static void NativeSaturn(void)
     int oldX=areaX,oldY=areaY,oldW=areaW,oldH=areaH;
     portSettings.render = (RenderSettings)RENDER_DEFAULTS;
     portSettings.render.selection = RENDER_SATURN;
-    portSettings.render.saturn.originalSkyScroll = 1; RenderCommit();
+    RenderCommit();
     areaX=0;areaY=100;areaW=8;areaH=8;
     glDisable(GL_SCISSOR_TEST);glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);
     SaturnNativePoly poly = {.mode=0xc4, .colour=0x800a, .corners={0,1,2,3},
@@ -679,7 +679,7 @@ static void NativeSaturn(void)
             }
         }
     }
-    portSettings.render.saturn.originalSkyScroll = 0; RenderCommit();
+    portSettings.render.saturn.cameraAlignedSky = 1; RenderCommit();
     /* Independent forward projection of a fixed world landmark. The sky must
        put it at the same pixel as world geometry, including off-axis views,
        combined pitch/roll, alternate focal lengths and a complete yaw turn. */
@@ -928,6 +928,7 @@ static void SaturnGpuReference(void)
     uint8_t ramp[32];uint16_t palette[256]={0};
     for(int x=0;x<32;x++) { ramp[x]=(uint8_t)x;palette[x]=(uint16_t)(0x8000|x); }
     SaturnNativeSky(ramp,palette,32,1);
+    portSettings.render.saturn.cameraAlignedSky=1;RenderCommit();
     for(int reference=0;reference<2;reference++) {
         if(reference) setenv("WIPEOUT_SATURN_VDP2_REFERENCE","1",1);
         GpuDrawState sky={.saturnSky=1,.skyFocal=160};

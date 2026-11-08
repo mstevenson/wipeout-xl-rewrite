@@ -72,9 +72,9 @@ static bool SaturnSettings(SaturnRenderSettings *s)
         "Turn off for smooth transparency; additive light effects contribute half their intensity.");
     changed |= Check("Depth buffer (enhancement)", &s->depth,
         "Uses depth testing to reduce draw-order errors. Disabled by default for ordering-table visibility.");
-    changed |= Check("Original Saturn sky scrolling", &s->originalSkyScroll,
-        "Uses the original Saturn game's faster background scrolling on Saturn tracks. "
-        "Disable to match the sky's motion to the world camera.");
+    changed |= Check("Camera-aligned sky (enhancement)", &s->cameraAlignedSky,
+        "Matches the sky's motion to the world camera on Saturn tracks. "
+        "Disable for the original Saturn game's faster background scrolling.");
     changed |= DisplaySettings(&s->resample);
     return changed;
 }

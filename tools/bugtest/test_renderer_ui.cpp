@@ -120,12 +120,13 @@ int main()
     assert(portSettings.render.n64Selection == RENDER_SATURN && RenderCurrent()->id == RENDER_SATURN);
     Activate("Checkerboard transparency", 3, RENDER_SATURN);
     assert(!RenderCurrent()->settings.saturn.mesh);
-    Activate("Original Saturn sky scrolling", 3, RENDER_SATURN);
-    assert(RenderCurrent()->settings.saturn.originalSkyScroll);
+    assert(!RenderCurrent()->settings.saturn.cameraAlignedSky);
+    Activate("Camera-aligned sky (enhancement)", 3, RENDER_SATURN);
+    assert(RenderCurrent()->settings.saturn.cameraAlignedSky);
     Activate("Linear display resampling", 3, RENDER_SATURN);
     assert(RenderCurrent()->settings.saturn.resample && !portSettings.render.ps1.resample);
     Activate("Restore renderer defaults", 3, RENDER_SATURN);
-    assert(portSettings.render.saturn.mesh && !RenderCurrent()->settings.saturn.originalSkyScroll);
+    assert(portSettings.render.saturn.mesh && !RenderCurrent()->settings.saturn.cameraAlignedSky);
     assert(!portSettings.render.saturn.resample && !portSettings.render.ps1.quantizeVertices);
     n64Track = 0; RenderCommit(); Frame();
     assert(RenderCurrent()->id == RENDER_PC);

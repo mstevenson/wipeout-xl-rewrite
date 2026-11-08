@@ -70,14 +70,14 @@ static void SaturnProfile(void)
 {
     Load("renderer = saturn\nsaturn_depth = 1\nsaturn_mesh = 0\n");
     assert(RenderCurrent()->id == RENDER_SATURN && RenderDepth(RenderCurrent()));
-    assert(!RenderCurrent()->settings.saturn.originalSkyScroll);
+    assert(!RenderCurrent()->settings.saturn.cameraAlignedSky);
     RenderMaterial m = {.textured = 1, .spatial = 1, .dither = 1};
     RenderStyle style = RenderPrepare(RenderCurrent(), &m);
     assert(style.filter == RENDER_SAMPLE_SATURN_ALPHA && !(style.shade & SHADE_DITHER));
     assert((style.shade & (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR)) ==
            (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR));
-    assert(RenderSet(&portSettings.render, "saturn_original_sky_scroll", "1"));
-    assert(RenderCommit() && RenderCurrent()->settings.saturn.originalSkyScroll);
+    assert(RenderSet(&portSettings.render, "saturn_camera_aligned_sky", "1"));
+    assert(RenderCommit() && RenderCurrent()->settings.saturn.cameraAlignedSky);
     assert(PortSettingsSave());
     RenderSettings saved = portSettings.render;
     PortSettingsLoad();
@@ -88,12 +88,16 @@ static void SaturnProfile(void)
     RenderDefaults(&portSettings.render, RENDER_SATURN);
     assert(!portSettings.render.ps1.dither && RenderCommit());
     assert(!RenderDepth(RenderCurrent()));
-    assert(!RenderCurrent()->settings.saturn.originalSkyScroll);
+    assert(!RenderCurrent()->settings.saturn.cameraAlignedSky);
     assert(RenderPrepare(RenderCurrent(), &m).filter == RENDER_SAMPLE_MESH);
     m.ui = 1;
     assert(RenderPrepare(RenderCurrent(), &m).filter == 0);
     m.n64 = 1;
     assert(RenderPrepare(RenderCurrent(), &m).shade & SHADE_N64);
+    Load("renderer = saturn\nsaturn_original_sky_scroll = 0\n");
+    assert(!RenderCurrent()->settings.saturn.cameraAlignedSky);
+    Load("renderer = saturn\nsaturn_original_sky_scroll = 1\n");
+    assert(!RenderCurrent()->settings.saturn.cameraAlignedSky);
     Load("renderer = auto\nautomatic_renderer = saturn\n");
     n64 = 1; RenderCommit(); assert(RenderCurrent()->id == RENDER_N64);
     n64 = 0; RenderCommit(); assert(RenderCurrent()->id == RENDER_SATURN);
