@@ -266,13 +266,13 @@ static void ShieldOrdering(void)
 
 static void ClippedInterpolation(void)
 {
-    /* One corner is cut away. Both edge directions must agree at the new corners.
-       At z=8 -> 32, the z=16 cut is 1/3 along the view-space edge but 2/3
-       along its screen projection: RGB/affine UV must be 170, not 85. */
+    /* Both edge directions must agree at the cut. At z=8 -> 32, the cut is
+       1/3 along the view-space edge and 2/3 along its screen projection.
+       At or behind the eye plane, UVs use the view-space fraction. */
     const struct { float z, affine, perspective; int r, g, b, alpha; } cases[] = {
         {8, 170, 85, 170, 85, 150, 85},
-        {0, 255, 127.5f, 255, 0, 210, 128},
-        {-8, 306, 153, 255, 0, 246, 153}
+        {0, 127.5f, 127.5f, 255, 0, 210, 128},
+        {-8, 153, 153, 255, 0, 246, 153}
     };
     GteWriteControl(26, 32);
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {

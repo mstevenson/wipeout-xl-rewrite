@@ -1418,20 +1418,25 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back,
 
     for (i = 0; i < 3; i++) {
         const int j = (i + 1) % 3;
-        const int aIn = in[i].view[2] >= plane, bIn = in[j].view[2] >= plane;
+        const double aZ = in[i].view[2], bZ = in[j].view[2];
+        const int aIn = aZ >= plane, bIn = bZ >= plane;
 
         if (aIn) {
             out[cut++] = in[i];
         }
         if (aIn != bIn) {
-            double t = (plane - in[i].view[2]) / (in[j].view[2] - in[i].view[2]);
-            /* Screen-linear attributes use the projected edge fraction. This form
-               also works with a corner on/behind the eye plane, without projecting it. */
-            double screen = t * in[j].view[2] / plane;
-            /* Native road tiles use perspective-correct sampling, including
-               edges cut by the host near plane. */
-            double uv = (shade & SHADE_AFFINE_UV) && !(draw->saturn && draw->saturn->trackTile) ? screen : t;
+            double t = (plane - aZ) / (bZ - aZ);
+            double screen = t * bZ / plane;
+            double uv = t;
             double rgb = shade & SHADE_AFFINE_COLOUR ? screen : t;
+
+            /* An edge that reaches the eye plane has no finite screen-space
+               segment. Use its view-space UV at the cut to stay within the tile.
+               Native Saturn road tiles also use view-space UVs when clipped. */
+            if ((shade & SHADE_AFFINE_UV) && aZ > 0.0 && bZ > 0.0 &&
+                !(draw->saturn && draw->saturn->trackTile)) {
+                uv = screen;
+            }
 
             out[cut] = in[i];
             for (k = 0; k < 3; k++) {
