@@ -25,6 +25,13 @@ static bool Check(const char *label, int *value, const char *tooltip)
     return true;
 }
 
+static bool DisplaySettings(int *resample)
+{
+    return Check("Linear display resampling", resample,
+        "Blends neighbouring pixels when scaling the final image to the window, softening the scene and HUD. "
+        "Disable for sharp, nearest-neighbour scaling. Independent of texture filtering.");
+}
+
 static bool Ps1Settings(Ps1RenderSettings *s)
 {
     bool changed = Check("PS1 vertex snapping", &s->quantizeVertices,
@@ -44,6 +51,7 @@ static bool Ps1Settings(Ps1RenderSettings *s)
     changed |= Check("Depth buffer (enhancement)", &s->depth,
         "Uses polygon depth to help nearer surfaces hide farther ones, reducing draw-order errors. "
         "Disable to use the game's original ordering tables for visibility.");
+    changed |= DisplaySettings(&s->resample);
     return changed;
 }
 
@@ -65,6 +73,7 @@ static bool SaturnSettings(SaturnRenderSettings *s)
     changed |= Check("Original Saturn sky scrolling", &s->originalSkyScroll,
         "Uses the original Saturn game's faster background scrolling on Saturn tracks. "
         "Disable to match the sky's motion to the world camera.");
+    changed |= DisplaySettings(&s->resample);
     return changed;
 }
 
@@ -79,6 +88,7 @@ static bool PcSettings(PcRenderSettings *s)
     changed |= Check("Depth buffer", &s->depth,
         "Uses polygon depth to help nearer surfaces hide farther ones, reducing draw-order errors. "
         "Disable to use ordering-table visibility.");
+    changed |= DisplaySettings(&s->resample);
     return changed;
 }
 
@@ -101,9 +111,7 @@ static bool N64Settings(N64RenderSettings *s)
     changed |= Check("VI divot filtering (approximate)", &s->divot,
         "Approximates the N64 Video Interface's removal of isolated pixel gaps by filtering high-contrast "
         "horizontal spikes. Also affects the race HUD and can soften small details.");
-    changed |= Check("Linear display resampling", &s->resample,
-        "Blends neighbouring pixels when scaling the final image to the window, softening the scene and HUD. "
-        "Disable for sharp, nearest-neighbour scaling. Independent of texture filtering.");
+    changed |= DisplaySettings(&s->resample);
     return changed;
 }
 

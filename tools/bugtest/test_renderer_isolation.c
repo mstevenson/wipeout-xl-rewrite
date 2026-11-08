@@ -52,11 +52,43 @@ int main(void)
         assert(!scene->program && !isProgram(program));
         assert(glGetError() == GL_NO_ERROR);
     }
+    /* Upscale a hard black/white edge: nearest must retain only source colours,
+       while linear must blend the two pixels on either side of the boundary. */
+    for (int y = 0; y < 16; y++) {
+        for (int x = 0; x < 16; x++) {
+            int offset = (y * 16 + x) * 4;
+            pixels[offset] = pixels[offset + 1] = pixels[offset + 2] = x < 4 ? 0 : 255;
+            pixels[offset + 3] = 255;
+        }
+    }
+    glBindTexture(GL_TEXTURE_2D, textures[0]);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    present.revision++;
+    present.race = 0;
+    present.right = present.bottom = 8;
+    for (int linear = 0; linear <= 1; linear++) {
+        settings.TEST_PROFILE.resample = linear;
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffers[1]);
+        pipeline->present(&settings.TEST_PROFILE, &present);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffers[1]);
+        glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        for (int x = 0; x < 16; x++) {
+            int expected = x < 8 ? 0 : 255;
+            if (linear && x == 7) expected = 64;
+            if (linear && x == 8) expected = 191;
+            for (int c = 0; c < 3; c++) {
+                int actual = pixels[(8 * 16 + x) * 4 + c];
+                assert(actual >= expected - 1 && actual <= expected + 1);
+            }
+        }
+        assert(glGetError() == GL_NO_ERROR);
+    }
+    pipeline->destroy();
     glDeleteTextures(2, textures);
     glDeleteFramebuffers(2, framebuffers);
     SDL_GL_DestroyContext(context);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    puts("Standalone renderer compilation, presentation and resource lifecycle: OK");
+    puts("Standalone renderer compilation, nearest/linear display scaling and resource lifecycle: OK");
     return 0;
 }

@@ -11,15 +11,21 @@ Resolution, widescreen, frame rate, draw distance, fading and HD textures are sh
 
 | Profile | Defaults |
 | --- | --- |
-| PS1 | Vertex snapping, affine textures, RGB5 precision and eligible primitive dithering on; depth enhancement off (ordering tables) |
+| PS1 | Vertex snapping, affine textures, RGB5 precision and eligible primitive dithering on; depth enhancement off (ordering tables); nearest display scaling |
 | Saturn | Vertex snapping, affine textures, undithered RGB5 colour and checkerboard transparency on; depth enhancement off; nearest display scaling |
-| PC | Bilinear filtering, scenery/ship lighting and depth on |
+| PC | Bilinear texture filtering, scenery/ship lighting, depth and linear display resampling on |
 | N64 | Three-point filtering, RGB5 precision, magic-square dithering, VI dedithering, approximate divot filtering and linear display resampling on; depth always on |
 
 Snapping and colour precision are independent. Dithering requires RGB5 precision;
 N64 dedithering does too. Disabled dependencies retain their saved values.
 Turning texture filtering off selects nearest sampling. PC lighting is independent
 of filtering, perspective mapping and depth.
+
+Each profile has a **Linear display resampling** checkbox. Enable it to blend
+neighbouring pixels when scaling the final image to the window; disable it for
+sharp nearest-neighbour scaling. This affects the scene and HUD independently of
+texture filtering. The saved keys are `ps1_resample`, `pc_resample`,
+`saturn_resample` and `n64_resample`. Missing keys retain the defaults above.
 
 Profiles control all materials, including full-colour pages and glyphs, while
 preserving source palette, addressing, modulation and transparency encodings.
@@ -39,9 +45,9 @@ Independent controls are `saturn_quantize_vertices`, `saturn_affine_textures`,
 `saturn_colour_precision`, `saturn_mesh` (all default 1), and `saturn_depth` (default 0).
 Textures use nearest sampling. RGB555 output is undithered, with each five-bit
 channel shifted into the high bits of an eight-bit channel (0–248). Presentation
-copies these values directly as sRGB with nearest sampling, including screenshot
-readback. **Checkerboard transparency**
-draws mesh effects on alternating console pixels. Turn it off (`saturn_mesh = 0`)
+copies these values directly as sRGB with nearest sampling by default, including
+screenshot readback. Enable `saturn_resample` for linear display scaling.
+**Checkerboard transparency** draws mesh effects on alternating console pixels. Turn it off (`saturn_mesh = 0`)
 to blend the same effects at half coverage, including ship shadows, native flares
 and world effects inferred from half, additive and quarter-additive blending.
 Compatibility light effects retain their additive operation on covered pixels;

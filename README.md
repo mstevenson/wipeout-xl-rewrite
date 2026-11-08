@@ -180,6 +180,9 @@ unchecked, those tracks also use the global renderer. The selected global render
 settings and N64 settings appear side by side, stacking in narrow windows.
 N64 settings remain visible, dimmed when the checkbox is off. Each profile has
 independently saved controls and its own restore-defaults button.
+Each profile includes **Linear display resampling**: turn it off for sharp pixels
+when upscaling the final image, or on for smooth scaling. It defaults to on for
+PC and N64, and off for PS1 and Saturn, independently of texture filtering.
 Saturn exposes pixel snapping, affine mapping, undithered RGB5 colour and optional depth.
 Turn off **Checkerboard transparency** in the Saturn settings for smooth transparency at half coverage.
 Set `WIPEOUT_SATURN_REFERENCE=1` to use the software quad rasterizer for comparisons.

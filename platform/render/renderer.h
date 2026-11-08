@@ -8,14 +8,14 @@ extern "C" {
 
 typedef enum RendererId { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN } RendererId;
 typedef struct Ps1RenderSettings {
-    int quantizeVertices, affineTextures, colourPrecision, dither, depth;
+    int quantizeVertices, affineTextures, colourPrecision, dither, depth, resample;
 } Ps1RenderSettings;
-typedef struct PcRenderSettings { int bilinear, lighting, depth; } PcRenderSettings;
+typedef struct PcRenderSettings { int bilinear, lighting, depth, resample; } PcRenderSettings;
 typedef struct N64RenderSettings {
     int threePoint, colourPrecision, dither, dedither, divot, resample;
 } N64RenderSettings;
 typedef struct SaturnRenderSettings {
-    int quantizeVertices, affineTextures, colourPrecision, mesh, depth, originalSkyScroll;
+    int quantizeVertices, affineTextures, colourPrecision, mesh, depth, originalSkyScroll, resample;
 } SaturnRenderSettings;
 typedef struct RenderSettings {
     RendererId selection, automaticBase;
@@ -24,7 +24,7 @@ typedef struct RenderSettings {
     N64RenderSettings n64;
     SaturnRenderSettings saturn;
 } RenderSettings;
-#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, {1,1,1,1,0}, {1,1,1}, {1,1,1,1,1,1}, {1,1,1,1,0,0} }
+#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, {1,1,1,1,0,0}, {1,1,1,1}, {1,1,1,1,1,1}, {1,1,1,1,0,0,0} }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef struct RenderFrame { RenderSettings settings; RendererId id; int n64Track; } RenderFrame;

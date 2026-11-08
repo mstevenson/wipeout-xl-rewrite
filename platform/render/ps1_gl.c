@@ -30,8 +30,8 @@ static RenderProgram *Ps1Scene(void)
 
 static void Ps1Present(const void *profile, const RenderPresent *p)
 {
-    (void)profile;
-    RenderGlPresentDirect(p, GL_LINEAR);
+    const Ps1RenderSettings *settings = profile;
+    RenderGlPresentDirect(p, settings->resample ? GL_LINEAR : GL_NEAREST);
 }
 
 static void Ps1Destroy(void)

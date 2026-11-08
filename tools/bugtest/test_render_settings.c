@@ -99,6 +99,28 @@ static void SaturnProfile(void)
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDERER");
 }
 
+static void DisplayResampling(void)
+{
+    Load(""); /* Missing display settings use each renderer's defaults. */
+    assert(!portSettings.render.ps1.resample && portSettings.render.pc.resample);
+    assert(portSettings.render.n64.resample && !portSettings.render.saturn.resample);
+    Load("renderer = ps1\nps1_resample = 0\npc_resample = 0\nsaturn_resample = 1\nn64_resample = 0\n");
+    assert(!portSettings.render.ps1.resample && !portSettings.render.pc.resample);
+    assert(!portSettings.render.n64.resample && portSettings.render.saturn.resample);
+    assert(PortSettingsSave());
+    RenderSettings saved = portSettings.render;
+    PortSettingsLoad();
+    assert(!memcmp(&saved, &portSettings.render, sizeof(saved)));
+    assert(!RenderCurrent()->settings.ps1.resample);
+    portSettings.render.ps1.resample = 1;
+    assert(!RenderCurrent()->settings.ps1.resample); /* applied at the frame boundary */
+    assert(RenderCommit() && RenderCurrent()->settings.ps1.resample);
+    portSettings.render.saturn.resample = 0;
+    assert(!RenderCommit()); /* inactive display policy leaves the current frame alone */
+    Load("ps1_resample = bogus\npc_resample = -1\nsaturn_resample = 2\n");
+    assert(!portSettings.render.ps1.resample && portSettings.render.pc.resample && !portSettings.render.saturn.resample);
+}
+
 static void ProfileIsolation(void)
 {
     const char *prefixes[] = {"", "ps1_", "pc_", "n64_"};
@@ -242,6 +264,7 @@ int main(void)
     Load("renderer = bogus\nps1_dither = garbage\npc_depth = -1\n");
     assert(portSettings.render.selection == RENDER_AUTO && portSettings.render.ps1.dither && portSettings.render.pc.depth);
     SaturnProfile();
+    DisplayResampling();
     portConfig.hidden = 1; PortSettingsLoad();
     assert(portSettings.render.selection == RENDER_AUTO && !PortSettingsSave());
     unlink(PortSettingsPath()); rmdir(testDir);

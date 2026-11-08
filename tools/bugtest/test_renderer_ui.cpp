@@ -73,6 +73,11 @@ int main()
     Layout(2);
     Activate("PS1 vertex snapping", RENDER_PS1);
     assert(!portSettings.render.ps1.quantizeVertices && portSettings.render.ps1.dither);
+    assert(!portSettings.render.ps1.resample);
+    Activate("Linear display resampling", RENDER_PS1);
+    assert(portSettings.render.ps1.resample);
+    Activate("Linear display resampling", RENDER_PS1);
+    assert(!portSettings.render.ps1.resample && portSettings.render.pc.resample);
     SelectRenderer(true);
     assert(RenderCurrent()->id == RENDER_PC);
     n64Track = 1; RenderCommit(); Frame();
@@ -80,10 +85,13 @@ int main()
     /* PC controls remain visible while an N64 track is using the override. */
     Activate("Bilinear texture filtering", RENDER_PC);
     assert(!portSettings.render.pc.bilinear && !portSettings.render.ps1.quantizeVertices);
+    Activate("Linear display resampling", RENDER_PC);
+    assert(!portSettings.render.pc.resample && portSettings.render.n64.resample);
     Activate("VI divot filtering (approximate)", RENDER_N64);
     assert(!portSettings.render.n64.divot && !portSettings.render.pc.bilinear);
     Activate("Restore renderer defaults", RENDER_PC);
     assert(portSettings.render.pc.bilinear && !portSettings.render.n64.divot && !portSettings.render.ps1.quantizeVertices);
+    assert(portSettings.render.pc.resample && !portSettings.render.ps1.resample);
     Activate("Linear display resampling", RENDER_N64);
     Key(ImGuiKey_Tab);
     assert(ImGui::GetCurrentContext()->NavId == WidgetId("Restore renderer defaults", RENDER_N64));
@@ -121,8 +129,11 @@ int main()
     assert(!RenderCurrent()->settings.saturn.mesh);
     Activate("Original Saturn sky scrolling", RENDER_SATURN);
     assert(RenderCurrent()->settings.saturn.originalSkyScroll);
+    Activate("Linear display resampling", RENDER_SATURN);
+    assert(RenderCurrent()->settings.saturn.resample && !portSettings.render.ps1.resample);
     Activate("Restore renderer defaults", RENDER_SATURN);
     assert(portSettings.render.saturn.mesh && !RenderCurrent()->settings.saturn.originalSkyScroll);
+    assert(!portSettings.render.saturn.resample && !portSettings.render.ps1.resample);
     windowWidth = 360; Frame(); Layout(1);
     ImGui::DestroyContext();
     puts("Renderer UI: global selector, track-specific N64 toggle, independent panels/reset and responsive layout: OK");

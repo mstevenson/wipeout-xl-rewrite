@@ -30,8 +30,8 @@ static RenderProgram *PcScene(void)
 
 static void PcPresent(const void *profile, const RenderPresent *p)
 {
-    (void)profile;
-    RenderGlPresentDirect(p, GL_LINEAR);
+    const PcRenderSettings *settings = profile;
+    RenderGlPresentDirect(p, settings->resample ? GL_LINEAR : GL_NEAREST);
 }
 
 static void PcDestroy(void)

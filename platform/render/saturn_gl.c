@@ -58,8 +58,8 @@ static RenderProgram *SaturnScene(void)
 
 static void SaturnPresent(const void *profile, const RenderPresent *p)
 {
-    (void)profile;
-    RenderGlPresentDirect(p, GL_NEAREST);
+    const SaturnRenderSettings *settings = profile;
+    RenderGlPresentDirect(p, settings->resample ? GL_LINEAR : GL_NEAREST);
 }
 
 static void QuadDestroy(void);

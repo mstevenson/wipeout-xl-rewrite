@@ -117,9 +117,12 @@ static const struct {
     OPTION("saturn_quantize_vertices", saturn.quantizeVertices), OPTION("saturn_affine_textures", saturn.affineTextures),
     OPTION("saturn_colour_precision", saturn.colourPrecision), OPTION("saturn_mesh", saturn.mesh),
     OPTION("saturn_depth", saturn.depth), OPTION("saturn_original_sky_scroll", saturn.originalSkyScroll),
+    OPTION("saturn_resample", saturn.resample),
     OPTION("ps1_quantize_vertices", ps1.quantizeVertices), OPTION("ps1_affine_textures", ps1.affineTextures),
     OPTION("ps1_colour_precision", ps1.colourPrecision), OPTION("ps1_dither", ps1.dither), OPTION("ps1_depth", ps1.depth),
+    OPTION("ps1_resample", ps1.resample),
     OPTION("pc_bilinear", pc.bilinear), OPTION("pc_lighting", pc.lighting), OPTION("pc_depth", pc.depth),
+    OPTION("pc_resample", pc.resample),
     OPTION("n64_three_point", n64.threePoint), OPTION("n64_colour_precision", n64.colourPrecision),
     OPTION("n64_dither", n64.dither), OPTION("n64_dedither", n64.dedither),
     OPTION("n64_divot", n64.divot), OPTION("n64_resample", n64.resample)
