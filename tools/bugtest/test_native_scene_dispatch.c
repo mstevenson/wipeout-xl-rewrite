@@ -21,10 +21,16 @@ short CurrentScreen, loTileCount, medTileCount, hiTileCount;
 u_short clipLevel=1;
 u_long *OT[2];
 CameraUpdateFunc CameraUpdate;
-static int renderer, cap=2, hulls;
+static int renderer, cap=2, hulls, trackDetail, fullView, tracing;
 static Object *firstHull;
-static unsigned char drawn[120], nearDetail[120];
+static unsigned char drawn[120], nearDetail[120], arenaDetail[120], arenaDraws[120];
 int PortNativeRenderer(void) { return renderer; }
+int PortFarViewEnabled(void) { return fullView; }
+int PortTracing(void) { return tracing; }
+int PortScreenMargin(void) { return 0; }
+int32_t GteReadControl(int reg) { assert(reg==26); return 160; }
+float GteFade(double distance) { (void)distance; return 1; }
+RenderGeometry PortRenderGeometry(void) { return (RenderGeometry){.trackDetail = trackDetail}; }
 int PortPcNativeView(int *sections, int *scenery) { *sections=cap; *scenery=32767; return renderer==RENDER_PC; }
 int PortOriginalTrack(void) { return -1; }
 int PortOriginalN64Course(void) { return 0; }
@@ -36,6 +42,13 @@ u_long *ClearOTagR(u_long *p, int n) { (void)n; return p; }
 void AddPrims(u_long *ot, void *a, void *b) { (void)ot; (void)a; (void)b; }
 void PortTrackPackets(const void *a, const void *b) { (void)a; (void)b; }
 void PortTrackFar(TrackSection *s, const PortView *v) { (void)v; drawn[s-track->sections]=1; }
+void PortTrackDetailed(TrackSection *s, const PortView *v, int detail)
+{
+    (void)v;
+    arenaDetail[s-track->sections]=detail;
+    arenaDraws[s-track->sections]++;
+    assert(PortFarAlloc(sizeof(POLY_FT4)));
+}
 void AsmTrackHi(TrackSection *s, Skeleton *c, AutoMeshData *a, short n) { (void)c; (void)a; (void)n; nearDetail[s-track->sections]=3; }
 void AsmTrackMed(TrackSection *s, Skeleton *c, short n) { (void)c; (void)n; nearDetail[s-track->sections]=2; }
 void AsmTrackLo(TrackSection *s, Skeleton *c, short n) { (void)c; (void)n; nearDetail[s-track->sections]=1; }
@@ -69,17 +82,17 @@ int main(void)
     sections[0].allViewSection[2]=all; sections[0].allViewCount[2]=2;
     for(renderer=0;renderer<=1;renderer++) {
         nativeShipState[0].remembered=0;
-        assert(!PortDrawNativeTrack(&camera,NULL,0));
+        assert(!PortDrawTrack(&camera,NULL,0));
         assert(nativeShipState[0].remembered==1);
         assert(!nativeScene);
         Object object={.skeleton=&rotation};
         assert(!PortDrawNativeScenery(&object));
     }
     renderer=RENDER_PC;
-    assert(PortDrawNativeTrack(&camera,NULL,0));
+    assert(PortDrawTrack(&camera,NULL,0));
     for(int i=0;i<120;i++) assert(drawn[i]==(i==0||i==3||i==5||i==12));
     memset(drawn,0,sizeof(drawn));
-    assert(PortDrawNativeTrack(&camera,NULL,1));
+    assert(PortDrawTrack(&camera,NULL,1));
     for(int i=0;i<120;i++) assert(drawn[i]);
     Face roadFace={0};
     VECTOR roadVertex={.vz=4096};
@@ -87,21 +100,66 @@ int main(void)
     course.vertices=&roadVertex;
     sections[0].faceCount=sections[3].faceCount=sections[5].faceCount=sections[7].faceCount=1;
     renderer=RENDER_MODERN; memset(drawn,0,sizeof(drawn));
-    assert(PortDrawNativeTrack(&camera,NULL,0));
+    assert(PortDrawTrack(&camera,NULL,0));
     assert(nearDetail[0]==3 && nearDetail[3]==2 && nearDetail[5]==1 && !nearDetail[7]);
     for(int i=0;i<120;i++) assert(drawn[i]==(i==0||i==3||i==5||i==12||i==19||i==26||i==33));
     hiTileCount=0x1c0;
     memset(nearDetail,0,sizeof(nearDetail));
     memset(drawn,0,sizeof(drawn));
-    assert(PortDrawNativeTrack(&camera,NULL,0));
+    assert(PortDrawTrack(&camera,NULL,0));
     assert(!nearDetail[0] && drawn[0] && nearDetail[3]==2);
     hiTileCount=0;
+    for (trackDetail=RENDER_TRACK_MEDIUM; trackDetail<=RENDER_TRACK_HIGH; trackDetail++) {
+        memset(drawn,0,sizeof(drawn));
+        memset(nearDetail,0,sizeof(nearDetail));
+        memset(arenaDetail,0,sizeof(arenaDetail));
+        assert(PortDrawTrack(&camera,NULL,0));
+        for (int i=0;i<120;i++) {
+            int visible = i==0 || i==3 || i==5 || i==12 || i==19 || i==26 || i==33;
+            int detail = i==0 || i==3 || trackDetail==RENDER_TRACK_HIGH ? 3 : 2;
+            assert(arenaDetail[i]==(visible ? detail : 0) && !drawn[i] && !nearDetail[i]);
+        }
+        if (trackDetail==RENDER_TRACK_HIGH) {
+            assert(PortDrawTrack(&camera,NULL,1));
+            for (int i=0;i<120;i++) assert(arenaDetail[i]==3);
+        }
+    }
+    renderer=RENDER_AUTO;
+    fullView=1;
+    sections[119].centre.vx=100000;
+    for (trackDetail=RENDER_TRACK_MEDIUM; trackDetail<=RENDER_TRACK_HIGH; trackDetail++) {
+        memset(arenaDetail,0,sizeof(arenaDetail));
+        memset(arenaDraws,0,sizeof(arenaDraws));
+        assert(PortDrawTrack(&camera,NULL,0) && !nativeScene);
+        for (int i=0;i<120;i++) {
+            int authored = i==0 || i==3 || (i>=5 && i<=9);
+            int detail = i==0 || i==3 || trackDetail==RENDER_TRACK_HIGH ? 3 : 2;
+            assert(arenaDetail[i]==(authored ? detail : 0));
+        }
+        DrawFarTrack(&camera);
+        for (int i=0;i<119;i++) {
+            int detail = i==0 || i==3 || trackDetail==RENDER_TRACK_HIGH ? 3 : 2;
+            assert(arenaDetail[i]==detail && arenaDraws[i]==1);
+        }
+        assert(!arenaDraws[119] && arenaUsed==119*sizeof(POLY_FT4));
+    }
+    trackDetail=RENDER_TRACK_HIGH;
+    tracing=1;
+    assert(!PortDrawTrack(&camera,NULL,0) && !fullRoadDetail);
+    tracing=0;
+    trackDetail=RENDER_TRACK_NATIVE;
+    assert(!PortDrawTrack(&camera,NULL,0) && !fullRoadDetail);
+    memset(drawn,0,sizeof(drawn));
+    DrawFarTrack(&camera);
+    for (int i=0;i<120;i++) assert(drawn[i]==(i<119));
+    fullView=0;
+    sections[119].centre.vx=0;
     sections[0].faceCount=sections[3].faceCount=sections[5].faceCount=sections[7].faceCount=0;
     renderer=RENDER_SATURN; memset(drawn,0,sizeof(drawn));
-    assert(PortDrawNativeTrack(&camera,NULL,0));
+    assert(PortDrawTrack(&camera,NULL,0));
     for(int i=0;i<120;i++) assert(drawn[i]==(i==0||i==3||(i>=5&&i<=9)));
     renderer=RENDER_N64; memset(drawn,0,sizeof(drawn));
-    assert(PortDrawNativeTrack(&camera,NULL,0));
+    assert(PortDrawTrack(&camera,NULL,0));
     int count=0; for(int i=0;i<120;i++) count+=drawn[i];
     assert(count==21 && drawn[113]);
     for(int i=0;i<20;i++) assert(drawn[(i*7)%120]);
@@ -195,5 +253,5 @@ int main(void)
     nativeScene=0; assert(!PortDrawNativeLandscape(&camera));
     track=NULL; PortBuildNativeScene(NULL);
     assert(!nativeSceneSections[0] && !nativeSceneSections[1]);
-    puts("Native track/scenery dispatch: PS1/inactive bypass, PC cap/allview, N64 topology, Saturn authored order/depth and Modern routing: OK");
+    puts("Track/scenery dispatch: hardware policies and Modern Native/Full road detail: OK");
 }

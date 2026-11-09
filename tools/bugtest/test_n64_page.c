@@ -101,6 +101,46 @@ static void ImportedQuad(void)
     puts("Untextured N64 vertex provenance preserves authored quad diagonals before and during clipping: OK");
 }
 
+static void SmoothRoadFade(void)
+{
+    RenderSettings saved = portSettings.render;
+    POLY_FT4 road = {.r0 = 128, .g0 = 128, .b0 = 128, .x1 = 32, .x3 = 32, .y2 = 16, .y3 = 16};
+    const short *const corners[] = {&road.x0, &road.x1, &road.x2, &road.x3};
+    const uint32_t colours[] = {0x102030, 0x203040, 0x304050, 0x405060};
+    const float depths[] = {20000, 25000, 25000, 30000};
+    const uint8_t alpha[] = {255, 128, 128, 0};
+    const int order[] = {0, 1, 2, 1, 2, 3};
+
+    portSettings.render.selection = RENDER_MODERN;
+    SetPolyFT4(&road);
+    GteClearPrecise();
+    GteSetFade(1, 20000, 30000);
+    for (int i = 0; i < 4; i++) {
+        int x = (i & 1) * 32, y = (i >> 1) * 16;
+        uint32_t xy = (uint32_t)y << 16 | (uint32_t)x;
+        uint32_t handle = GteRecordProjection(xy, x, y, depths[i], GteFade(depths[i]));
+        GteRecordView(handle, x, y, depths[i]);
+        GteBindPrecise(corners[i], handle);
+    }
+    PortTagTrackLight(&road, colours);
+    for (int smooth = 0; smooth <= 1; smooth++) {
+        portSettings.render.modern.smoothTrackLighting = smooth;
+        RenderCommit();
+        clippedCount = 0;
+        Polygon((const uint32_t *)&road + 1, road.code);
+        assert(clippedCount == 6 && lastDraw.smoothTrackLighting == smooth);
+        for (int i = 0; i < clippedCount; i++) {
+            assert(clipped[i].r == (smooth ? (uint8_t)colours[order[i]] : 128));
+            assert(clipped[i].a == alpha[order[i]]);
+        }
+    }
+    GteSetFade(0, 64000, 96000);
+    GteClearPrecise();
+    portSettings.render = saved;
+    RenderCommit();
+    puts("Modern road lighting preserves the full distance fade through packet decoding: OK");
+}
+
 static void SaturnFlarePacket(void)
 {
     GpuDrawState draw = {0};
@@ -732,6 +772,7 @@ int main(void)
         puts("PC object quad diagonal leaves track and N64 geometry unchanged: OK");
     }
     ImportedQuad();
+    SmoothRoadFade();
     ClippedInterpolation();
     SaturnSkyAngles();
     SaturnSkyInterpolation();

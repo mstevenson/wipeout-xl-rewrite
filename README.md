@@ -193,7 +193,8 @@ profile's own FPS limit. Original uses 30 fps for PS1 (25 in PAL mode),
 These settings change presentation cadence while keeping the game's simulation timing.
 Each profile also saves its **Draw distance**, **Fade distant scenery**,
 and **Engine flares on distant ships** settings. Fade and distant flares
-apply when draw distance is **Full**.
+are optional at **Full** distance. Modern also offers **Custom** distance
+with a slider and a fade into the sky over the final third of the chosen range.
 Each profile includes **Linear display resampling**: turn it off for sharp pixels
 when upscaling the final image, or on for smooth scaling. It defaults to on for
 PC and N64, and off for PS1 and Saturn, independently of texture filtering.

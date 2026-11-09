@@ -34,10 +34,10 @@ void PsxHudTables(u_long *lastEntry, u_long *secondTable);
    a large buffer whose packets move from frame to frame would use up its table). */
 void PsxLinkRegion(void *start, size_t bytes);
 
-/* Whether the port draws the whole track in view (portfar.h): not in the lockstep tests (WIPEOUT_TRACE)
-   or with WIPEOUT_FAR_VIEW=0. */
+/* Whether to use the extended scene pass (portfar.h) for Full or Modern Custom distance.
+   Lockstep traces use the original scene unless WIPEOUT_FAR_VIEW=2. */
 int PortFarViewEnabled(void);
-/* Active native visibility profile, or zero in Full/lockstep mode. */
+/* Active native visibility profile, or zero for the extended scene pass and lockstep mode. */
 int PortNativeRenderer(void);
 /* Native PC road and scenery limits from the active renderer's F3 level. */
 int PortPcNativeView(int *sections, int *scenery);

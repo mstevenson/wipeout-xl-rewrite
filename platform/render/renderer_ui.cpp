@@ -161,16 +161,16 @@ static bool FrameRate(RenderSettings *s, RendererId id)
     return changed;
 }
 
-struct NativeDistanceText {
+struct LimitedDistanceText {
     char label[32];
     char limits[512];
 };
 
-static NativeDistanceText NativeDistance(const RenderSettings *settings, RendererId id)
+static LimitedDistanceText LimitedDistance(const RenderSettings *settings, RendererId id)
 {
     switch (id) {
     case RENDER_PC: {
-        NativeDistanceText text = {};
+        LimitedDistanceText text = {};
         RenderFrame frame = RenderSnapshot(id, settings);
         int sections, scenery;
         RenderPcViewLimits(&frame, &sections, &scenery);
@@ -198,11 +198,8 @@ static NativeDistanceText NativeDistance(const RenderSettings *settings, Rendere
             "Ships other than the camera ship need depth above 160 and below 32000 world units, "
             "plus a model bounds check."};
     case RENDER_MODERN:
-        return {"Native (linked road)",
-            "Road follows linked section lists for the current view.\n"
-            "Scenery uses the track's object lists and viewport clipping.\n"
-            "Ships use the Saturn depth interval. Ships other than the camera ship need depth above 160 "
-            "and below 32000 world units, plus a model bounds check."};
+        return {"Custom", "Sets how far the scene is visible from the camera. "
+            "Distant scenery always fades into the sky over the final third of this distance."};
     default:
         return {"Native (regional limits)",
             "Road follows authored section lists. Directional low-detail runs cap at 100 sections.\n"
@@ -215,20 +212,22 @@ static NativeDistanceText NativeDistance(const RenderSettings *settings, Rendere
 
 static bool DrawDistance(const RenderSettings *settings, RendererId id, int *farView)
 {
-    const NativeDistanceText native = NativeDistance(settings, id);
-    const char *const distances[] = {native.label, "Full (the whole track)"};
+    const LimitedDistanceText limited = LimitedDistance(settings, id);
+    const char *const distances[] = {limited.label, "Full (the whole track)"};
     ImGui::TextUnformatted("Draw distance");
     ImGui::SetNextItemWidth(-1);
     bool changed = ImGui::Combo("##Draw distance", farView, distances, IM_ARRAYSIZE(distances));
-    Tooltip(native.limits, native.label);
+    Tooltip(limited.limits, limited.label);
     return changed;
 }
 
-static bool SceneEnhancements(RenderScene *scene)
+static bool SceneEnhancements(RenderScene *scene, bool custom)
 {
+    int forcedFade = 1;
     ImGui::BeginDisabled(!scene->farView);
-    bool changed = Check("Fade distant scenery", &scene->fade,
-        "Port enhancement that fades distant scenery into the sky in Full draw distance.");
+    bool changed = Check("Fade distant scenery", custom ? &forcedFade : &scene->fade,
+        custom ? "Always enabled in Custom draw distance." :
+                 "Fades distant scenery into the sky in Full draw distance.");
     changed |= Check("Engine flares on distant ships", &scene->farFlares,
         "Draws engine flares beyond the native distance in Full draw distance.");
     ImGui::EndDisabled();
@@ -246,8 +245,24 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
     changed |= Resolution(s, edit);
     changed |= FrameRate(s, edit);
     changed |= DrawDistance(s, edit, &scene->farView);
+    bool custom = edit == RENDER_MODERN && !scene->farView;
+    if (custom) {
+        ImGui::TextUnformatted("Custom distance");
+        ImGui::SetNextItemWidth(-1);
+        changed |= ImGui::SliderInt("##Custom distance", &s->modern.customDistance,
+                                    MODERN_DISTANCE_MIN, MODERN_DISTANCE_MAX, "%d units", ImGuiSliderFlags_NoInput);
+        Tooltip("The world fades fully into the sky at this distance from the camera.");
+    }
     switch (edit) {
-    case RENDER_MODERN: break;
+    case RENDER_MODERN: {
+        const char *const detail[] = {"Native", "Medium", "High"};
+        ImGui::TextUnformatted("Track Detail");
+        ImGui::SetNextItemWidth(-1);
+        changed |= ImGui::Combo("##Track Detail", &s->modern.trackDetail, detail, IM_ARRAYSIZE(detail));
+        Tooltip("Native keeps the default detail for the selected draw distance. "
+                "Medium raises Low tiles to Medium and Medium tiles to High. High uses High tiles throughout the visible road.");
+        break;
+    }
     case RENDER_SATURN: changed |= SaturnSettings(&s->saturn); break;
     case RENDER_PC: changed |= PcSettings(&s->pc); break;
     case RENDER_N64: changed |= N64Settings(&s->n64); break;
@@ -255,7 +270,7 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
     }
 
     ImGui::SeparatorText("Enhancements");
-    changed |= SceneEnhancements(scene);
+    changed |= SceneEnhancements(scene, custom);
     switch (edit) {
     case RENDER_MODERN: {
         changed |= Check("Bilinear texture filtering", &s->modern.bilinear,
@@ -376,7 +391,7 @@ bool RenderSettingsUi(RenderSettings *s)
         ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + style.CellPadding.x * 2;
     float width = panelWidth * profiles;
     if (width < ImGui::GetContentRegionAvail().x) width = ImGui::GetContentRegionAvail().x;
-    float height = ImGui::GetFrameHeightWithSpacing() * 22 + style.ScrollbarSize;
+    float height = ImGui::GetFrameHeightWithSpacing() * (s->modern.scene.farView ? 24 : 26) + style.ScrollbarSize;
     ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings |
         ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollX;
     if (ImGui::BeginTable("Renderer settings", profiles, flags, ImVec2(0, height), width)) {

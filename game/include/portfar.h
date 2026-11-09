@@ -33,7 +33,7 @@ typedef struct PortFarVertex {
 void PortFade(int on);
 
 /* Port: each renderer's native visibility, using precise non-PS1 packet projection. */
-int PortDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView);
+int PortDrawTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView);
 int PortDrawNativeScenery(Object *object);
 int PortNativeShipsEnabled(void);
 void PortNativeShipsReset(void);
@@ -96,6 +96,7 @@ char *PortNearAlloc(int bytes);
 int PortNativeObjectDepthVisible(const double depths[4], unsigned int tag, int index);
 int PortNativeTrackFaceVisible(const Face *face, const PortView *view);
 void PortTrackFar(TrackSection *section, const PortView *view);
+void PortTrackDetailed(TrackSection *section, const PortView *view, int detail);
 void PortDrawObjectFar(Object *object, const PortView *view, const CVECTOR *colour);
 
 /* Frame interpolation (objdraw.c, gte.h): the next model the game draws is drawing number `instance` of it this

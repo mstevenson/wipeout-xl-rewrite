@@ -112,6 +112,7 @@ static void ModernProfile(void)
     assert(RenderCurrent()->settings.modern.brightness == 85);
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.bloom);
+    assert(PortRenderGeometry().trackDetail == RENDER_TRACK_NATIVE);
     assert(RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     LoadPlatformSettings("ps1_renderer = modern\nmodern_render_scale = 3\n"
@@ -134,12 +135,21 @@ static void ModernProfile(void)
     assert(RenderSet(&portSettings.render, "modern_brightness", "50") && RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_brightness", "49") && !RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_brightness", "101") && !RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_track_detail", "medium_plus") && RenderCommit());
+    assert(PortRenderGeometry().trackDetail == RENDER_TRACK_MEDIUM);
+    assert(RenderSet(&portSettings.render, "modern_track_detail", "medium") && !RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_track_detail", "high") && RenderCommit());
+    assert(PortRenderGeometry().trackDetail == RENDER_TRACK_HIGH);
+    assert(RenderSet(&portSettings.render, "modern_track_detail", "low") && !RenderCommit());
+    RenderFrame ps1 = RenderSnapshot(RENDER_PS1, &portSettings.render);
+    assert(RenderGeometryFor(&ps1).trackDetail == RENDER_TRACK_NATIVE);
     assert(PortSettingsSave());
     char *saved = SDL_LoadFile(PortSettingsPath(), NULL);
     assert(saved && strstr(saved, "modern_tonemapper = pbr_neutral_soft_shadows\n"));
     assert(strstr(saved, "modern_bilinear = 0\n"));
     assert(strstr(saved, "modern_weapon_lights = 0\n"));
     assert(strstr(saved, "modern_smooth_track_lighting = 0\n"));
+    assert(strstr(saved, "modern_track_detail = high\n"));
     SDL_free(saved);
     PortSettingsLoad();
     assert(RenderCurrent()->id == RENDER_MODERN && RenderScale(RenderCurrent()) == 3);
@@ -148,15 +158,55 @@ static void ModernProfile(void)
     assert(!RenderCurrent()->settings.modern.bloom);
     assert(!RenderCurrent()->settings.modern.weaponLights);
     assert(!RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
+    assert(PortRenderGeometry().trackDetail == RENDER_TRACK_HIGH);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     assert(RenderSet(&portSettings.render, "modern_tonemapper", "original") && RenderCommit());
     RenderDefaults(&portSettings.render, RENDER_MODERN);
     assert(RenderCommit() && RenderScale(RenderCurrent()) == 0);
+    assert(PortRenderGeometry().trackDetail == RENDER_TRACK_NATIVE);
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_DEFAULT);
     assert(RenderCurrent()->settings.modern.bloom);
     assert(RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
+}
+
+static void ModernCustomDistance(void)
+{
+    SDL_Environment *env = SDL_GetEnvironment();
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_FADE", "0", true);
+    LoadSettings("", "modern_far_view = 0\nmodern_custom_distance = 45000\nmodern_fade = 0\n"
+                     "modern_fade_near = 22000\nmodern_fade_far = 33000\n");
+    const RenderFrame *frame = RenderCurrent();
+    const RenderScene *scene = RenderSceneFor(frame);
+    assert(RenderUsesExtendedView(frame) && !scene->farView && scene->fade);
+    assert(scene->fadeNear == 30000 && scene->fadeFar == 45000);
+    assert(!portSettings.render.modern.scene.fade);
+    assert(PortSettingsSave());
+    PortSettingsLoad();
+    assert(portSettings.render.modern.customDistance == 45000);
+    assert(RenderSceneFor(RenderCurrent())->fadeFar == 45000);
+
+    portSettings.render.modern.scene.farView = 1;
+    assert(RenderCommit());
+    frame = RenderCurrent();
+    scene = RenderSceneFor(frame);
+    assert(RenderUsesExtendedView(frame) && scene->farView && !scene->fade);
+    assert(scene->fadeNear == 22000 && scene->fadeFar == 33000);
+    assert(portSettings.render.modern.customDistance == 45000);
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FADE");
+
+    portSettings.render.modern.scene.farView = 0;
+    assert(RenderSet(&portSettings.render, "modern_custom_distance", "1") && RenderCommit());
+    assert(RenderSceneFor(RenderCurrent())->fadeFar == MODERN_DISTANCE_MIN);
+    assert(RenderSet(&portSettings.render, "modern_custom_distance", "9999999999") && RenderCommit());
+    assert(RenderSceneFor(RenderCurrent())->fadeFar == MODERN_DISTANCE_MAX);
+    assert(RenderSet(&portSettings.render, "modern_custom_distance", "invalid") && !RenderCommit());
+    RenderFrame ps1 = RenderSnapshot(RENDER_PS1, &portSettings.render);
+    assert(!RenderUsesExtendedView(&ps1) && !RenderSceneFor(&ps1)->fade);
+    RenderDefaults(&portSettings.render, RENDER_MODERN);
+    assert(portSettings.render.modern.customDistance == MODERN_DISTANCE_DEFAULT);
+    puts("Modern Custom distance persists, always fades at the limit and preserves the Full preferences: OK");
 }
 
 static void DisplayResampling(void)
@@ -658,6 +708,7 @@ int main(void)
     SaturnProfile();
     DisplayResampling();
     ModernProfile();
+    ModernCustomDistance();
     portConfig.hidden = 1; PortSettingsLoad();
     assert(portSettings.render.selection == RENDER_AUTO && !PortSettingsSave());
     unlink(PortSettingsPath()); rmdir(testDir);

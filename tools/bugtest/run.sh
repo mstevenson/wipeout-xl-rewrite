@@ -81,6 +81,9 @@ for test in weapon_lights electric near_object billboard track_light native_ship
     if [ "$test" = near_object ] || [ "$test" = track_light ]; then
         gte_sources="platform/psx/gte.c platform/psx/gte_tables.c"
     fi
+    if [ "$test" = track_light ]; then
+        gte_sources="$gte_sources game/src/portfar.c"
+    fi
     if [ "$test" = billboard ]; then
         gte_sources="platform/psx/gte.c platform/psx/gte_tables.c platform/psx/libgte.c platform/render/saturn_visibility.c platform/render/saturn_native.c"
     fi

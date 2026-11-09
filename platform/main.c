@@ -42,7 +42,7 @@ static void Usage(void)
             "  WIPEOUT_CD_SPEED (drive speed-up; 1 = the console's, default 1000), WIPEOUT_SAVE_DIR (memory cards; default: the user's data folder),\n"
             "  WIPEOUT_KEYS (scripted keys and gamepad), WIPEOUT_VRAM_DUMP (video memory picture at the end of a run),\n"
             "  WIPEOUT_RUMBLE_LOG (what the pads' motors are asked, one line a request),\n"
-            "  WIPEOUT_FAR_VIEW (0: native draw distance; 2: the whole track even while tracing), WIPEOUT_FAR_FLARES,\n"
+            "  WIPEOUT_FAR_VIEW (0: Native or Modern Custom; 2: Full even while tracing), WIPEOUT_FAR_FLARES,\n"
             "  WIPEOUT_MOVIES (play the movies in fixed-step runs too), WIPEOUT_WAV (the mixed audio, fixed-step),\n"
             "  WIPEOUT_MUSIC (a music folder in place of the disc's music)\n");
 }
@@ -526,12 +526,14 @@ int PortFarViewEnabled(void)
            the lockstep tests compare the console's drawing */
         mode = value && SDL_atoi(value) == 2 ? 2 : SDL_getenv("WIPEOUT_TRACE") ? 0 : 1;
     }
-    return mode == 2 || (mode == 1 && RenderSceneFor(RenderCurrent())->farView);
+    return mode == 2 || (mode == 1 && RenderUsesExtendedView(RenderCurrent()));
 }
 
 int PortFarFlaresEnabled(void)
 {
-    return PortFarViewEnabled() && RenderSceneFor(RenderCurrent())->farFlares;
+    if (!PortFarViewEnabled()) return 0;
+    const RenderScene *scene = RenderSceneFor(RenderCurrent());
+    return scene->farView && scene->farFlares;
 }
 
 int PortNativeRenderer(void)

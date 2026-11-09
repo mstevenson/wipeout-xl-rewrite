@@ -6,8 +6,14 @@
 static Face face;
 static TrackData data;
 TrackData *track = &data;
+Surface tileSurfaces[1][2];
+short CurrentScreen;
+int portPal;
+static u_long roadOrdering[8192];
+u_long *OT[2] = {roadOrdering};
+int PortScreenMargin(void) { return 0; }
 static void *linked;
-static int smooth;
+static int smooth, linkedCount;
 static uint32_t tagged[4];
 RenderGeometry PortRenderGeometry(void) { return (RenderGeometry){.smoothTrackLighting = smooth}; }
 void PortTagTrackLight(const void *packet, const uint32_t colours[4])
@@ -15,7 +21,8 @@ void PortTagTrackLight(const void *packet, const uint32_t colours[4])
     assert(packet == linked);
     for (int i = 0; i < 4; i++) tagged[i] = colours[i] & 0xffffffu;
 }
-void AddPrim(u_long *slot, void *poly) { (void)slot; linked = poly; }
+void AddPrim(u_long *slot, void *poly) { (void)slot; linked = poly; linkedCount++; }
+void SetPolyFT4(POLY_FT4 *poly) { poly->tag = 9u << 24; poly->code = 0x2c; }
 void PortTagPrims(const void *first, const void *end, const char *kind, const char *name, int index)
 { (void)first; (void)end; (void)kind; (void)name; (void)index; }
 
@@ -77,6 +84,58 @@ static void SmoothTrackLighting(void)
     puts("Track smoothing shares edges across detail grids and preserves surface and light encoding boundaries: OK");
 }
 
+static void DetailedRoad(void)
+{
+    Face faces[48];
+    VECTOR vertices[] = {{-20,-10,70000}, {20,-10,70000}, {-20,10,70000}, {20,10,70000}};
+    PortView view = {.m = {{1,0,0}, {0,1,0}, {0,0,1}}};
+    TrackSection section = {.faceCount = sizeof(faces) / sizeof(*faces)};
+    data.faces = faces;
+    data.vertices = vertices;
+    smooth = 0;
+    for (int i = 0; i < section.faceCount; i++) {
+        faces[i] = (Face){.vertex = {1,0,2,3}, .flags = FLIP, .red = 128};
+    }
+    for (int i = 0; i < 16; i++) {
+        tileSurfaces[0][1].high[i] = (Tile){.u0 = i + 1, .tsb = 17, .cba = 42};
+    }
+    tileSurfaces[0][1].med[3] = (Tile){.u0 = 24, .tsb = 18, .cba = 43};
+    GteWriteControl(24, 160 << 16);
+    GteWriteControl(25, 120 << 16);
+    GteWriteControl(26, 160);
+
+    linkedCount = 0;
+    PortTrackDetailed(&section, &view, 2);
+    assert(linkedCount == section.faceCount * 4);
+    const POLY_FT4 *last = linked;
+    assert(last->u0 == 24 && last->tpage == 18 && last->clut == 43);
+    linkedCount = 0;
+    PortTrackDetailed(&section, &view, 3);
+    assert(linkedCount == section.faceCount * 16); /* More than the 28 faces the old High pool can hold. */
+    last = linked;
+    assert(last->u0 == 16 && last->tpage == 17 && last->clut == 42 && last->r0 == 128);
+
+    section.faceCount = 1;
+    vertices[0].vz = vertices[1].vz = -100;
+    vertices[2].vz = vertices[3].vz = 100;
+    linkedCount = 0;
+    PortTrackDetailed(&section, &view, 3);
+    assert(linkedCount == 16);
+    const POLY_FT4 *first = (const POLY_FT4 *)linked - 15;
+    uint32_t xy;
+    memcpy(&xy, &first->x0, sizeof(xy));
+    GtePrecise projected;
+    assert(GtePreciseOf(GteBoundHandle(&first->x0, xy), &projected));
+    assert(projected.view[2] == -100 && projected.key & GTE_KEY_WORLD);
+
+    view.t[2] = 1000;
+    view.t[0] = 10000;
+    linkedCount = 0;
+    PortTrackDetailed(&section, &view, 3);
+    assert(!linkedCount);
+    puts("Detailed road arena: authored tiles, high detail beyond the old pool, precise near-plane vertices and offscreen culling: OK");
+}
+
 int main(void)
 {
     POLY_FT4 packet = {0};
@@ -106,6 +165,7 @@ int main(void)
     SetTrackLight(&packet, &face);
     assert(packet.tpage == (PORT_TPAGE_N64 | 17));
     SmoothTrackLighting();
+    DetailedRoad();
     puts("Road packets retain authored/gameplay light encoding without changing RGB, tiles or PS1 pages: OK");
     return 0;
 }

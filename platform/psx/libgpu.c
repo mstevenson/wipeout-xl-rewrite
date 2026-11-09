@@ -1702,11 +1702,16 @@ static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count, int 
     return 1;
 }
 
-static void Colour(GpuVertex *v, uint32_t word)
+static void ColourRgb(GpuVertex *v, uint32_t word)
 {
     v->r = (uint8_t)word;
     v->g = (uint8_t)(word >> 8);
     v->b = (uint8_t)(word >> 16);
+}
+
+static void Colour(GpuVertex *v, uint32_t word)
+{
+    ColourRgb(v, word);
     v->a = 255;
 }
 
@@ -1874,7 +1879,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
         const TrackLightPacket *entry = FindTrackLight(w - 1, trackLightFrame, 0);
         if (entry && entry->tagged) {
             draw.smoothTrackLighting = 1;
-            for (i = 0; i < count; i++) Colour(&v[i], entry->colours[i]);
+            for (i = 0; i < count; i++) ColourRgb(&v[i], entry->colours[i]);
         }
     }
     if (draw.semi == 2 && policy.shadowMask && ShadowPacket(w)) {

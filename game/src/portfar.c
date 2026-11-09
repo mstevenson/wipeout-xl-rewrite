@@ -449,27 +449,30 @@ static int SaturnTrackDirection(const TrackCamera *camera)
         (int32_t)((uint32_t)next->centre.vz - (uint32_t)section->centre.vz));
 }
 
-static void SelectAuthoredRoad(TrackCamera *camera, int allView, const NativeVisibility *policy,
+static void SelectAuthoredRoad(TrackCamera *camera, int allView, NativeRoad road,
                                unsigned char *details)
 {
     TrackSection *section = camera->section;
-    int limit = 65535, scenery;
-    int followLinks = policy->road != ROAD_CONTIGUOUS;
-    if (policy->road == ROAD_PC_LINKED) PortPcNativeView(&limit, &scenery);
+    int limit = road == ROAD_ORIGINAL ? 100 : 65535;
+    int northLimit = limit, scenery;
+    int followLinks = road == ROAD_PC_LINKED || road == ROAD_LINKED;
+    if (road == ROAD_PC_LINKED) PortPcNativeView(&northLimit, &scenery);
     if (allView) {
         ViewRuns(section->allViewSection, section->allViewCount, 65535, details, followLinks);
         return;
     }
     int dir;
-    if (policy->road == ROAD_CONTIGUOUS) {
+    if (road == ROAD_CONTIGUOUS) {
         dir = SaturnTrackDirection(camera);
+    } else if (road == ROAD_ORIGINAL) {
+        dir = TrackDirection(camera);
     } else {
         dir = (shipIndex[ownShip].attr & DIRECTION) || clipLevel == 1 || clipLevel == 6 ? TrackDirection(camera) : 15;
     }
-    if (dir & 1) ViewRuns(section->northViewSection, section->northViewCount, limit, details, followLinks);
-    if (dir & 2) ViewRuns(section->southViewSection, section->southViewCount, 65535, details, followLinks);
-    if (dir & 4) ViewRuns(section->westViewSection, section->westViewCount, 65535, details, followLinks);
-    if (dir & 8) ViewRuns(section->eastViewSection, section->eastViewCount, 65535, details, followLinks);
+    if (dir & 1) ViewRuns(section->northViewSection, section->northViewCount, northLimit, details, followLinks);
+    if (dir & 2) ViewRuns(section->southViewSection, section->southViewCount, limit, details, followLinks);
+    if (dir & 4) ViewRuns(section->westViewSection, section->westViewCount, limit, details, followLinks);
+    if (dir & 8) ViewRuns(section->eastViewSection, section->eastViewCount, limit, details, followLinks);
 }
 
 static void NativeN64Section(int index, void *context)
@@ -525,28 +528,38 @@ static int SelectN64Road(TrackCamera *camera, unsigned char *details)
     return 1;
 }
 
-int PortDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView)
+static unsigned char *roadDetails;
+static int roadDetailCapacity, fullRoadDetail;
+
+static int RaisedRoadDetail(int setting, int authored)
 {
-    static unsigned char *details;
-    static int capacity;
+    return setting == RENDER_TRACK_HIGH || authored >= 2 ? 3 : 2;
+}
+
+int PortDrawTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView)
+{
     const NativeVisibility *policy = &nativeVisibility[PortNativeRenderer()];
+    int trackDetail = PortRenderGeometry().trackDetail;
+    int haveRoad = track && track->sectionCount > 0;
+    int raisedFull = policy->road == ROAD_ORIGINAL && trackDetail != RENDER_TRACK_NATIVE &&
+                     PortFarViewEnabled() && !PortTracing();
 
     nativeScene = 0;
-    if (policy->road == ROAD_ORIGINAL || !track || track->sectionCount <= 0) {
+    fullRoadDetail = RENDER_TRACK_NATIVE;
+    if (policy->road == ROAD_ORIGINAL || !haveRoad)
         PortNativeShipsReset(); /* Port: re-enabling Native starts fresh per-view history. */
-        return 0;
-    }
-    if (capacity < track->sectionCount) {
-        unsigned char *next = realloc(details, (size_t)track->sectionCount);
+    if ((policy->road == ROAD_ORIGINAL && !raisedFull) || !haveRoad) return 0;
+    if (roadDetailCapacity < track->sectionCount) {
+        unsigned char *next = realloc(roadDetails, (size_t)track->sectionCount);
         if (!next) return 0;
-        details = next;
-        capacity = track->sectionCount;
+        roadDetails = next;
+        roadDetailCapacity = track->sectionCount;
     }
-    memset(details, 0, (size_t)track->sectionCount);
+    memset(roadDetails, 0, (size_t)track->sectionCount);
     if (policy->road == ROAD_N64) {
-        if (!SelectN64Road(camera, details)) return 0;
+        if (!SelectN64Road(camera, roadDetails)) return 0;
     } else {
-        SelectAuthoredRoad(camera, allView, policy, details);
+        SelectAuthoredRoad(camera, allView, policy->road, roadDetails);
     }
 
     LinkArenas();
@@ -556,22 +569,28 @@ int PortDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView
     if (faceMarks) memset(faceMarks, 0, (size_t)faceMarkCount * sizeof(*faceMarks));
     PortView view;
     CameraView(camera, &view);
-    nativeScene = 1;
+    nativeScene = !raisedFull;
     for (int i = 0; i < track->sectionCount; i++) {
-        if (!details[i]) continue;
+        if (!roadDetails[i]) continue;
         TrackSection *section = &track->sections[i];
+        if (trackDetail != RENDER_TRACK_NATIVE) {
+            PortTrackDetailed(section, &view, RaisedRoadDetail(trackDetail, roadDetails[i]));
+            continue;
+        }
         if (policy->nearTrack) {
             int inside = 1;
             if (policy->road == ROAD_CONTIGUOUS) {
                 for (int j = 0; j < section->faceCount; j++)
                     if (!PortNativeTrackFaceVisible(&track->faces[(u_short)section->faceStart + j], &view)) inside = 0;
             }
-            if (inside) DrawNearRoadSection(section, camera, autoMesh, details[i]);
+            if (inside) DrawNearRoadSection(section, camera, autoMesh, roadDetails[i]);
         }
         PortTrackFar(section, &view);
     }
     PortTrackPackets(arena[CurrentScreen], arena[CurrentScreen] + arenaUsed);
     AddPrims(OT[CurrentScreen] + FAR_ENTRY, farTable[CurrentScreen] + FAR_BUCKETS - 1, farTable[CurrentScreen]);
+    /* Port: Full appends its extended road and scenery to this same table. */
+    if (raisedFull) fullRoadDetail = trackDetail;
     return 1;
 }
 
@@ -737,6 +756,7 @@ static void DrawFarTrack(TrackCamera *camera)
     CameraView(camera, &view);
     start = arena[CurrentScreen] + arenaUsed; /* (the track's packets, for the shadows: libgpu.c) */
     for (i = 0; i < track->sectionCount; i++) {
+        if (fullRoadDetail && roadDetails[i]) continue;
         TrackSection *section = track->sections + i;
         double c[3];
 
@@ -745,7 +765,8 @@ static void DrawFarTrack(TrackCamera *camera)
                    view.t[k];
         }
         if (MaybeVisible(c, 4096.0 + section->globalRadius, PORT_FAR_BEHIND)) {
-            PortTrackFar(section, &view);
+            if (fullRoadDetail) PortTrackDetailed(section, &view, RaisedRoadDetail(fullRoadDetail, 1));
+            else PortTrackFar(section, &view);
         }
     }
     PortTrackPackets(start, arena[CurrentScreen] + arenaUsed);
@@ -1170,17 +1191,22 @@ void PortFarDraw(TrackCamera *camera, ShipData *ships, Object **shipShapes)
 {
     if (!Enabled() || !track) {
         nativeScene = 0;
+        fullRoadDetail = RENDER_TRACK_NATIVE;
         frame++;
         return;
     }
-    ClearOTagR(farTable[CurrentScreen], FAR_BUCKETS);
-    arenaUsed = 0;
+    if (!fullRoadDetail) {
+        ClearOTagR(farTable[CurrentScreen], FAR_BUCKETS);
+        arenaUsed = 0;
+    }
     farShips = 0;
     DrawFarTrack(camera);
     DrawFarScenery();
     DrawFarShips(ships, shipShapes);
     DrawFarShadows(camera, ships);
-    AddPrims(OT[CurrentScreen] + FAR_ENTRY, farTable[CurrentScreen] + FAR_BUCKETS - 1, farTable[CurrentScreen]);
+    if (!fullRoadDetail)
+        AddPrims(OT[CurrentScreen] + FAR_ENTRY, farTable[CurrentScreen] + FAR_BUCKETS - 1, farTable[CurrentScreen]);
+    fullRoadDetail = RENDER_TRACK_NATIVE;
     frame++;
 }
 

@@ -830,3 +830,99 @@ void PortTrackFar(TrackSection *section, const PortView *view)
     }
     PortFarDepthBias(1.0);
 }
+
+typedef struct RoadPoint {
+    double x, y, z;
+    unsigned clip;
+    PortFarVertex projected;
+} RoadPoint;
+
+/* Port: reject cells outside a common edge of the expanded view. Keep cells
+   crossing the near plane for the shared GPU clipper and interpolation. */
+static unsigned RoadClip(const RoadPoint *point, double focal, const double bounds[4])
+{
+    enum { ROAD_CLIP_BEHIND = 1 << 4 };
+    if (point->z < PORT_FAR_NEAR) return point->z < -PORT_FAR_BEHIND ? ROAD_CLIP_BEHIND : 0;
+    double x = point->x * focal, y = point->y * focal;
+    return (x < bounds[0] * point->z) | ((x > bounds[1] * point->z) << 1) |
+           ((y < bounds[2] * point->z) << 2) | ((y > bounds[3] * point->z) << 3);
+}
+
+/* Port: Modern's raised detail uses the authored 2x2 or 4x4 tiles in the road
+   arena. Project and bind only points used by visible cells, with full
+   coordinates even when the old track pools or GTE cannot represent them. */
+void PortTrackDetailed(TrackSection *section, const PortView *view, int detail)
+{
+    double focal = (u_short)GteReadControl(26);
+    double centreX = GteReadControl(24) / 65536.0, centreY = GteReadControl(25) / 65536.0;
+    int margin = PortScreenMargin() + PORT_FAR_AROUND;
+    const double bounds[] = {-margin - centreX, 320 + margin - centreX,
+                             -PORT_FAR_AROUND - centreY, SCREEN_HEIGHT + PORT_FAR_AROUND - centreY};
+    int step = detail == 3 ? 1 : 2;
+    Face *face = track->faces + (u_short)section->faceStart;
+
+    for (int n = 0; n < (u_short)section->faceCount; n++, face++) {
+        int x[4], y[4], z[4], gx[HI_POINTS], gy[HI_POINTS], gz[HI_POINTS];
+        RoadPoint points[HI_POINTS];
+        uint32_t colours[4];
+        int smooth = TrackCornerLights(face, colours);
+        Surface *surface = FaceSurface(face);
+        Tile *tile = detail == 3 ? surface->high : surface->med;
+
+        for (int k = 0; k < 4; k++) {
+            const VECTOR *vertex = &track->vertices[face->vertex[k]];
+            x[k] = vertex->vx;
+            y[k] = vertex->vy;
+            z[k] = vertex->vz;
+        }
+        SubdivideHigh(x, gx);
+        SubdivideHigh(y, gy);
+        SubdivideHigh(z, gz);
+        for (int row = 0; row <= 4; row += step) {
+            for (int col = 0; col <= 4; col += step) {
+                int i = 5 * row + col;
+                RoadPoint *p = &points[i];
+                p->x = view->m[0][0] * gx[i] + view->m[0][1] * gy[i] + view->m[0][2] * gz[i] + view->t[0];
+                p->y = view->m[1][0] * gx[i] + view->m[1][1] * gy[i] + view->m[1][2] * gz[i] + view->t[1];
+                p->z = view->m[2][0] * gx[i] + view->m[2][1] * gy[i] + view->m[2][2] * gz[i] + view->t[2];
+                p->clip = RoadClip(p, focal, bounds);
+                p->projected.handle = 0;
+            }
+        }
+        for (int row = 0; row < 4; row += step) {
+            for (int col = 0; col < 4; col += step, tile++) {
+                int top = 5 * row + col, bottom = top + 5 * step;
+                const int corners[] = {top, top + step, bottom, bottom + step};
+                if (points[corners[0]].clip & points[corners[1]].clip &
+                    points[corners[2]].clip & points[corners[3]].clip) continue;
+
+                POLY_FT4 *poly = (POLY_FT4 *)PortFarAlloc(sizeof(*poly));
+                if (!poly) return;
+                SetPolyFT4(poly);
+                short *const xy[][2] = {
+                    {&poly->x0, &poly->y0}, {&poly->x1, &poly->y1},
+                    {&poly->x2, &poly->y2}, {&poly->x3, &poly->y3}
+                };
+                uint32_t lights[4];
+                double depth = 0.0;
+                for (int k = 0; k < 4; k++) {
+                    int i = corners[k];
+                    RoadPoint *p = &points[i];
+                    if (!p->projected.handle) {
+                        GteKeyNext(0, WorldKey(gx[i], gy[i], gz[i]));
+                        PortFarProjectAny(p->x, p->y, p->z, &p->projected);
+                    }
+                    StoreScreenXY(xy[k][0], xy[k][1], p->projected.screen);
+                    GteBindPrecise(xy[k][0], p->projected.handle);
+                    if (p->z > depth) depth = p->z;
+                    if (smooth) lights[k] = SampleTrackLight(colours, (i % 5) * 2, (i / 5) * 2);
+                }
+                SetQuadTile(poly, tile);
+                SetTrackLight(poly, face);
+                AddPrim(PortFarSlot((int)depth >> 2, depth), poly);
+                if (smooth) PortTagTrackLight(poly, lights);
+                PortTagPrims(poly, poly + 1, "detailed road tile", NULL, (int)(face - track->faces));
+            }
+        }
+    }
+}

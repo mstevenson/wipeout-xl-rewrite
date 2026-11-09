@@ -84,7 +84,7 @@ void PsxLinkWaiting(void);
 /* controls.c: scripted key and gamepad events (WIPEOUT_KEYS), fed to SDL's queue each field */
 void PortInputScript(uint64_t field);
 
-/* main.c: whether the whole track is drawn (game/include/portfar.h) */
+/* main.c: whether the extended scene pass is enabled (game/include/portfar.h) */
 int PortFarViewEnabled(void);
 /* main.c: whether the ships it draws beyond the console's distance have their engine flares (far_flares) */
 int PortFarFlaresEnabled(void);

@@ -52,6 +52,11 @@ const RenderScene *RenderSceneFor(const RenderFrame *frame)
     return (const RenderScene *)((const char *)&frame->settings + (profile->sceneOffset - profile->offset));
 }
 
+int RenderUsesExtendedView(const RenderFrame *frame)
+{
+    return frame->id == RENDER_MODERN || RenderSceneFor(frame)->farView;
+}
+
 static const RenderPacing *FramePacing(const RenderFrame *frame)
 {
     const Profile *profile = frame->profile;
@@ -176,7 +181,16 @@ RenderFrame RenderSnapshot(RendererId id, const RenderSettings *settings)
 {
     RenderFrame frame = {.id = id, .profile = ProfileFor(id)};
     memcpy(&frame.settings, (const char *)settings + frame.profile->offset, frame.profile->size);
-    if (id == RENDER_MODERN) frame.settings.modern.bloom = RenderModernBloom(settings);
+    if (id == RENDER_MODERN) {
+        ModernRenderSettings *modern = &frame.settings.modern;
+        modern->bloom = RenderModernBloom(settings);
+        if (!modern->scene.farView) {
+            /* Custom fades over the last third of the selected world distance. */
+            modern->scene.fade = 1;
+            modern->scene.fadeNear = modern->customDistance * 2 / 3;
+            modern->scene.fadeFar = modern->customDistance;
+        }
+    }
     return frame;
 }
 
@@ -288,6 +302,12 @@ static const char *const tonemapperKeys[] = {
     [MODERN_TONEMAP_SOFT_SHADOWS] = "pbr_neutral_soft_shadows"
 };
 
+static const char *const trackDetailKeys[] = {
+    [RENDER_TRACK_NATIVE] = "native",
+    [RENDER_TRACK_MEDIUM] = "medium",
+    [RENDER_TRACK_HIGH] = "high"
+};
+
 static int SetScene(RenderScene *scene, const char *key, const char *value)
 {
     long number = strtol(value, NULL, 10);
@@ -347,11 +367,31 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
         }
         return 1;
     }
+    if (!strcmp(key, "modern_track_detail")) {
+        if (!strcmp(value, "medium_plus")) value = trackDetailKeys[RENDER_TRACK_MEDIUM];
+        for (size_t i = 0; i < sizeof(trackDetailKeys) / sizeof(trackDetailKeys[0]); i++) {
+            if (!strcmp(value, trackDetailKeys[i])) {
+                s->modern.trackDetail = (int)i;
+                break;
+            }
+        }
+        return 1;
+    }
     if (!strcmp(key, "modern_brightness")) {
         char *end;
         long brightness = strtol(value, &end, 10);
         if (end != value && !*end && brightness >= MODERN_BRIGHTNESS_MIN && brightness <= MODERN_BRIGHTNESS_MAX)
             s->modern.brightness = (int)brightness;
+        return 1;
+    }
+    if (!strcmp(key, "modern_custom_distance")) {
+        char *end;
+        long distance = strtol(value, &end, 10);
+        if (end != value && !*end) {
+            if (distance < MODERN_DISTANCE_MIN) distance = MODERN_DISTANCE_MIN;
+            if (distance > MODERN_DISTANCE_MAX) distance = MODERN_DISTANCE_MAX;
+            s->modern.customDistance = (int)distance;
+        }
         return 1;
     }
     if (!strcmp(key, "pc_draw_distance")) {
@@ -395,10 +435,15 @@ void RenderSave(FILE *file, const RenderSettings *s)
     }
     fprintf(file, "pc_draw_distance = %d\n", s->pc.drawDistance);
     fprintf(file, "modern_brightness = %d\n", s->modern.brightness);
+    fprintf(file, "modern_custom_distance = %d\n", s->modern.customDistance);
     unsigned tonemapper = s->modern.tonemapper;
     if (tonemapper >= sizeof(tonemapperKeys) / sizeof(tonemapperKeys[0]))
         tonemapper = MODERN_TONEMAP_SOFT_SHADOWS;
     fprintf(file, "modern_tonemapper = %s\n", tonemapperKeys[tonemapper]);
+    unsigned trackDetail = s->modern.trackDetail;
+    if (trackDetail >= sizeof(trackDetailKeys) / sizeof(trackDetailKeys[0]))
+        trackDetail = RENDER_TRACK_NATIVE;
+    fprintf(file, "modern_track_detail = %s\n", trackDetailKeys[trackDetail]);
     for (size_t i = 0; i < sizeof(platforms) / sizeof(platforms[0]); i++) {
         RendererId id = *(const RendererId *)((const char *)s + platforms[i].offset);
         fprintf(file, "%s = %s\n", platforms[i].key, ProfileFor(id)->key);

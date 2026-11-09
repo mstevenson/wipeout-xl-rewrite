@@ -19,7 +19,7 @@ typedef struct RenderPacing {
     int cap;  /* pictures a second with FRAME_RATE_CAPPED */
 } RenderPacing;
 typedef struct RenderScene {
-    int farView; /* 0 uses native visibility, 1 draws the whole track */
+    int farView; /* 0 uses Native or Modern's Custom mode, 1 uses Full */
     int fade, fadeNear, fadeFar;
     int farFlares; /* engine flares on ships beyond native visibility */
 } RenderScene;
@@ -47,10 +47,13 @@ typedef struct SaturnRenderSettings {
 } SaturnRenderSettings;
 enum { MODERN_BRIGHTNESS_MIN = 50, MODERN_BRIGHTNESS_DEFAULT = 85, MODERN_BRIGHTNESS_MAX = 100 };
 enum { MODERN_TONEMAP_ORIGINAL, MODERN_TONEMAP_SOFT_SHADOWS };
+enum { MODERN_DISTANCE_MIN = 20000, MODERN_DISTANCE_DEFAULT = 96000, MODERN_DISTANCE_MAX = 100000 };
 typedef struct ModernRenderSettings {
     int resample, scale, brightness, bilinear, bloom, tonemapper, smoothTrackLighting, weaponLights;
     RenderPacing pacing;
     RenderScene scene;
+    int trackDetail;
+    int customDistance;
 } ModernRenderSettings;
 typedef struct RenderSettings {
     RendererId selection; /* explicit environment override; AUTO uses the saved settings */
@@ -72,7 +75,7 @@ typedef struct RenderSettings {
     {1,1,1,1,1,1,1,RENDER_HARDWARE_DEFAULTS}, \
     {1,1,1,1,0,0,0,1,RENDER_HARDWARE_DEFAULTS}, \
     {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1,1, \
-        {FRAME_RATE_VSYNC, FRAME_CAP_DEFAULT}, RENDER_SCENE_DEFAULTS(1, 1, 1)}, 0 }
+        {FRAME_RATE_VSYNC, FRAME_CAP_DEFAULT}, RENDER_SCENE_DEFAULTS(1, 1, 1), RENDER_TRACK_NATIVE, MODERN_DISTANCE_DEFAULT}, 0 }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef union RenderProfileSettings {
@@ -137,6 +140,7 @@ int RenderModernBloom(const RenderSettings *settings);
 RenderPacing *RenderPacingSetting(RenderSettings *settings, RendererId id);
 RenderScene *RenderSceneSetting(RenderSettings *settings, RendererId id);
 const RenderScene *RenderSceneFor(const RenderFrame *frame);
+int RenderUsesExtendedView(const RenderFrame *frame);
 int RenderOriginalFrameRate(RendererId id, int pal);
 int RenderOriginalInterpolates(void);
 int RenderPcViewLimits(const RenderFrame *frame, int *sections, int *scenery);

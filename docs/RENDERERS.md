@@ -26,12 +26,17 @@ presentation preserves the 4:3 base aspect ratio. Switching profiles also switch
 resolution. Modern defaults to Auto and uses the PlayStation base dimensions.
 The four hardware profiles default to 1×.
 Widescreen and HD textures are shared. Each profile saves its **Draw distance**
-choice, fade toggle and range, and distant engine flare toggle. The port's
-scenery fade and distant flares apply in **Full** mode. Modern defaults to
+choice, Full-mode fade toggle and range, and distant engine flare toggle. Modern defaults to
 **Full** with both effects enabled. The four hardware profiles default to
 **Native** with scenery fade off.
 `WIPEOUT_FAR_VIEW`, `WIPEOUT_FADE`, and `WIPEOUT_FAR_FLARES`
-override these settings for the current run.
+override these preferences for the current run. For Modern, `WIPEOUT_FAR_VIEW=0`
+selects **Custom**, which uses its own fade range.
+
+Modern's **Custom** slider sets the distance from the camera in world units.
+The range is 20,000 to 100,000 and defaults to 96,000. Scenery always fades
+into the sky over the last third of that distance. A saved Modern Native
+selection opens as Custom.
 
 Native draw distance follows the active renderer. PC uses
 its original F3 road and scenery limits and its separate rendered-ship gate.
@@ -39,12 +44,17 @@ PS1 retains the original regional road, scenery and ship rules. N64 uses its
 camera-direction/junction road walker, original scenery bounds and remembered
 ship visibility. Saturn uses contiguous authored road spans, course depth buckets,
 model bounds and its separate ship depth interval. These policies apply when
-**Native** is selected, including renderer overrides on another platform's assets;
-**Full** keeps the extended-distance pass. Modern's Native mode follows linked
-road spans without the PC F3 cap, draws scenery without a profile-specific cull,
-and uses the Saturn ship depth interval. Original course-specific exceptions
+**Native** is selected, including renderer overrides on another platform's assets.
+**Full** and Modern's **Custom** both use the extended scene pass.
+Original course-specific exceptions
 apply when their source course is loaded. See [native distance verification](port-notes/native-distance.md).
 HD texture replacements apply above 1× in the hardware profiles, including when Auto selects a higher scale.
+
+Modern's **Track Detail** applies at both draw distances. **Native** (the
+default) preserves the usual road detail at each distance. **Medium** raises
+Low tiles to Medium and Medium tiles to High, including Medium detail on the
+extended road. **High** uses High tiles throughout the visible road. Both
+raised settings use the road packet arena and keep the same section visibility.
 
 Each profile saves its own **Frame rate** mode and **Frames per second** cap.
 The hardware profiles default to **Original**. Modern defaults to
@@ -268,6 +278,8 @@ captures validate this implementation; they do not establish console equivalence
 | INI value | Meaning |
 | --- | --- |
 | `modern_for_all_platforms` | Use Modern for every platform when set to 1 (default) |
+| `modern_custom_distance` | Modern's Custom draw distance in world units. |
+| `modern_track_detail` | Modern's road detail. Use `native` (default), `medium`, or `high`. |
 | `ps1_renderer`, `pc_renderer`, `n64_renderer`, `saturn_renderer` | Profile for that platform: `ps1`, `pc`, `n64`, `saturn` or `modern`; defaults to the matching profile |
 | `ps1_*`, `pc_*`, `saturn_*`, `n64_*`, `modern_*` controls | Independent profile settings |
 | `ps1_render_scale`, `pc_render_scale`, `n64_render_scale`, `saturn_render_scale`, `modern_render_scale` | Profile resolution multiplier, limited by GPU capacity. Use 0 for Auto. |
