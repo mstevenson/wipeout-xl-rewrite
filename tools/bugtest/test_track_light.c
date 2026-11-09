@@ -136,6 +136,69 @@ static void DetailedRoad(void)
     puts("Detailed road arena: authored tiles, high detail beyond the old pool, precise near-plane vertices and offscreen culling: OK");
 }
 
+static void ShipRoadLighting(void)
+{
+    VECTOR vertices[] = {
+        {0,0,0}, {800,0,0}, {0,0,800}, {800,0,800}, {0,0,1600}, {800,0,1600},
+        {1600,0,0}, {1600,0,800},
+    };
+    Face faces[] = {
+        {.vertex = {1,0,2,3}, .normal = {.vy = 4096}, .flags = TRACK_BASE, .red = 32, .green = 64},
+        {.vertex = {6,1,3,7}, .normal = {.vy = 4096}, .flags = TRACK_BASE, .red = 96, .green = 64},
+        {.vertex = {3,2,4,5}, .normal = {.vy = 4096}, .flags = TRACK_BASE, .red = 224, .green = 128},
+    };
+    TrackSection sections[] = {{.faceCount = 2}, {.faceStart = 2, .faceCount = 1}};
+    sections[0].nextSection.ptr = &sections[1];
+    sections[1].prevSection.ptr = &sections[0];
+    data = (TrackData){.faces = faces, .faceCount = 3, .vertices = vertices, .vertexCount = 8};
+    ShipData ship = {.nearTrkSect = &sections[0], .attr = LSIDE, .ppivot = {400, -200, 400}};
+    smooth = 0;
+    assert(PortShipTrackLight(&ship).r == 32);
+    ship.attr = 0;
+    assert(PortShipTrackLight(&ship).r == 96);
+    smooth = 1;
+
+    /* Sample the same triangle field as the track, even when LSIDE disagrees. */
+    uint32_t colours[4];
+    assert(TrackCornerLights(&faces[0], colours));
+    uint32_t expected = SampleTrackLight(colours, 4, 4);
+    CVECTOR light = PortShipTrackLight(&ship);
+    assert(light.r == (expected & 255) && light.g == ((expected >> 8) & 255));
+    ship.ppivot.vx = 800;
+    CVECTOR laneEdge = PortShipTrackLight(&ship);
+    ship.attr = LSIDE;
+    assert(PortShipTrackLight(&ship).r == laneEdge.r);
+
+    /* The nearest section may switch before or after the physical boundary. */
+    ship.ppivot.vx = 400;
+    ship.ppivot.vz = 800;
+    light = PortShipTrackLight(&ship);
+    ship.nearTrkSect = &sections[1];
+    assert(PortShipTrackLight(&ship).r == light.r);
+    ship.ppivot.vz = 799;
+    assert(abs(PortShipTrackLight(&ship).r - light.r) <= 1);
+    ship.ppivot.vz = 801;
+    ship.nearTrkSect = &sections[0];
+    assert(abs(PortShipTrackLight(&ship).r - light.r) <= 1);
+
+    ship.ppivot.vz = 1200;
+    CVECTOR before = PortShipTrackLight(&ship);
+    sections[0].nextSection.ptr = NULL;
+    sections[0].junction.ptr = &sections[1];
+    assert(PortShipTrackLight(&ship).r == before.r);
+    PortSetTrackColour(&faces[2], 240, 128, 0);
+    assert(PortShipTrackLight(&ship).r > before.r);
+    faces[2].lightFormat = RENDER_LIGHT_RGB8;
+    light = PortShipTrackLight(&ship);
+    assert(light.r == 240 && light.cd == RENDER_LIGHT_RGB8);
+
+    /* A distant pivot falls back to its legacy section, away from the track. */
+    ship.ppivot.vy = -2000;
+    assert(PortShipTrackLight(&ship).r == 32);
+    PortResetTrackLighting();
+    puts("Ship road tint follows the track triangles across lane and section boundaries: OK");
+}
+
 int main(void)
 {
     POLY_FT4 packet = {0};
@@ -165,6 +228,7 @@ int main(void)
     SetTrackLight(&packet, &face);
     assert(packet.tpage == (PORT_TPAGE_N64 | 17));
     SmoothTrackLighting();
+    ShipRoadLighting();
     DetailedRoad();
     puts("Road packets retain authored/gameplay light encoding without changing RGB, tiles or PS1 pages: OK");
     return 0;

@@ -1143,7 +1143,8 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         index++;
     } while (--count > 0);
 finished:
-    if (ship >= 0) PortShipPackets(ship, firstPacket, out); /* Port: shield compositing for this ship instance. */
+    /* Port: shield compositing and, with smooth track lighting, tint between game frames. */
+    if (ship >= 0) PortShipPackets(ship, firstPacket, out, geometry.smoothTrackLighting ? colour : NULL);
     GteSetN64(0); /* Port: subsequent PS1 projections keep their own material identity. */
     forceReject = 0;
     if (farView) {

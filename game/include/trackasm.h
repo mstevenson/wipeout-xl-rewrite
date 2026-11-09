@@ -28,6 +28,8 @@ extern POLY_FT4 *TrackHiPolys[2];
 void PortTrackPools(void);
 /* Port: discard cached lighting adjacency when the course changes. */
 void PortResetTrackLighting(void);
+/* Port: sample the road tint for a ship, with the original face tint as fallback. */
+CVECTOR PortShipTrackLight(const ShipData *ship);
 /* Port: frame interpolation (gte.h): the key of the track's point at world position x, y, z (a corner, or a point
    halfway along an edge), the same whichever face and detail projects it (trackdraw.c). */
 uint64_t PortTrackKey(int x, int y, int z);

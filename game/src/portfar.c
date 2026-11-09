@@ -9,6 +9,7 @@
 #include "trails.h"
 #include "effects.h"
 #include "port_platform.h"
+#include "trackasm.h"
 #include "../../platform/psx/gte.h"
 #include "../../platform/render/renderer.h"
 #include "../../platform/render/pc_visibility.h"
@@ -886,7 +887,6 @@ void PortDrawNativeShips(TrackCamera *camera, ShipData *ships, Object **shapes, 
         Object *object;
         Skeleton skeleton;
         PortView view;
-        Face *face;
 
         if (!ship->nearTrkSect) continue;
         object = shapes[ship->highResTableIndex];
@@ -898,13 +898,11 @@ void PortDrawNativeShips(TrackCamera *camera, ShipData *ships, Object **shapes, 
         SetSkeletonPosition(&skeleton, ship->ppivot.vx, ship->ppivot.vy, ship->ppivot.vz);
         SetSkeletonDirectionHPR(&skeleton, ship->hdg, ship->pitch, ship->roll);
         SkeletonView(&skeleton, &view);
-        face = track->faces + ship->nearTrkSect->faceStart;
-        while (!(face->flags & TRACK_BASE)) face++;
-        if (!(ship->attr & LSIDE)) face++;
+        CVECTOR light = PortShipTrackLight(ship);
         farShips |= 1 << i;
         PortInterpInstance(i);
         if (raceType == 1 && i == ghostShip) InitTransShip(object, 1);
-        PortDrawObjectFar(object, &view, (const CVECTOR *)&face->red);
+        PortDrawObjectFar(object, &view, &light);
         if (raceType == 1 && i == ghostShip) InitTransShip(object, 0);
         PortInterpInstance(-1);
     }
@@ -921,8 +919,6 @@ static void DrawFarShips(ShipData *ships, Object **shipShapes)
         Object   *object;
         Skeleton  skeleton;
         PortView  view;
-        Face     *face;
-        u_char    flags;
 
         /* a time trial draws its own ship and the ghost, the two-player race the two players' ships (the other may be
            far ahead or behind) */
@@ -941,24 +937,15 @@ static void DrawFarShips(ShipData *ships, Object **shipShapes)
         if (!MaybeVisible(view.t, (double)object->extent + 1024.0, 0.0)) {
             continue;
         }
-        /* lit by the colour of the track face beside it */
-        face = track->faces + ship->nearTrkSect->faceStart;
-        do {
-            flags = face->flags;
-            face++;
-        } while (!(flags & 1));
-        face--;
-        if (!(ship->attr & LSIDE)) {
-            face++;
-        }
+        CVECTOR light = PortShipTrackLight(ship);
         farShips |= 1 << i;
         PortInterpInstance(i); /* frame interpolation: the ship's drawing, as DrawShips gives it */
         if (raceType == 1 && i == ghostShip) {
             InitTransShip(object, 1); /* the ghost is see-through, as DrawShips draws it */
-            PortDrawObjectFar(object, &view, (const CVECTOR *)&face->red);
+            PortDrawObjectFar(object, &view, &light);
             InitTransShip(object, 0);
         } else {
-            PortDrawObjectFar(object, &view, (const CVECTOR *)&face->red);
+            PortDrawObjectFar(object, &view, &light);
         }
         PortInterpInstance(-1);
     }

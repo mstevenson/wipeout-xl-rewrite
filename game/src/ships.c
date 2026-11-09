@@ -4,6 +4,7 @@
 #include "racectrl.h"
 #include "portfar.h" /* Port: the far view */
 #include "portorig.h" /* Port: the original Wipeout's tracks */
+#include "trackasm.h"
 
 /* $gp-relative globals are tentative definitions; the rest are extern. */
 extern int           proximity;
@@ -77,9 +78,6 @@ void DrawShips(ShipData *shipIndex, Object **shipShapes, int camShip, TrackCamer
     u_short   baseIndex, attr2;
     int       diff, rawDiff;
     int       v;
-    u_char    flags;
-    Face     *face;
-    CVECTOR  *win;
 
     int nativeShips = PortNativeShipsEnabled(); /* Port: drawing policy is independent of simulation flags. */
 
@@ -131,31 +129,24 @@ void DrawShips(ShipData *shipIndex, Object **shipShapes, int camShip, TrackCamer
                 if ((u_short)(diff + 39) < 79) {
                     if (!nativeShips) PortFarMarkShip(i); /* Port: drawn here, not by the far view */
                     shipIndex[i].combatAttr = attr2 & ~0x80;
-                    face = track->faces + shipIndex[i].nearTrkSect->faceStart;
-                    do {
-                        flags = face->flags;
-                        face++;
-                    } while (!(flags & TRACK_BASE));
-                    face--;
-                    if (!(shipIndex[i].attr & LSIDE)) face++;
-                    win = (CVECTOR *)&face->red;
                     if (!nativeShips) {
+                        CVECTOR light = PortShipTrackLight(&shipIndex[i]); /* Port: road tint for this draw only. */
                         PortInterpInstance(i); /* Port: frame interpolation: the model's drawing is this ship's */
                         if (raceType == RACE_ONE_ON_ONE) {
                             if ((i == remoteShip) || (i == ownShip)) {
-                                AsmDrawObjectLit(obj, camera.camPos, 0, win);
+                                AsmDrawObjectLit(obj, camera.camPos, 0, &light);
                             }
                         } else if (raceType == RACE_TIME_TRIAL) {
                             if (i == ownShip) {
-                                AsmDrawObjectLit(obj, camera.camPos, 0, win);
+                                AsmDrawObjectLit(obj, camera.camPos, 0, &light);
                             }
                             if (i == ghostShip) {
                                 InitTransShip(obj, 1);
-                                AsmDrawObjectLit(obj, camera.camPos, 0, win);
+                                AsmDrawObjectLit(obj, camera.camPos, 0, &light);
                                 InitTransShip(obj, 0);
                             }
                         } else {
-                            AsmDrawObjectLit(obj, camera.camPos, 0, win);
+                            AsmDrawObjectLit(obj, camera.camPos, 0, &light);
                         }
                         PortInterpInstance(-1);
                     }

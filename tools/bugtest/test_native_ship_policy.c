@@ -4,6 +4,7 @@
 #include <stdio.h>
 static int renderer;
 int PortNativeRenderer(void) { return renderer; }
+int PortScreenMargin(void) { return 0; }
 
 ConfigData *gameData;
 RaceLine raceLines[100];
@@ -29,7 +30,8 @@ void SetSkeletonDirectionHPR(Skeleton *s, short h, short p, short r) { (void)s; 
 MATRIX *GetSkeletonMatrix(Skeleton *s) { return &s->relative; }
 void PortInterpInstance(int i) { (void)i; }
 void InitTransShip(Object *o, short f) { (void)o; (void)f; }
-void PortDrawObjectFar(Object *o, const PortView *v, const CVECTOR *c) { (void)o; (void)v; (void)c; hulls++; }
+CVECTOR PortShipTrackLight(const ShipData *ship) { (void)ship; return (CVECTOR){.r = 123}; }
+void PortDrawObjectFar(Object *o, const PortView *v, const CVECTOR *c) { (void)o; (void)v; assert(c->r == 123); hulls++; }
 static int DrawAt(int profile, int z)
 {
     ShipData ships[15]={0};
@@ -54,7 +56,13 @@ static int DrawAt(int profile, int z)
     PortDrawNativeShips(&camera,ships,shapes,14);
     assert(farShips==(hulls?1:0));
     assert(shadowPackets==(hulls?16:0));
-    return hulls;
+    int nativeHulls = hulls;
+    if (profile == RENDER_MODERN && z == 31999) {
+        /* The legacy far-view path must forward the same sampled tint. */
+        DrawFarShips(ships, shapes);
+        assert(hulls == 2);
+    }
+    return nativeHulls;
 }
 
 int main(void)

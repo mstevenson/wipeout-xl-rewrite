@@ -50,7 +50,8 @@ void PortTagPrims(const void *start, const void *end, const char *what, const ch
 { (void)start; (void)end; (void)what; (void)name; (void)index; }
 void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index, const int position[3])
 { (void)position; (void)assetTag; PortTagPrims(start, end, what, name, index); }
-void PortShipPackets(int ship, const void *start, const void *end) { (void)ship; (void)start; (void)end; }
+void PortShipPackets(int ship, const void *start, const void *end, const CVECTOR *roadLight)
+{ (void)ship; (void)start; (void)end; (void)roadLight; }
 
 static _Noreturn void UnexpectedFarDraw(void)
 {

@@ -1137,6 +1137,16 @@ typedef struct ShieldPackets {
     const u_long *lastHull;
 } ShieldPackets;
 
+typedef struct ShipLightRange {
+    PacketRange hull;
+    CVECTOR previous;
+} ShipLightRange;
+
+static struct {
+    uint32_t frame;
+    CVECTOR colour;
+} shipLightHistory[SHIP_EXHAUSTS];
+
 static const uint32_t *heldShadows[HELD_SHADOWS];
 static int heldWords[HELD_SHADOWS];
 static uint32_t heldTexpage;
@@ -1151,6 +1161,7 @@ typedef struct TrackPackets {
     int reorderExhaust;
     ShieldPackets shields[SHIELD_DRAWS];
     int shieldCount;
+    ShipLightRange shipLights[SHIP_EXHAUSTS];
 } TrackPackets;
 static TrackPackets building;      /* the frame being built's */
 static TrackPackets tableTrack[4]; /* ... the tables drawn's (a table is drawn again between frames) */
@@ -1183,11 +1194,40 @@ void PortShieldPackets(int ship, const void *start, const void *end)
     building.shields[building.shieldCount++] = (ShieldPackets){.ship = ship, .shell = {start, end}};
 }
 
-void PortShipPackets(int ship, const void *start, const void *end)
+void PortShipPackets(int ship, const void *start, const void *end, const CVECTOR *roadLight)
 {
     if (start == end) return;
     for (int i = 0; i < building.shieldCount; i++) {
         if (building.shields[i].ship == ship) building.shields[i].hull = (PacketRange){start, end};
+    }
+    if (!roadLight) return;
+    uint32_t frame = GteFrameRecorded();
+    if (shipLightHistory[ship].frame && shipLightHistory[ship].frame + 1 == frame) {
+        building.shipLights[ship] = (ShipLightRange){{start, end}, shipLightHistory[ship].colour};
+    }
+    shipLightHistory[ship].frame = frame;
+    shipLightHistory[ship].colour = *roadLight;
+}
+
+/* Only the flat textured polygons of a lit ship carry the road tint. The
+   ordering table owns the previous tint for as long as it can be presented. */
+static void BlendShipLight(const uint32_t *packet, GpuVertex *vertices, int count)
+{
+    if (!interpolating || walkTrack < 0) return;
+    const ShipLightRange *lights = tableTrack[walkTrack].shipLights;
+    for (int i = 0; i < SHIP_EXHAUSTS; i++) {
+        if (!PacketInRange(packet, lights[i].hull)) continue;
+        float along = GtePresentationAlong(interpolationAlong);
+        CVECTOR past = lights[i].previous;
+        uint8_t r = (uint8_t)(past.r + (vertices[0].r - past.r) * along + 0.5f);
+        uint8_t g = (uint8_t)(past.g + (vertices[0].g - past.g) * along + 0.5f);
+        uint8_t b = (uint8_t)(past.b + (vertices[0].b - past.b) * along + 0.5f);
+        for (int k = 0; k < count; k++) {
+            vertices[k].r = r;
+            vertices[k].g = g;
+            vertices[k].b = b;
+        }
+        break;
     }
 }
 
@@ -1897,6 +1937,9 @@ static void Polygon(const uint32_t *w, uint32_t code)
         draw.clutX = (int)(clut & 0x3F) * 16;
         draw.clutY = (int)((clut >> 6) & 0x3FF); /* (bit 15: a palette in the second half, gpu.h) */
         draw.trackTile = TrackPacket(w);
+        if (!draw.trackTile && policy.smoothTrackLighting && !raw && !gouraud) {
+            BlendShipLight(w - 1, v, count);
+        }
     }
     if (!gouraud && !textured) {
         for (i = 1; i < count; i++) {

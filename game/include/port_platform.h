@@ -90,7 +90,8 @@ void PortShadowRange(const void *start, size_t bytes);
 void PortTrackPackets(const void *start, const void *end);
 /* Packet ranges for compositing a translucent shield over its own ship. */
 void PortShieldPackets(int ship, const void *start, const void *end);
-void PortShipPackets(int ship, const void *start, const void *end);
+/* The optional road tint is already in the model's modulation format. */
+void PortShipPackets(int ship, const void *start, const void *end, const CVECTOR *roadLight);
 /* The HUD packets from start to end, of the frame being built, stay where the game puts them: a menu over the race
    whose items stand apart in the middle of the screen (the pause's YES and NO), not an element of a side. */
 void PortHudCentred(const void *start, const void *end);

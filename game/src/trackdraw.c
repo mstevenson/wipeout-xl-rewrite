@@ -72,6 +72,7 @@ typedef struct TrackLightEdge {
 
 static int *trackLightNext;
 static int trackLightBuilt;
+static const int trackLightCornerOrder[] = {1, 0, 2, 3};
 
 void PortResetTrackLighting(void)
 {
@@ -165,8 +166,7 @@ static int TrackCornerLights(const Face *face, uint32_t colours[4])
     int base = 4 * (int)(face - track->faces);
     int blended = 0;
     for (int i = 0; i < 4; i++) {
-        static const int cornerOrder[] = {1, 0, 2, 3};
-        int start = base + cornerOrder[i], corner = start;
+        int start = base + trackLightCornerOrder[i], corner = start;
         unsigned r = 0, g = 0, b = 0, count = 0;
         do {
             const Face *source = &track->faces[corner / 4];
@@ -208,6 +208,122 @@ static uint32_t SampleTrackLight(const uint32_t colours[4], int x, int y)
         colour |= (value / TRACK_LIGHT_GRID) << shift;
     }
     return colour;
+}
+
+static double LightDot(const double a[3], const double b[3])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+typedef struct ShipRoadLight {
+    const Face *face;
+    double distanceSquared;
+    double weights[4];
+} ShipRoadLight;
+
+/* Port: project the pivot onto the triangle. Check its edges as well so that
+   a raised ship can still sample the seam between differently banked faces. */
+static void FindShipRoadTriangle(ShipRoadLight *best, const Face *face,
+                                const double corners[4][3], const int indices[3])
+{
+    const double *a = corners[indices[0]];
+    const double *b = corners[indices[1]];
+    const double *c = corners[indices[2]];
+    double ab[3], ac[3];
+    for (int k = 0; k < 3; k++) {
+        ab[k] = b[k] - a[k];
+        ac[k] = c[k] - a[k];
+    }
+    double bb = LightDot(ab, ab), bc = LightDot(ab, ac), cc = LightDot(ac, ac);
+    double determinant = bb * cc - bc * bc;
+    if (determinant <= 0) return;
+    double pb = -LightDot(a, ab), pc = -LightDot(a, ac);
+    double v = (cc * pb - bc * pc) / determinant;
+    double w = (bb * pc - bc * pb) / determinant;
+    double weights[3] = {1 - v - w, v, w};
+    double distanceSquared = best->distanceSquared;
+    if (weights[0] >= 0 && v >= 0 && w >= 0) {
+        double point[3];
+        for (int k = 0; k < 3; k++) point[k] = a[k] + v * ab[k] + w * ac[k];
+        distanceSquared = LightDot(point, point);
+    } else {
+        for (int i = 0; i < 3; i++) {
+            int j = (i + 1) % 3;
+            const double *start = corners[indices[i]];
+            const double *end = corners[indices[j]];
+            double edge[3], point[3];
+            for (int k = 0; k < 3; k++) edge[k] = end[k] - start[k];
+            double t = -LightDot(start, edge) / LightDot(edge, edge);
+            t = t < 0 ? 0 : t > 1 ? 1 : t;
+            for (int k = 0; k < 3; k++) point[k] = start[k] + t * edge[k];
+            double distance = LightDot(point, point);
+            if (distance < distanceSquared) {
+                distanceSquared = distance;
+                weights[i] = 1 - t;
+                weights[j] = t;
+                weights[(j + 1) % 3] = 0;
+            }
+        }
+    }
+    if (distanceSquared >= best->distanceSquared) return;
+    best->face = face;
+    best->distanceSquared = distanceSquared;
+    for (int i = 0; i < 4; i++) best->weights[i] = 0;
+    for (int i = 0; i < 3; i++) best->weights[indices[i]] = weights[i];
+}
+
+static void FindShipRoadLight(ShipRoadLight *best, const TrackSection *section, const VECTOR *pivot)
+{
+    if (!section || section == (TrackSection *)-1) return;
+    for (int i = 0; i < section->faceCount; i++) {
+        const Face *face = &track->faces[(u_short)section->faceStart + i];
+        if (!(face->flags & TRACK_BASE)) continue;
+        double corners[4][3];
+        for (int k = 0; k < 4; k++) {
+            const VECTOR *vertex = &track->vertices[face->vertex[trackLightCornerOrder[k]]];
+            corners[k][0] = (double)vertex->vx - pivot->vx;
+            corners[k][1] = (double)vertex->vy - pivot->vy;
+            corners[k][2] = (double)vertex->vz - pivot->vz;
+        }
+        /* Same diagonal as SampleTrackLight, in packet corner order. */
+        FindShipRoadTriangle(best, face, corners, (const int[]){0, 1, 2});
+        FindShipRoadTriangle(best, face, corners, (const int[]){3, 2, 1});
+    }
+}
+
+CVECTOR PortShipTrackLight(const ShipData *ship)
+{
+    const TrackSection *section = ship->nearTrkSect;
+    if (PortRenderGeometry().smoothTrackLighting) {
+        /* Keep the search on the ship's local route, away from unrelated crossings.
+           As with the ship shadow, a road more than 1000 world units away is too far. */
+        ShipRoadLight best = {.distanceSquared = 1000.0 * 1000.0};
+        const TrackSection *nearby[] = {section, section->prevSection.ptr, section->nextSection.ptr};
+        for (int i = 0; i < 3; i++) FindShipRoadLight(&best, nearby[i], &ship->ppivot);
+        for (int i = 0; i < 3; i++) {
+            if (nearby[i]) FindShipRoadLight(&best, nearby[i]->junction.ptr, &ship->ppivot);
+        }
+        if (best.face) {
+            uint32_t colours[4];
+            if (TrackCornerLights(best.face, colours)) {
+                u_char rgb[3];
+                for (int channel = 0; channel < 3; channel++) {
+                    double value = 0;
+                    for (int i = 0; i < 4; i++)
+                        value += ((colours[i] >> (8 * channel)) & 255) * best.weights[i];
+                    rgb[channel] = (u_char)(value + 0.5);
+                }
+                return (CVECTOR){rgb[0], rgb[1], rgb[2], best.face->lightFormat};
+            }
+            return (CVECTOR){best.face->red, best.face->green, best.face->blue, best.face->lightFormat};
+        }
+    }
+
+    /* Original lane and section tint, also used when the ship is away from the road. */
+    const Face *face = track->faces + section->faceStart;
+    while (!(face->flags & TRACK_BASE)) face++;
+    if (!(ship->attr & LSIDE)) face++;
+    return (CVECTOR){face->red, face->green, face->blue, face->lightFormat};
 }
 
 static void TagTrackFaceLight(const POLY_FT4 *poly, const Face *face)

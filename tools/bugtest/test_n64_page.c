@@ -260,8 +260,8 @@ static void ShieldOrdering(void)
     AddPrim(&ot[0], &other);
     AddPrim(&ot[0], &shield[1]);
     PortShieldPackets(3, shield, shield + 2);
-    PortShipPackets(3, hull, hull + 2);
-    PortShipPackets(2, &other, &other + 1);
+    PortShipPackets(3, hull, hull + 2, NULL);
+    PortShipPackets(2, &other, &other + 1, NULL);
     WalkTable(&ot[3], 1);
     assert(tableTrack[walkTrack].shields[0].lastHull == &hull[0].tag);
     assert(!HoldShield(&other.tag));
@@ -284,7 +284,7 @@ static void ShieldOrdering(void)
     AddPrim(&ot[3], &nextShield);
     AddPrim(&ot[1], &nextHull);
     PortShieldPackets(3, &nextShield, &nextShield + 1);
-    PortShipPackets(3, &nextHull, &nextHull + 1);
+    PortShipPackets(3, &nextHull, &nextHull + 1, NULL);
     DRAWENV env = {0};
     PsxUpcomingTables(&ot[3], NULL, ot, &env);
     for (int presentation = 0; presentation < 4; presentation++) {
@@ -476,6 +476,46 @@ static void PointLightSnapshots(void)
     PsxCaptureLights(NULL, 0); DrawLights(1); assert(!drawnLights.count);
     GteKeepPast(0); GteClearPrecise();
     puts("Point lights: immutable frames, interpolation, camera cuts, stale-frame reset, bounded influence selection and offscreen culling: OK");
+}
+
+static void ShipLightInterpolation(void)
+{
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.selection = RENDER_MODERN;
+    RenderCommit();
+    GteKeepPast(1);
+    u_long ot;
+    POLY_FT3 hull = {.x0 = 10, .y0 = 10, .x1 = 20, .y1 = 10, .x2 = 10, .y2 = 20};
+    SetPolyFT3(&hull);
+    const uint32_t *packet = (const uint32_t *)&hull + 1;
+    for (int frame = 0; frame < 4; frame++) {
+        GteClearPrecise();
+        for (int i = 0; i < 8; i++) {
+            GteKeyNext(0, 300 + i);
+            uint32_t h = GteRecordProjection(i, 0, 0, 500, 1);
+            GteRecordView(h, (i & 1) * 100, ((i >> 1) & 1) * 100, 500 + ((i >> 2) & 1) * 100);
+        }
+        ClearOTagR(&ot, 1);
+        AddPrim(&ot, &hull);
+        hull.r0 = 32 + frame * 64;
+        if (frame != 2) {
+            CVECTOR light = {.r = hull.r0};
+            PortShipPackets(0, &hull, &hull + 1, &light);
+        }
+        WalkTable(&ot, 1);
+        interpolating = 1;
+        interpolationAlong = .5f;
+        clippedCount = 0;
+        Polygon(packet, hull.code);
+        assert(clippedCount == 3 && clipped[0].r == (frame == 1 ? 64 : hull.r0));
+        interpolating = 0;
+        clippedCount = 0;
+        Polygon(packet, hull.code);
+        assert(clippedCount == 3 && clipped[0].r == hull.r0);
+    }
+    GteKeepPast(0);
+    GteClearPrecise();
+    puts("Ship tint follows interpolated presentation and ignores stale ship samples: OK");
 }
 
 static void SaturnSkyInterpolation(void)
@@ -719,6 +759,7 @@ int main(void)
 {
     RendererBoundaries();
     SourceMaterialIsolation();
+    ShipLightInterpolation();
     {
         GtePrecise p = {.x = 12, .y = 24, .fade = 1, .view = {0, 0, 100}};
         GpuVertex v;

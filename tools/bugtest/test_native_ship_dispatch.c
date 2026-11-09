@@ -21,6 +21,7 @@ static int enabled, packets, marks, nativeCalls, sound[4];
 int PortNativeShipsEnabled(void) { return enabled; }
 void PortFarMarkShip(int ship) { marks |= 1 << ship; }
 void PortInterpInstance(int instance) { (void)instance; }
+CVECTOR PortShipTrackLight(const ShipData *ship) { (void)ship; return (CVECTOR){.r = 123}; }
 void PortDrawNativeShips(TrackCamera *camera, ShipData *ships, Object **shapes, int cam)
 { (void)camera; (void)ships; (void)shapes; (void)cam; nativeCalls++; }
 int GetMagnitude(VECTOR v) { return (int)sqrt((double)v.vx*v.vx+(double)v.vy*v.vy+(double)v.vz*v.vz); }
@@ -28,7 +29,7 @@ void SetSkeletonPosition(Skeleton *s, int x, int y, int z) { s->relative.t[0]=x;
 void SetSkeletonDirectionHPR(Skeleton *s, short h, short p, short r) { (void)s; (void)h; (void)p; (void)r; }
 void SetSkeletonTransform(Skeleton *s) { (void)s; }
 void RotTrans(SVECTOR *v, VECTOR *out, int *flag) { out->vx=v->vx; out->vy=v->vy; out->vz=v->vz; *flag=0; }
-void AsmDrawObjectLit(Object *o, Skeleton *s, int r, CVECTOR *c) { (void)o; (void)s; (void)r; (void)c; packets++; }
+void AsmDrawObjectLit(Object *o, Skeleton *s, int r, CVECTOR *c) { (void)o; (void)s; (void)r; assert(c->r == 123); packets++; }
 void AdjustRemoteEngineSound(int a, int b, int c, int d) { sound[0]=a; sound[1]=b; sound[2]=c; sound[3]=d; }
 
 int main(void)

@@ -277,7 +277,8 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
             "Blends neighbouring texels on world textures. Disable for sharp, nearest-neighbour sampling. "
             "HUD and 2D menus use nearest sampling.");
         changed |= Check("Smooth track lighting", &s->modern.smoothTrackLighting,
-            "Blends lighting across connected track surfaces. Special pads keep their own colours.");
+            "Blends lighting across connected track surfaces. Ships pick up the tint beneath them. "
+            "Special pads keep their own colours.");
         ImGui::TextUnformatted("Brightness");
         ImGui::SetNextItemWidth(-1);
         changed |= ImGui::SliderInt("##Brightness", &s->modern.brightness,
