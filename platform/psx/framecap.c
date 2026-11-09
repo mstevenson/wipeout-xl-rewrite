@@ -19,8 +19,6 @@
 #include "../debug_ui.h"
 #include "../platform.h"
 #include "../settings.h"
-#include "../original.h"
-#include "../render/saturn_native.h"
 
 int PortGameInfo(char *out, int size); /* (game/src/portinfo.c) */
 
@@ -540,26 +538,6 @@ void FrameCapTag(const void *start, const void *end, const char *what, const cha
     tagsSorted = 0;
 }
 
-void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index)
-{
-    if (!name && (strstr(what, "track") || strstr(what, "face")) && PortOriginalTrack() < 0) {
-        SaturnNativeBindTrack(start, end, index);
-    }
-    FrameCapTag(start, end, what, name, index);
-}
-
-void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index)
-{
-    /* The synthetic PRM's scratch word is copied byte-for-byte by the loader. */
-    SaturnNativeBind(start, end, SDL_Swap32BE(assetTag), index);
-    FrameCapTag(start, end, what, name, index);
-}
-
-void PortObjectVisualFrame(int *assetTag, unsigned frame)
-{
-    *assetTag = (int)SDL_Swap32BE(SaturnNativeFrameTag(SDL_Swap32BE((uint32_t)*assetTag), frame));
-}
-
 /* The picture at (x, y, w, h) read back for frame f: the console's pixels, and with widescreen the sides as well. */
 static void TakePicture(FrameCapFrame *f, int x, int y, int w, int h)
 {
@@ -672,7 +650,8 @@ static uint16_t Fetch(const uint16_t *vram, int x, int y)
 
 /* Interpolation follows the captured renderer. Texture lookup remains a native,
    single-texel diagnostic (HD replacements and display postprocessing are not replayed). */
-static void Shade(const FrameCapPrim *p, const GpuVertex *t[3], const float l[3], const uint16_t *vram, FrameCapHit *h)
+static void Shade(const RenderFrame *render, const FrameCapPrim *p, const GpuVertex *t[3],
+                  const float l[3], const uint16_t *vram, FrameCapHit *h)
 {
     float k[3], sum = 0, c[4] = {0, 0, 0, 0};
     int i;
@@ -719,9 +698,12 @@ static void Shade(const FrameCapPrim *p, const GpuVertex *t[3], const float l[3]
         h->transparent = texel == 0;
         {
             float t8[3] = {(texel & 31) * 8.0f, ((texel >> 5) & 31) * 8.0f, ((texel >> 10) & 31) * 8.0f};
+            float gain = 1.0f;
+            if (render->id == RENDER_MODERN && (p->shade & SHADE_WORLD_TINT))
+                gain = render->settings.modern.brightness / (float)MODERN_BRIGHTNESS_MAX;
             for (i = 0; i < 3; i++) {
                 if (!p->draw.raw) {
-                    t8[i] = SDL_min(t8[i] * c[i] / 128.0f, 255.0f);
+                    t8[i] = SDL_min(t8[i] * (c[i] * gain) / 128.0f, 255.0f);
                 }
             }
             h->r = t8[0];
@@ -777,7 +759,7 @@ int FrameCapHits(int frame, int x, int y, FrameCapHit *hits, int max)
                 h->prim = i;
                 h->triangle = k;
                 h->skipped = (p->flags & FRAMECAP_DROPPED) || (p->flags & (k ? FRAMECAP_SKIP1 : FRAMECAP_SKIP0));
-                Shade(p, t, l, vram, h);
+                Shade(&f->render, p, t, l, vram, h);
             }
         }
     }

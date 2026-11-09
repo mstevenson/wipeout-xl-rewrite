@@ -56,7 +56,7 @@ static void Policies(void)
     }
     f.id = RENDER_N64; f.n64Track = 1; m.n64 = 0;
     a = RenderPrepare(&f, &m);
-    assert(!(a.shade & (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR | SHADE_DITHER | SHADE_PC_TINT)));
+    assert(!(a.shade & (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR | SHADE_DITHER | SHADE_WORLD_TINT)));
     assert(!RenderGet(RENDER_PS1)->depth(&f.settings.ps1) && RenderGet(RENDER_PC)->depth(&f.settings.pc) && RenderGet(RENDER_N64)->depth(&f.settings.n64));
     f.settings.ps1.depth = 1; f.settings.pc.depth = 0;
     assert(RenderGet(RENDER_PS1)->depth(&f.settings.ps1) && !RenderGet(RENDER_PC)->depth(&f.settings.pc) && RenderGet(RENDER_N64)->depth(&f.settings.n64));
@@ -105,6 +105,50 @@ static void SaturnProfile(void)
     SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDERER", "saturn", true);
     Load("renderer = pc\n"); assert(RenderCurrent()->id == RENDER_SATURN);
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDERER");
+}
+
+static void ModernProfile(void)
+{
+    Load("ps1_renderer = modern\nmodern_render_scale = 3\n");
+    assert(RenderCurrent()->id == RENDER_MODERN && RenderDepth(RenderCurrent()));
+    assert(RenderOriginalFrameRate(0) == 60 && RenderScale(RenderCurrent()) == 3);
+    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MAX);
+    assert(RenderCurrent()->settings.modern.bilinear);
+    assert(RenderCurrent()->settings.modern.bloom);
+    assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
+    Load("ps1_renderer = modern\nmodern_render_scale = 3\n"
+         "modern_bilinear = 0\nmodern_tonemapper = original\n");
+    assert(!RenderCurrent()->settings.modern.bilinear);
+    assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_ORIGINAL);
+    assert(RenderSet(&portSettings.render, "modern_tonemapper", "pbr_neutral") && RenderCommit());
+    assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
+    assert(RenderSet(&portSettings.render, "modern_tonemapper", "unknown") && !RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_bloom", "0") && RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_bilinear", "2") && !RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_bilinear", "-1") && !RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_bilinear", "1") && RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_bilinear", "0") && RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_brightness", "50") && RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_brightness", "49") && !RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_brightness", "101") && !RenderCommit());
+    assert(PortSettingsSave());
+    char *saved = SDL_LoadFile(PortSettingsPath(), NULL);
+    assert(saved && strstr(saved, "modern_tonemapper = pbr_neutral_soft_shadows\n"));
+    assert(strstr(saved, "modern_bilinear = 0\n"));
+    SDL_free(saved);
+    PortSettingsLoad();
+    assert(RenderCurrent()->id == RENDER_MODERN && RenderScale(RenderCurrent()) == 3);
+    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MIN);
+    assert(!RenderCurrent()->settings.modern.bilinear);
+    assert(!RenderCurrent()->settings.modern.bloom);
+    assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
+    assert(RenderSet(&portSettings.render, "modern_tonemapper", "original") && RenderCommit());
+    RenderDefaults(&portSettings.render, RENDER_MODERN);
+    assert(RenderCommit() && RenderScale(RenderCurrent()) == 0);
+    assert(RenderCurrent()->settings.modern.bilinear);
+    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MAX);
+    assert(RenderCurrent()->settings.modern.bloom);
+    assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
 }
 
 static void DisplayResampling(void)
@@ -195,6 +239,53 @@ static void ProfileIsolation(void)
     }
     n64 = 0;
     puts("All renderer profiles isolate rasterization, depth and lighting from inactive controls and track selection: OK");
+}
+
+/* Exercise every profile, including optional resources and sampling requests. */
+static void ResourcePolicyIsolation(void)
+{
+    const char *prefixes[] = {"", "ps1_", "pc_", "n64_", "saturn_", "modern_"};
+    const struct { const char *key, *value; } changes[] = {
+        {"ps1_quantize_vertices", "0"}, {"ps1_depth", "1"}, {"pc_lighting", "0"},
+        {"pc_bilinear", "0"}, {"n64_three_point", "0"}, {"n64_dither", "0"},
+        {"saturn_affine_textures", "0"}, {"saturn_mesh", "0"}, {"saturn_camera_aligned_sky", "1"},
+        {"modern_bilinear", "0"}, {"modern_brightness", "50"}, {"modern_bloom", "0"},
+        {"modern_tonemapper", "pbr_neutral_soft_shadows"}
+    };
+    const RenderMaterial cases[] = {
+        {.textured = 1, .bounds = 1},
+        {.textured = 1, .bounds = 1, .ui = 1},
+        {.textured = 1, .bounds = 1, .n64 = 1},
+        {.textured = 1, .bounds = 1, .fullColour = 1},
+        {.textured = 1}
+    };
+    for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
+        RenderFrame frame = {.id = (RendererId)id, .settings = RENDER_DEFAULTS};
+        RenderResources resources = RenderResourcesFor(&frame);
+        assert(resources.hdr == (id == RENDER_MODERN));
+        assert(resources.originalTextures == (id == RENDER_MODERN));
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+            RenderStyle style = RenderPrepare(&frame, &cases[i]);
+            for (size_t key = 0; key < sizeof(changes) / sizeof(changes[0]); key++) {
+                if (!strncmp(changes[key].key, prefixes[id], strlen(prefixes[id]))) continue;
+                RenderFrame changed = frame;
+                assert(RenderSet(&changed.settings, changes[key].key, changes[key].value));
+                RenderStyle actual = RenderPrepare(&changed, &cases[i]);
+                RenderResources actualResources = RenderResourcesFor(&changed);
+                assert(!memcmp(&style, &actual, sizeof(style)));
+                assert(!memcmp(&resources, &actualResources, sizeof(resources)));
+            }
+        }
+    }
+    RenderFrame modern = {.id = RENDER_MODERN, .settings = RENDER_DEFAULTS};
+    for (int bilinear = 0; bilinear <= 1; bilinear++) {
+        modern.settings.modern.bilinear = bilinear;
+        RenderStyle style = RenderPrepare(&modern, &cases[0]);
+        assert(style.nativeBounds == bilinear);
+    }
+    modern.settings.modern.bloom = 0;
+    assert(!RenderResourcesFor(&modern).hdr && RenderResourcesFor(&modern).originalTextures);
+    puts("All five profiles isolate resource requirements and source-bound policy from inactive settings: OK");
 }
 
 static void PlatformSelection(void)
@@ -325,6 +416,7 @@ int main(void)
     NativeViewLimits();
     Policies();
     ProfileIsolation();
+    ResourcePolicyIsolation();
     SDL_Environment *env = SDL_GetEnvironment();
     assert(mkdtemp(testDir));
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_PC_RENDERING");
@@ -421,6 +513,7 @@ int main(void)
     OriginalFrameRates();
     SaturnProfile();
     DisplayResampling();
+    ModernProfile();
     portConfig.hidden = 1; PortSettingsLoad();
     assert(portSettings.render.selection == RENDER_AUTO && !PortSettingsSave());
     unlink(PortSettingsPath()); rmdir(testDir);

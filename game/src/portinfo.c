@@ -18,6 +18,12 @@ void PortInfoRaceDrawn(void)
     raceFrame = PortGameFrames() + 1;
 }
 
+/* Port: the renderer selects fixture metadata by course number. */
+int PortActiveTrackNumber(void)
+{
+    return gameData ? gameData->actTrackNum : -1;
+}
+
 static const char *RaceTypeName(void)
 {
     switch (raceType) {

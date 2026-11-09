@@ -112,7 +112,7 @@ void PortSettingsLoad(void)
     RenderSettings platformRender = RENDER_DEFAULTS;
     int legacyRendering = -1, legacyPc = -1, legacyDepth = -1, havePcDepth = 0, haveAuto = 0;
     int havePs1Renderer = 0, haveN64Renderer = 0;
-    int legacyScale = -1, haveScale[5] = {0};
+    int legacyScale = -1, haveScale[RENDER_SATURN + 1] = {0};
     RenderDefaults(&portSettings.render, RENDER_AUTO);
     RenderInvalidate();
 
@@ -206,7 +206,7 @@ void PortSettingsLoad(void)
         SDL_strlcpy(portSettings.saveSlot, value, sizeof(portSettings.saveSlot));
     }
     if ((value = SDL_getenv("WIPEOUT_RENDER_SCALE"))) {
-        for (int id = RENDER_PS1; id <= RENDER_SATURN; id++)
+        for (int id = RENDER_PS1; id < RENDER_COUNT; id++)
             *RenderScaleSetting(&portSettings.render, (RendererId)id) = SDL_clamp(SDL_atoi(value), 0, 16);
     }
     /* The old texture-only option migrates to the complete rendering mode. */
@@ -216,6 +216,7 @@ void PortSettingsLoad(void)
         portSettings.render.ps1Selection = SDL_atoi(value) ? RENDER_PC : RENDER_PS1;
     }
     if ((value = SDL_getenv("WIPEOUT_RENDERER"))) RenderSet(&portSettings.render, "renderer", value);
+    if ((value = SDL_getenv("WIPEOUT_MODERN_BLOOM"))) portSettings.render.modern.bloom = SDL_atoi(value) != 0;
     if ((value = SDL_getenv("WIPEOUT_HD_PACK"))) {
         /* a pack's .zip or folder, drawn ("" not) */
         SDL_strlcpy(portSettings.hdPackPath, value, sizeof(portSettings.hdPackPath));

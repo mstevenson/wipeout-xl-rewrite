@@ -4,6 +4,9 @@
     "precision highp int;\n"
     "precision highp usampler2D;\n"
     "#endif\n"
+#ifdef RENDER_FRAGMENT_UNIFORMS
+    RENDER_FRAGMENT_UNIFORMS
+#endif
     "in vec4 vColour;\n"
     "in float vColourWeight;\n"
     "in vec3 vPixel;\n"
@@ -23,7 +26,12 @@
     "flat in ivec4 clut;\n"
     "flat in ivec4 vWindow;\n"
     "flat in ivec4 mode;\n"
+#ifdef RENDER_AUX_COLOUR
+    "layout(location = 0) out vec4 fragment;\n"
+    RENDER_AUX_COLOUR
+#else
     "out vec4 fragment;\n"
+#endif
     /* texels and palettes from either half of video memory (rows to 1023) */
     "uint Fetch(ivec2 p) { return texelFetch(vram, ivec2(p.x & 1023, p.y & 1023), 0).r; }\n"
     "uint FetchClut(ivec2 p) { return texelFetch(vram, ivec2(p.x & 1023, p.y & 1023), 0).r; }\n"
@@ -35,7 +43,17 @@
     RENDER_TINT
     RENDER_OUTPUT_COLOUR
     /* colour col with coverage cov (premultiplied), blended or opaque, faded with distance (vColour.a) */
-    "void Out(vec3 col, float cov, bool blended) {\n"
+    "vec4 BlendMaterial(vec3 col, float cov, bool blended) {\n"
+    "    if (!blended) return vec4(col, cov);\n"
+    "    if (semiMode == 0) return vec4(col * 0.5, cov * 0.5);\n"
+    "    if (semiMode == 3) return vec4(col * 0.25, 0.0);\n"
+    "    return vec4(col, 0.0);\n"
+    "}\n"
+    "void Out(vec3 col, float cov, bool blended, bool saturate) {\n"
+#ifdef RENDER_AUX_COLOUR
+    "    vec3 unclamped = col;\n"
+#endif
+    "    if (saturate) col = min(col, vec3(cov));\n"
     "    col = OutputColour(col);\n"
     "    float fade = vColour.a;\n"
     "    if (mode.z == 3) {\n"
@@ -48,12 +66,10 @@
 #ifdef RENDER_COVERAGE
     RENDER_COVERAGE
 #endif
-    "    col *= fade;\n"
-    "    cov *= fade;\n"
-    "    if (!blended) fragment = vec4(col, cov);\n"
-    "    else if (semiMode == 0) fragment = vec4(col * 0.5, cov * 0.5);\n"  /* B/2 + F/2 */
-    "    else if (semiMode == 3) fragment = vec4(col * 0.25, 0.0);\n"      /* B + F/4 */
-    "    else fragment = vec4(col, 0.0);\n"                               /* B + F; B - F (its own blend) */
+    "    fragment = BlendMaterial(col * fade, cov * fade, blended);\n"
+#ifdef RENDER_AUX_COLOUR
+    "    if (hdrActive) WriteAux(BlendMaterial(HdrMaterial(unclamped, cov) * fade, cov * fade, blended));\n"
+#endif
     "}\n"
     "ivec2 WindowUV(ivec2 uv) {\n"
     "    uv = uv & 255;\n"
@@ -78,6 +94,9 @@
     /* N64 images have registered bounds; native PS1 taps retain page wrapping and texture windows. */
 #include "material_address.h"
     "ivec2 MaterialUV(ivec2 p) {\n"
+#ifdef RENDER_FILTER_BOUNDS
+    RENDER_FILTER_BOUNDS
+#endif
     "    return ((mode.y & 64) != 0 || filtered == 1) && filterBounds.z >= filterBounds.x\n"
     "        ? ivec2(N64Axis(p.x, filterBounds.x, filterBounds.z, 1), N64Axis(p.y, filterBounds.y, filterBounds.w, 2))\n"
     "        : WindowUV(p);\n"
@@ -152,15 +171,29 @@
     "        fragment = vec4(0.0);\n"
     "        return;\n"
     "    }\n"
-    /* RGB is premultiplied by coverage: clamp tinted colours to coverage, not 1. */
-    "    if ((mode.y & 1) == 0) {\n"
-    "        vec3 tint = TextureTint();\n"
-    "        opaque.rgb = min(opaque.rgb * tint, vec3(opaque.a));\n"
-    "        semi.rgb = min(semi.rgb * tint, vec3(semi.a));\n"
-    "    }\n"
     "    if (mode.z == 1) semi = vec4(0.0);\n"
     "    if (mode.z == 2) opaque = vec4(0.0);\n"
     "    if (opaque.a + semi.a < 0.004) discard;\n"
+    "    bool tinted = (mode.y & 1) == 0;\n"
+    "    if (tinted) {\n"
+    "        vec3 tint = TextureTint();\n"
+    "        opaque.rgb *= tint;\n"
+    "        semi.rgb *= tint;\n"
+    "    }\n"
+#ifdef RENDER_AUX_COLOUR
+    "    if (hdrActive) {\n"
+    "        vec3 hdrOpaque = HdrMaterial(opaque.rgb, opaque.a);\n"
+    "        vec3 hdrSemi = HdrMaterial(semi.rgb, semi.a);\n"
+    "        float semiWeight = semiMode == 0 ? 0.5 : (semiMode == 3 ? 0.25 : 1.0);\n"
+    "        float coverage = opaque.a + (semiMode == 0 ? semi.a * 0.5 : 0.0);\n"
+    "        WriteAux(vec4(hdrOpaque + hdrSemi * semiWeight, coverage) * fade);\n"
+    "    }\n"
+#endif
+    /* RGB is premultiplied by coverage: cap SDR tinted colours at coverage. */
+    "    if (tinted) {\n"
+    "        opaque.rgb = min(opaque.rgb, vec3(opaque.a));\n"
+    "        semi.rgb = min(semi.rgb, vec3(semi.a));\n"
+    "    }\n"
     "    if (semiMode == 0) semi *= 0.5;\n"
     "    else {\n"
     "        if (semiMode == 3) semi.rgb *= 0.25;\n"
@@ -185,13 +218,13 @@
     "    return texelFetch(image, ivec2(clamp(floor(at) + 0.5, low, high)), 0);\n"
     "}\n"
     "void main() {\n"
+    "    vec2 t = vTexel.xy / vTexel.z;\n"
     "    vec3 c = VertexColour();\n"
     "    float fade = vColour.a;\n"
     "    if (mode.x == 0) {\n"
-    "        Out(c, 1.0, semiMode >= 0);\n"
+    "        Out(c, 1.0, semiMode >= 0, false);\n"
     "        return;\n"
     "    }\n"
-    "    vec2 t = vTexel.xy / vTexel.z;\n"
     "    int portPage = texturePage.x / 64 + 16 * ((texturePage.y / 256) & 1) + (texturePage.y >= 512 ? 32 : 0);\n"
     "    if (mode.w == 3 && portPage > 0) {\n"  /* the port's other pages (the PC version's): its colour key, the
                                                  vertex colour as Direct3D's (255 white), blended whole */
@@ -202,15 +235,15 @@
     "        vec2 page = vec2(float(k % 8), float(k / 8)) * 256.0;\n"
     "        vec4 g = RgbaSample(portPages, page + t, page + low, page + high);\n"
     "        if (g.a < 0.004) discard;\n"
-    "        Out((mode.y & 1) == 0 ? g.rgb * c : g.rgb, g.a, semiMode >= 0);\n"
+    "        Out((mode.y & 1) == 0 ? g.rgb * c : g.rgb, g.a, semiMode >= 0, false);\n"
     "        return;\n"
     "    }\n"
     "    if (mode.w == 3) {\n"                 /* the platform's glyphs: premultiplied, with coverage */
     "        vec2 size = vec2(textureSize(glyphs, 0));\n"
     "        vec4 g = RgbaSample(glyphs, t * size / 256.0, vec2(0.5), size - 0.5);\n"
     "        if (g.a < 0.004) discard;\n"
-    "        vec3 rgb = (mode.y & 1) == 0 ? min(g.rgb * TextureTint(), vec3(g.a)) : g.rgb;\n"
-    "        Out(rgb, g.a, semiMode >= 0);\n"
+    "        bool tinted = (mode.y & 1) == 0;\n"
+    "        Out(tinted ? g.rgb * TextureTint() : g.rgb, g.a, semiMode >= 0, tinted);\n"
     "        return;\n"
     "    }\n"
 #ifdef RENDER_FILTER
@@ -225,8 +258,8 @@
     "            vec4 h = HdSample(at);\n"
     "            if (h.a < 0.25) discard;\n"
     "            bool hdSemi = (mode.y & 64) != 0 || h.a < 0.75;\n"
-    "            vec3 hc = (mode.y & 1) == 0 ? min(h.rgb * TextureTint(), vec3(1.0)) : h.rgb;\n"
-    "            Out(hc, 1.0, semiMode >= 0 && hdSemi);\n"
+    "            bool tinted = (mode.y & 1) == 0;\n"
+    "            Out(tinted ? h.rgb * TextureTint() : h.rgb, 1.0, semiMode >= 0 && hdSemi, tinted);\n"
     "            return;\n"
     "        }\n"
     "    }\n"
@@ -234,15 +267,14 @@
     "        vec4 c = NativeSample(ivec2(floor(t)));\n"
     "        if (c.a == 0.0) discard;\n"
     /* Match filtered/HD modulation: saturation precedes fade and blend weighting. */
-    "        Out((mode.y & 1) == 0 ? min(c.rgb * TextureTint(), vec3(1.0)) : c.rgb, c.a, semiMode >= 0);\n"
+    "        bool tinted = (mode.y & 1) == 0;\n"
+    "        Out(tinted ? c.rgb * TextureTint() : c.rgb, c.a, semiMode >= 0, tinted);\n"
     "        return;\n"
     "    }\n"
     "    uint texel = NativeTexel(uv);\n"
     "    if (texel == 0u) discard;\n"
     "    bool semi = (texel & 0x8000u) != 0u;\n"
     "    vec3 t8 = vec3(float(texel & 31u), float((texel >> 5) & 31u), float((texel >> 10) & 31u)) * 8.0 / 255.0;\n"
-    "    if ((mode.y & 1) == 0) {\n"
-    "        t8 = min(t8 * TextureTint(), vec3(1.0));\n"
-    "    }\n"
-    "    Out(t8, 1.0, semiMode >= 0 && semi);\n"
+    "    bool tinted = (mode.y & 1) == 0;\n"
+    "    Out(tinted ? t8 * TextureTint() : t8, 1.0, semiMode >= 0 && semi, tinted);\n"
     "}\n"

@@ -42,6 +42,8 @@
     X(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers) \
     X(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer) \
     X(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D) \
+    X(PFNGLDRAWBUFFERSPROC, glDrawBuffers) \
+    X(PFNGLCLEARBUFFERFVPROC, glClearBufferfv) \
     X(PFNGLCHECKFRAMEBUFFERSTATUSPROC, glCheckFramebufferStatus) \
     X(PFNGLBLITFRAMEBUFFERPROC, glBlitFramebuffer) \
     X(PFNGLBLENDEQUATIONPROC, glBlendEquation) \
@@ -113,6 +115,8 @@ ASYNC_GL_FUNCTIONS(DECLARE_GL)
 #define glGenFramebuffers p_glGenFramebuffers
 #define glBindFramebuffer p_glBindFramebuffer
 #define glFramebufferTexture2D p_glFramebufferTexture2D
+#define glDrawBuffers p_glDrawBuffers
+#define glClearBufferfv p_glClearBufferfv
 #define glCheckFramebufferStatus p_glCheckFramebufferStatus
 #define glBlitFramebuffer p_glBlitFramebuffer
 #define glBlendEquation p_glBlendEquation

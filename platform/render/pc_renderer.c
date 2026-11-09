@@ -11,7 +11,7 @@ static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
     s.shade |= SHADE_AFFINE_COLOUR;
     /* Affine world billboards use PC modulation too; HUD colours retain the PS1 scale. */
     if (!m->ui && !m->fullColour) {
-        s.shade |= SHADE_PC_TINT;
+        s.shade |= SHADE_WORLD_TINT;
     }
     if (m->textured && settings->bilinear && (m->fullColour || !m->n64 || m->bounds)) {
         s.filter = 2;

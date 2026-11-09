@@ -9,16 +9,17 @@ platform preferences, returning to the loaded disc's preference afterwards.
 **Active renderer** shows the committed frame's renderer. Selection changes
 rendering, not the game version or assets.
 
-All four platform selectors stay visible. Below them, each renderer profile has
+Modern is available in each of the four platform selectors. All selectors stay visible. Below them, each renderer profile has
 its own controls and reset button. Profiles keep their settings; platforms
 choosing the same profile share those controls. The profile panels scroll
 horizontally in narrow windows and with larger fonts.
-Each profile has its own **Resolution** selector and remembers its scale. The
-default is 1×: PS1 uses 320×240 (320×256 in PAL mode), N64 uses 320×240,
+Each profile has its own **Resolution** selector and remembers its scale.
+At 1×, PS1 uses 320×240 (320×256 in PAL mode), N64 uses 320×240,
 Saturn uses 352×240, and PC uses 640×480. Higher choices multiply that profile's
 base dimensions; **Auto** follows the window size. Widescreen adds columns while
 presentation preserves the 4:3 base aspect ratio. Switching profiles also switches
-resolution; restoring a profile's defaults restores its 1× resolution.
+resolution. Modern defaults to Auto and uses the PlayStation base dimensions.
+The four hardware profiles default to 1×.
 Widescreen, frame rate, the Native/Full draw-distance choice, fading and HD
 textures are shared. Native draw distance follows the active renderer. PC uses
 its original F3 road and scenery limits and its separate rendered-ship gate.
@@ -29,12 +30,13 @@ model bounds and its separate ship depth interval. These policies apply when
 **Native** is selected, including renderer overrides on another platform's assets;
 **Full** keeps the extended-distance pass. Original course-specific exceptions
 apply when their source course is loaded. See [native distance verification](port-notes/native-distance.md).
-HD texture replacements apply only above 1×, including when Auto selects a higher scale.
+HD texture replacements apply above 1× in the hardware profiles, including when Auto selects a higher scale.
 
 The shared **Frame rate > Original** mode follows the **active renderer profile**,
-including overrides chosen for another platform. Its label shows the profile and
-target: PlayStation 30 fps (25 in PAL mode), Nintendo 64 30 fps, Sega Saturn 20 fps,
-and PC 60 fps. Changing profiles switches the target at the frame boundary.
+including overrides chosen for another platform. Its label shows the selected
+profile and target. PlayStation uses 30 fps (25 in PAL mode), Nintendo 64 uses
+30 fps, Sega Saturn uses 20 fps, and PC and Modern use 60 fps. Changing profiles
+switches the target at the frame boundary.
 The Saturn target follows [developer David Swan's account](https://www.arcadeattack.co.uk/david-swan-interview/)
 of the 20 fps cap; N64 uses a 30 fps target for the supported USA release, and PC
 uses a 60 fps presentation default, rather than claiming a fixed historical PC rate.
@@ -53,6 +55,7 @@ linked games share the main player's presentation policy.
 | Saturn | Vertex snapping, affine textures, undithered RGB5 colour and checkerboard transparency on; original sky scrolling; depth enhancement off; nearest display scaling |
 | PC | Bilinear texture filtering, dithered RGB565, scenery/ship lighting, depth and linear display resampling on |
 | N64 | Three-point filtering, RGB5 precision, magic-square dithering, VI dedithering, approximate divot filtering and linear display resampling on; depth always on |
+| Modern | Auto resolution, full-precision projection, perspective-correct world textures, bilinear world texture filtering, depth and linear display resampling |
 
 Snapping and colour precision are independent. Dithering requires RGB5 precision;
 N64 dedithering does too. Disabled dependencies retain their saved values.
@@ -63,7 +66,7 @@ Each profile has a **Linear display resampling** checkbox. Enable it to blend
 neighbouring pixels when scaling the final image to the window; disable it for
 sharp nearest-neighbour scaling. This affects the scene and HUD independently of
 texture filtering. The saved keys are `ps1_resample`, `pc_resample`,
-`saturn_resample` and `n64_resample`. Missing keys retain the defaults above.
+`saturn_resample`, `n64_resample` and `modern_resample`. Missing keys retain the defaults above.
 
 Profiles control all materials, including full-colour pages and glyphs, while
 preserving source palette, addressing, modulation and transparency encodings.
@@ -72,6 +75,40 @@ menus and glyphs with nearest filtering; its display processing includes the HUD
 World shaders use explicit texel reads and explicit dithering, with driver
 dithering disabled. See [PC evidence and limits](PC.md#rendering-evidence-and-limits)
 and [N64 rendering](N64_RENDERING.md) for fidelity limits.
+
+## Modern profile
+
+Choose **Modern** in a platform's renderer selector or set
+`WIPEOUT_RENDERER=modern` for a single run. The profile uses the original
+textures and models with full-colour rendering and Auto resolution.
+
+**Bilinear texture filtering** is enabled by default and blends neighbouring
+texels on projected world textures, including billboards. Uncheck it for
+nearest-neighbour sampling. HUD and 2D menus always use nearest sampling.
+The saved key `modern_bilinear` uses 1 for enabled and 0 for disabled.
+
+**Brightness** (`modern_brightness`) scales the tint on world textures before
+colour clipping. **100%** is the default and uses PlayStation modulation.
+**50%** halves the tint, approximating the PC modulation on PlayStation
+textures. HUD and menu art use their own brightness.
+
+**HDR bloom** (`modern_bloom`, on by default) uses the light above SDR white to
+add glow to Modern races. It also boosts the animated neon in Phenitia Park
+and a tunnel bulb in Gare d'Europa on PlayStation tracks. The renderer adds
+the glow in linear light and maps the highlights to SDR for the window and
+frame captures. Opaque HUD pixels retain their original colours. Systems
+without a renderable half-float scene target use the SDR path. Set
+`WIPEOUT_MODERN_BLOOM=0` to compare a race with the effect disabled.
+
+While racing, open the debug console with the backtick key and use
+**Graphics → Modern → Tonemapper** to compare the two presets. The control
+requires HDR bloom. **Classic** is saved as `original`.
+**Soft Highlights** (`pbr_neutral_soft_shadows`) is the default. It uses Classic
+through a linear RGB peak of 0.15 and smoothly blends into full PBR Neutral
+by 0.75, favouring Classic in the midtones. The selection is saved as
+`modern_tonemapper`. Existing `pbr_neutral` selections load as
+`pbr_neutral_soft_shadows`.
+[Khronos PBR Neutral specification](https://github.com/KhronosGroup/ToneMapping/tree/main/PBR_Neutral)
 
 ## PC profile
 
@@ -194,11 +231,11 @@ captures validate this implementation; they do not establish console equivalence
 
 | INI value | Meaning |
 | --- | --- |
-| `ps1_renderer`, `pc_renderer`, `n64_renderer`, `saturn_renderer` | Profile for that platform: `ps1`, `pc`, `n64` or `saturn`; defaults to the matching profile |
+| `ps1_renderer`, `pc_renderer`, `n64_renderer`, `saturn_renderer` | Profile for that platform: `ps1`, `pc`, `n64`, `saturn` or `modern`; defaults to the matching profile |
 | Old `renderer = auto` or `n64` | `automatic_renderer` migrates to the PlayStation preference; N64 defaults to its own profile |
 | Old `renderer = ps1`, `pc` or `saturn` | Migrates to the PlayStation and N64 preferences (the old N64 override was off) |
-| `ps1_*`, `pc_*`, `saturn_*`, `n64_*` controls | Independent profile settings; obsolete `n64_depth` ignored and no longer saved |
-| `ps1_render_scale`, `pc_render_scale`, `n64_render_scale`, `saturn_render_scale` | Profile resolution multiplier; 1 by default, 0 for Auto; limited by GPU capacity |
+| `ps1_*`, `pc_*`, `saturn_*`, `n64_*`, `modern_*` controls | Independent profile settings; obsolete `n64_depth` ignored and no longer saved |
+| `ps1_render_scale`, `pc_render_scale`, `n64_render_scale`, `saturn_render_scale`, `modern_render_scale` | Profile resolution multiplier, limited by GPU capacity. Use 0 for Auto. |
 
 The old global `render_scale` migrates only where a profile scale is missing.
 Positive values become native multipliers; PC halves the old multiplier, rounding
@@ -213,7 +250,7 @@ or `smooth_textures` initializes the PlayStation preference when neither
 `automatic_renderer` nor `ps1_renderer` is present. Old `depth_buffer` initializes
 PC depth. New keys win regardless of line order.
 
-`WIPEOUT_RENDERER=ps1|pc|saturn` forces that renderer for the run; `auto|n64`
+`WIPEOUT_RENDERER=ps1|pc|saturn|modern` forces that renderer for the run; `auto|n64`
 follows platform preferences. Legacy `WIPEOUT_PC_RENDERING` /
 `WIPEOUT_SMOOTH_TEXTURES` choose the PlayStation preference;
 `WIPEOUT_DEPTH_BUFFER` sets PC depth for that run. The forced renderer is not
@@ -224,15 +261,26 @@ player settings.
 
 - `platform/render/renderer.[ch]`: registry, defaults, persistence and immutable
   frame snapshots. `*_renderer.c` owns each profile's material, depth and
-  `RenderGeometry` policy; `renderer_ui.cpp` owns the panels.
-- `{ps1,pc,saturn,n64}_gl.c`: independently linkable scene programs and presentation
-  callbacks, each receiving only its own profile. N64 alone owns VI processing.
+  `RenderGeometry` policy, source bounds and resource requirements.
+  `renderer_ui.cpp` owns the panels.
+- `{ps1,pc,saturn,n64,modern}_gl.c`: independently linkable scene programs and presentation
+  callbacks, each receiving only its own profile. An optional batch-binding callback
+  keeps scene uniforms private.
+  N64 alone owns VI processing; Modern owns bloom and tonemapping.
 - `gl_backend.c`: texture uploads, batching and framebuffers. `gl_pipeline.c`
   dispatches; `gl_api.[ch]` and `gl_program.c` load GL and construct programs.
+  Shared transport acts on profile requirements without reading named profile settings.
+  HDR allocation, seeding, copies and resizing are shared framebuffer operations.
   Shared shaders decode assets and handle transport/blending without selecting
   a renderer. HD replacements preserve source addressing.
+- `platform/material_source.[ch]`: source fixture identities, emission conditions and
+  UV masks, and the packet-builder hooks that attach native material/recorder metadata.
+  These facts do not depend on which profile is active or whether bloom is enabled.
 - `platform/psx/libgpu.c`: packet adapter. Game packet builders consume neutral
   geometry/light policy without selecting a named renderer or rewriting assets.
+  Track provenance and emission metadata survive packet decoding and replay under
+  every profile. `framecap.c` keeps this metadata in its in-memory primitive records
+  without classifying source assets; the saved diagnostic format is unchanged.
 
 `PsxRendererBoundary` flushes work and commits settings at the completed game-loop
 boundary. Only effective active-policy changes clear interpolation and inspection
@@ -273,3 +321,10 @@ linking, production shaders, switches, resource ownership, HD addressing and all
 64 N64 settings combinations against reference RGBA output across crops, scales,
 flips and readbacks. Recorded results and blocked checks are in the
 [consolidated change record](port-notes/renderer-changes.md).
+
+Boundary checks reject named profile-setting access in shared GL transport and
+Modern selection checks in the packet adapter. Source-material tests exercise
+all five profiles, bloom toggles, animation, capture, replay and packet reuse.
+Standalone profile tests link both CPU policy and GL code without the registry,
+backend or other profiles, exercising private batch bindings, HDR presentation
+and repeated destruction/recreation.

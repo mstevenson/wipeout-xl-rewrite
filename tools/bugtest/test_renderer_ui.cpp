@@ -42,11 +42,11 @@ static ImGuiTable *Table(const char *name = "Renderer settings")
 static void Layout()
 {
     ImGuiTable *table = Table();
-    assert(table && table->ColumnsCount == 4);
+    assert(table && table->ColumnsCount == RENDER_COUNT - RENDER_PS1);
     ImGuiTable *selectors = Table("Renderer platforms");
     assert(selectors && selectors->ColumnsCount == 4);
     for (int i = 0; i < 4; i++) assert(selectors->Columns[i].IsVisibleX);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < table->ColumnsCount; i++) {
         float minimum = ImGui::CalcTextSize("VI divot filtering (approximate)").x +
             ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
         assert(table->Columns[i].WidthGiven >= minimum);
@@ -138,6 +138,25 @@ int main()
     Activate("Restore renderer defaults", 3, RENDER_SATURN);
     assert(portSettings.render.saturn.mesh && !RenderCurrent()->settings.saturn.cameraAlignedSky);
     assert(!portSettings.render.saturn.resample && !portSettings.render.ps1.quantizeVertices);
+    SelectNext(2);
+    assert(portSettings.render.n64Selection == RENDER_MODERN && RenderCurrent()->id == RENDER_MODERN);
+    assert(RenderCurrent()->settings.modern.bilinear);
+    Activate("Bilinear texture filtering", 4, RENDER_MODERN);
+    assert(!RenderCurrent()->settings.modern.bilinear);
+    Focus("##Brightness", 4, RENDER_MODERN);
+    Key(ImGuiKey_Space); Key(ImGuiKey_LeftArrow); Key(ImGuiKey_Space);
+    assert(RenderCurrent()->settings.modern.brightness < MODERN_BRIGHTNESS_MAX);
+    assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
+    Focus("##Tonemapper", 4, RENDER_MODERN);
+    Key(ImGuiKey_Enter); Key(ImGuiKey_UpArrow); Key(ImGuiKey_Enter);
+    assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_ORIGINAL);
+    Activate("HDR bloom", 4, RENDER_MODERN);
+    assert(!RenderCurrent()->settings.modern.bloom);
+    Activate("Restore renderer defaults", 4, RENDER_MODERN);
+    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MAX);
+    assert(RenderCurrent()->settings.modern.bilinear);
+    assert(RenderCurrent()->settings.modern.bloom);
+    assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     n64Track = 0; RenderCommit(); Frame();
     assert(RenderCurrent()->id == RENDER_PC);
     windowWidth = 360; Frame(); Layout();

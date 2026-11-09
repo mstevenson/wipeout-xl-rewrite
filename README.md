@@ -185,7 +185,7 @@ Each profile also has its own **Resolution** selector: PS1 defaults to 320×240
 (320×256 in PAL mode), N64 to 320×240, Saturn to 352×240 and PC to 640×480.
 Choose a higher multiplier or Auto independently for each profile.
 **Frame rate > Original** follows the active renderer profile: PS1 30 fps
-(25 PAL), N64 30 fps, Saturn 20 fps and PC 60 fps. Its label updates when the
+(25 PAL), N64 30 fps, Saturn 20 fps, and PC and Modern 60 fps. Its label updates when the
 renderer changes, including when a platform uses another platform's profile.
 This changes presentation cadence while keeping the game's simulation timing.
 Each profile includes **Linear display resampling**: turn it off for sharp pixels
@@ -203,11 +203,14 @@ dithering and optional depth buffering. PC exposes filtering, lighting and depth
 plus [dithered RGB565 and the original PC draw-distance levels](docs/RENDERERS.md#pc-profile).
 N64 exposes three-point filtering, RGB5 precision, dithering and VI filters;
 its depth buffering is always enabled.
-Frame rate, draw distance and HD replacements remain shared.
+Choose **Modern** for Auto resolution, depth testing, and Nearest or Bilinear
+filtering of the original world textures. Bilinear is the default.
+Frame rate and draw distance are shared. HD replacements are shared by the
+hardware profiles.
 
 Existing profile parameters are retained. The former global choice migrates to
 the PlayStation preference, along with its N64 override behavior; PC and Saturn
-start with their matching profiles. `WIPEOUT_RENDERER=ps1|pc|saturn` temporarily
+start with their matching profiles. `WIPEOUT_RENDERER=ps1|pc|saturn|modern` temporarily
 forces a renderer; `auto` and the legacy `n64` value follow platform preferences.
 Old PC/filter and depth settings are migrated. See [rendering profiles](docs/RENDERERS.md)
 for defaults, controls and migration.

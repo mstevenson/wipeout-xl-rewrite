@@ -36,4 +36,11 @@ static RenderGeometry Geometry(const void *profile)
     return (RenderGeometry){0, 1, 1, RENDER_LIGHT_PS1};
 }
 
-const Renderer saturnRenderer = {RENDER_SATURN, "Sega Saturn", Prepare, Depth, Geometry};
+static RenderResources Resources(const void *profile)
+{
+    const SaturnRenderSettings *settings = profile;
+    return (RenderResources){.nativeQuads = settings->affineTextures,
+                             .alphaMesh = !settings->mesh, .cameraAlignedSky = settings->cameraAlignedSky};
+}
+
+const Renderer saturnRenderer = {RENDER_SATURN, "Sega Saturn", Prepare, Depth, Geometry, Resources};

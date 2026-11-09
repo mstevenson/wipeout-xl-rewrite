@@ -190,8 +190,9 @@ int PortFadeRange(int *nearDistance, int *farDistance);
 /* The frame recorder (platform/psx/framecap.h): the packets from start to end were built by `what` (an
    object's name, or NULL) for its item `index`. */
 void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index);
-/* Tag an object's packets with its synthetic PRM material identity and recorder name. */
-void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index);
+/* Tag an object's packets with its model identity, recorder name and placement. */
+void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name,
+                        uint32_t assetTag, int index, const int position[3]);
 /* Select the current artwork frame on a port-created object, if it has native frames. */
 void PortObjectVisualFrame(int *assetTag, unsigned frame);
 /* Advance the renderer's scenery and material animations once per race update. */

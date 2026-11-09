@@ -35,7 +35,7 @@ int main(int argc, char **argv)
         portSettings.render.selection = RENDER_PC; RenderCommit();
         const GpuVertex *v[3] = {&p->v[0], &p->v[1], &p->v[2]};
         FrameCapHit hit = {0};
-        Shade(p, v, l, NULL, &hit);
+        Shade(&f->render, p, v, l, NULL, &hit);
         assert(fabsf(hit.r - 120) < .001f);
         assert(fabsf(hit.u - (mode == 0 ? 100.0f/3 : 200.0f/7)) < .001f);
         assert(fabsf(hit.alpha - 480.0f/7) < .001f); /* fade remains perspective */

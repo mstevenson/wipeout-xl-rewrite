@@ -14,11 +14,14 @@ void PortLinkSetInterpolate(int on) { testLinkInterpolate = on; }
 int PortTracing(void) { return testTracing; }
 int portPal;
 int PortScreenMargin(void) { return 0; }
-static int testSaturnDisc;
+static int testSaturnDisc, testOriginalTrack = -1, testPcData, testTrackNumber;
 int PortSaturnDisc(void) { return testSaturnDisc; }
-int PortOriginalTrack(void) { return -1; }
+int PortOriginalTrack(void) { return testOriginalTrack; }
 int PortOriginalTrackIs64(void) { return 0; }
-int PortPcData(void) { return 0; }
+int PortPcData(void) { return testPcData; }
+int PortActiveTrackNumber(void) { return testTrackNumber; }
+void FrameCapTag(const void *start, const void *end, const char *what, const char *name, int index)
+{ (void)start; (void)end; (void)what; (void)name; (void)index; }
 const struct Disc *PsxIoDisc(void) { return NULL; }
 POLY_G4 flare[SHIP_EXHAUSTS + PLASMA_EXHAUSTS][FLARE_RAYS][2];
 Trail Plasma[PLASMA_EXHAUSTS];
@@ -34,8 +37,8 @@ void GpuFlush(void) { flushes++; }
 void GpuUpdateResolution(void) {}
 void FrameCapClear(void) { frameClears++; }
 static FrameCapPrim recorded;
-static int recordNative;
-FrameCapPrim *FrameCapAdd(void) { return recordNative ? &recorded : NULL; }
+static int recordNative, recordSource;
+FrameCapPrim *FrameCapAdd(void) { return recordNative || recordSource ? &recorded : NULL; }
 void FrameCapTagRecord(FrameCapPrim *prim) { (void)prim; }
 static GpuVertex clipped[12];
 static int clippedCount;
@@ -545,9 +548,80 @@ static void OriginalInterpolation(void)
     puts("Original interpolation follows the renderer; fixed-step, tracing and linked-player rules remain intact: OK");
 }
 
+/* Source tags and captured material facts must not depend on renderer settings. */
+static void SourceMaterialIsolation(void)
+{
+    RenderSettings saved = portSettings.render;
+    const int position[] = {56942, -1339, 42075};
+    POLY_FT3 packet = {0};
+    SetPolyFT3(&packet);
+    packet.x1 = packet.y2 = 16;
+    packet.tpage = GetTPage(2, 0, 0, 0);
+    u_long ot[1];
+    recordSource = 1;
+    for (int fixture = 0; fixture < 2; fixture++) {
+        MaterialEmission expected = fixture
+            ? (MaterialEmission){.enabled = 1, .uv = {174, 148, 11, 9}}
+            : (MaterialEmission){.enabled = 1, .whiteOnly = 1};
+        for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
+            for (int bloom = 0; bloom < 2; bloom++) {
+                portSettings.render.selection = (RendererId)id;
+                portSettings.render.modern.bloom = bloom;
+                RenderCommit();
+                ClearOTagR(ot, 1);
+                AddPrim(ot, &packet);
+                PortTrackPackets(&packet, &packet + 1);
+                WalkTable(ot, 1);
+                testTrackNumber = fixture ? 2 : 20;
+                PortTagObjectPrims(&packet, &packet + 1, "object", fixture ? "new" : "grid1",
+                                   0, fixture ? 10 : 0, position);
+                int slot = EmissionPacket(&packet.tag);
+                assert(slot >= 0 && !memcmp(&emissionPackets[slot].emission, &expected, sizeof(expected)));
+                for (int lit = 0; lit < 2; lit++) {
+                    packet.r0 = packet.g0 = packet.b0 = lit ? 255 : 128;
+                    clippedCount = 0;
+                    Polygon(&packet.tag + 1, packet.code);
+                    MaterialEmission decoded = expected;
+                    decoded.enabled = fixture || lit;
+                    assert(clippedCount == 3 && lastDraw.trackTile && recorded.draw.trackTile);
+                    assert(!memcmp(&lastDraw.emission, &decoded, sizeof(decoded)));
+                    assert(!memcmp(&recorded.draw.emission, &decoded, sizeof(decoded)));
+                }
+                /* Replaying the same packet after a profile switch retains source metadata. */
+                portSettings.render.selection = id == RENDER_MODERN ? RENDER_PS1 : RENDER_MODERN;
+                RenderCommit();
+                clippedCount = 0;
+                Polygon(&packet.tag + 1, packet.code);
+                assert(!memcmp(&lastDraw.emission, &expected, sizeof(expected)));
+                /* Reusing its storage for another primitive drops the old emission. */
+                AddPrim(ot, &packet);
+                clippedCount = 0;
+                Polygon(&packet.tag + 1, packet.code);
+                assert(!lastDraw.emission.enabled && !recorded.draw.emission.enabled);
+            }
+        }
+    }
+    /* The same name/course/position in other source assets is not this fixture. */
+    for (int source = 0; source < 3; source++) {
+        testOriginalTrack = source == 0 ? 0 : -1;
+        testPcData = source == 1;
+        testSaturnDisc = source == 2;
+        AddPrim(ot, &packet);
+        PortTagObjectPrims(&packet, &packet + 1, "object", "new", 0, 10, position);
+        assert(EmissionPacket(&packet.tag) < 0);
+    }
+    testOriginalTrack = -1;
+    testPcData = testSaturnDisc = recordSource = 0;
+    walkTrack = -1;
+    portSettings.render = saved;
+    RenderCommit();
+    puts("Source fixtures, animation, track tags and capture metadata survive all profiles, bloom toggles and packet replay: OK");
+}
+
 int main(void)
 {
     RendererBoundaries();
+    SourceMaterialIsolation();
     {
         GtePrecise p = {.x = 12, .y = 24, .fade = 1, .view = {0, 0, 100}};
         GpuVertex v;

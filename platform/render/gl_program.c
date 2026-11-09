@@ -33,12 +33,13 @@ int RenderGlProgramInit(RenderProgram *s, const char *vertexSource, const char *
     glBindAttribLocation(s->program, 0, "position");
     glBindAttribLocation(s->program, 1, "colour");
     glBindAttribLocation(s->program, 2, "texel");
-    glBindAttribLocation(s->program, 3, "texture");
+    glBindAttribLocation(s->program, 3, "textureIn");
     glBindAttribLocation(s->program, 4, "window");
     glBindAttribLocation(s->program, 5, "modeIn");
     glBindAttribLocation(s->program, 6, "hdIn");
     glBindAttribLocation(s->program, 7, "hdTexelsIn");
     glBindAttribLocation(s->program, 8, "filterBoundsIn");
+    glBindAttribLocation(s->program, 9, "emissionUvIn");
     glLinkProgram(s->program);
     glDeleteShader(vertex);
     glDeleteShader(fragment);
@@ -89,4 +90,52 @@ void RenderGlPresentDirect(const RenderPresent *p, GLenum filter)
     glDisable(GL_SCISSOR_TEST);
     glBlitFramebuffer(p->left, p->top, p->right, p->bottom,
                       p->x0, p->y0, p->x1, p->y1, GL_COLOR_BUFFER_BIT, filter);
+}
+
+/* Generic framebuffer transport: preserve display-encoded RGB and reset coverage. */
+static RenderProgram seedProgram;
+static GLuint seedArray;
+
+void RenderGlSeedHdr(GLuint source, GLuint target, int x, int y, int w, int h)
+{
+    if (w <= 0 || h <= 0) return;
+    GLint previous;
+    glGetIntegerv(GL_CURRENT_PROGRAM, &previous);
+    if (!seedProgram.program) {
+        const char *vertex =
+            "void main() {\n"
+            "    vec2 uv = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
+            "    gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);\n"
+            "}\n";
+        const char *fragment =
+            "#ifdef GL_ES\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\n#endif\n"
+            "uniform sampler2D source;\n"
+            "layout(location = 0) out vec4 colour;\n"
+            "layout(location = 1) out vec4 coverage;\n"
+            "void main() {\n"
+            "    colour = vec4(texelFetch(source, ivec2(gl_FragCoord.xy), 0).rgb, 1.0);\n"
+            "    coverage = vec4(0.0);\n"
+            "}\n";
+        if (!RenderGlProgramInit(&seedProgram, vertex, fragment)) abort();
+        glUniform1i(glGetUniformLocation(seedProgram.program, "source"), 0);
+        glGenVertexArrays(1, &seedArray);
+    }
+    glUseProgram(seedProgram.program);
+    glBindVertexArray(seedArray);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target);
+    glViewport(x, y, w, h);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, source);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glUseProgram((GLuint)previous);
+}
+
+void RenderGlSeedShutdown(void)
+{
+    RenderGlProgramDestroy(&seedProgram);
+    glDeleteVertexArrays(1, &seedArray);
+    seedArray = 0;
 }

@@ -2,7 +2,7 @@
     "in vec3 position;\n"
     "in vec4 colour;\n"
     "in vec2 texel;\n"
-    "in ivec4 texture;\n"
+    "in ivec4 textureIn;\n"
     "in uvec4 window;\n"              /* unsigned bytes: WebGL wants an attribute's signedness kept */
     "in uvec4 modeIn;\n"
     "in uvec4 hdIn;\n"
@@ -12,6 +12,11 @@
     "flat out int filtered;\n"
     "flat out int addressFlags;\n"
     "flat out int ps1Light;\n"
+#ifdef RENDER_AUX_FLAGS
+    "flat out int auxFlags;\n"
+    "in ivec4 emissionUvIn;\n"
+    "flat out ivec4 emissionUv;\n"
+#endif
     "flat out uvec4 hd;\n"
     "flat out ivec4 hdTexels;\n"
     "flat out ivec4 texturePage;\n"
@@ -45,8 +50,8 @@
     "    vColourWeight = (modeIn.y & 16u) != 0u ? w : 1.0;\n"
     "    vColour = vec4(colour.rgb * vColourWeight, colour.a);\n"
     "    vPixel = vec3(pixel * w, w);\n"
-    "    texturePage = ivec4(texture.xy, 0, 0);\n"
-    "    clut = ivec4(texture.zw, 0, 0);\n"
+    "    texturePage = ivec4(textureIn.xy, 0, 0);\n"
+    "    clut = ivec4(textureIn.zw, 0, 0);\n"
     "    vWindow = ivec4(window);\n"
     "    mode = ivec4(int(modeIn.x), int(modeIn.y), pass, int(modeIn.z & 3u));\n"
     RENDER_TEXCOORD
@@ -56,4 +61,8 @@
     "    filtered = int((modeIn.w >> 1u) & 3u);\n"
     "    addressFlags = int((modeIn.z >> 2u) & 7u);\n"
     "    ps1Light = int((modeIn.z >> 5u) & 1u);\n"
+#ifdef RENDER_AUX_FLAGS
+    "    auxFlags = int(modeIn.z >> 6u);\n"
+    "    emissionUv = emissionUvIn;\n"
+#endif
     "}\n"

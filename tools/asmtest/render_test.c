@@ -46,8 +46,8 @@ unsigned char *PortFarObjectPrimitives(Object *object) { (void)object; return NU
 void PortFarMarkFace(Face *face) { (void)face; }
 void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index)
 { (void)start; (void)end; (void)what; (void)name; (void)index; }
-void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index)
-{ (void)assetTag; PortTagPrims(start, end, what, name, index); }
+void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index, const int position[3])
+{ (void)position; (void)assetTag; PortTagPrims(start, end, what, name, index); }
 void PortShipPackets(int ship, const void *start, const void *end) { (void)ship; (void)start; (void)end; }
 
 static _Noreturn void UnexpectedFarDraw(void)

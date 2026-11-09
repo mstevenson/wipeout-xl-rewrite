@@ -1,4 +1,4 @@
-/* Linked once per renderer, WITHOUT the registry, backend or either other renderer.
+/* Linked once per renderer, WITHOUT the registry, backend or any other renderer.
    A renderer cannot hide a cross-module dependency behind the combined game binary. */
 #include "render/gl_pipeline.h"
 #include <assert.h>
@@ -22,6 +22,11 @@ int main(void)
     assert(isProgram);
     const RenderPipeline *pipeline = &TEST_PIPELINE;
     RenderSettings settings = RENDER_DEFAULTS;
+    /* Pin the pixel fixture's curve independently of the user's default preset. */
+    settings.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
+    const Renderer *renderer = &TEST_RENDERER;
+    const void *profile = &settings.TEST_PROFILE;
+    RenderResources resources = renderer->resources ? renderer->resources(profile) : (RenderResources){0};
     GLuint textures[2], framebuffers[2];
     uint8_t pixels[16 * 16 * 4];
     glGenTextures(2, textures);
@@ -38,11 +43,33 @@ int main(void)
         glClear(GL_COLOR_BUFFER_BIT);
     }
     RenderPresent present = {textures[0], framebuffers[0], 1, 1, 1, 0, 0, 16, 16, 0, 0, 16, 16};
+    GLuint auxiliary[2] = {0}, auxiliaryTarget = 0;
+    if (resources.hdr) {
+        glGenTextures(2, auxiliary);
+        glGenFramebuffers(1, &auxiliaryTarget);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, auxiliaryTarget);
+        for (int i = 0; i < 2; i++) {
+            glBindTexture(GL_TEXTURE_2D, auxiliary[i]);
+            glTexImage2D(GL_TEXTURE_2D, 0, i ? GL_RG8 : GL_RGBA16F, 16, 16, 0,
+                         i ? GL_RG : GL_RGBA, i ? GL_UNSIGNED_BYTE : GL_HALF_FLOAT, NULL);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, auxiliary[i], 0);
+        }
+        const GLenum attachments[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+        glDrawBuffers(2, attachments);
+        assert(glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+        RenderGlSeedHdr(textures[0], auxiliaryTarget, 0, 0, 16, 16);
+        present.hdrTexture = auxiliary[0];
+        present.hdrMask = auxiliary[1];
+    }
     for (int cycle = 0; cycle < 3; cycle++) {
         RenderProgram *scene = pipeline->scene();
         GLuint program = scene->program;
         assert(program && isProgram(program));
         assert(pipeline->scene()->program == program);
+        glUseProgram(program);
+        if (pipeline->bind) pipeline->bind(profile, resources.hdr);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffers[1]);
         pipeline->present(&settings.TEST_PROFILE, &present);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffers[1]);
@@ -84,11 +111,14 @@ int main(void)
         assert(glGetError() == GL_NO_ERROR);
     }
     pipeline->destroy();
+    RenderGlSeedShutdown();
+    glDeleteTextures(2, auxiliary);
+    glDeleteFramebuffers(1, &auxiliaryTarget);
     glDeleteTextures(2, textures);
     glDeleteFramebuffers(2, framebuffers);
     SDL_GL_DestroyContext(context);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    puts("Standalone renderer compilation, nearest/linear display scaling and resource lifecycle: OK");
+    puts("Standalone profile policy, batch binding, HDR/display scaling and resource lifecycle: OK");
     return 0;
 }

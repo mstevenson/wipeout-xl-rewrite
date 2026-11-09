@@ -31,6 +31,7 @@ NOOP(SpuSetReverbModeParam) NOOP(SpuSetReverbVoice) NOOP(SpuClearReverbWorkArea)
 NOOP(SpuSetTransferMode) NOOP(SpuSetTransferStartAddr) NOOP(SpuWrite) RETURNS(SpuIsTransferCompleted, 1)
 /* the draw hardware (the platform's libgpu keeps the VRAM image and calls these) */
 NOOP(GpuInit) NOOP(GpuFill) NOOP(GpuFlush) NOOP(GpuLine) NOOP(GpuPresent) NOOP(GpuReadBack) NOOP(GpuSetDrawArea)
+NOOP(GpuVramUploaded) NOOP(GpuVramOverwritten)
 NOOP(GpuTriangles) NOOP(GpuVramChanged) NOOP(PortTraceGp0) NOOP(PortTraceGp1) NOOP(PortTraceBoundary) NOOP(PortScriptFixedPad)
 NOOP(PortTracing)
 

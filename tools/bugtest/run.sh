@@ -2,11 +2,12 @@
 # Small regression tests using synthetic geometry and the movie program table.
 set -eu
 cd "$(dirname "$0")/../.."
+PYTHONDONTWRITEBYTECODE=1 python3 tools/bugtest/test_render_boundaries.py
 test_build=$(mktemp -d)
 trap 'rm -rf "$test_build"' EXIT HUP INT TERM
 ${CC:-cc} -O1 -Iplatform tools/bugtest/test_saturn_native.c platform/render/saturn_native.c -lm -o "$test_build/saturn_native"
 "$test_build/saturn_native"
-render_sources="platform/render/renderer.c platform/render/ps1_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c platform/render/saturn_native.c"
+render_sources="platform/render/renderer.c platform/render/ps1_renderer.c platform/render/modern_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c platform/render/saturn_native.c"
 case $(uname -s) in Darwin) discard='-Wl,-dead_strip';; *) discard='-Wl,--gc-sections';; esac
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform $(pkg-config --cflags sdl3) \
     tools/bugtest/test_saturn_art.c $(pkg-config --libs sdl3) -o "$test_build/saturn_art"
@@ -66,7 +67,7 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
     $(pkg-config --libs sdl3) -o "$test_build/n64_material"
 "$test_build/n64_material"
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_n64_page.c $render_sources \
+    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_n64_page.c platform/material_source.c $render_sources \
     platform/psx/gte.c platform/psx/gte_tables.c \
     $(pkg-config --libs sdl3) -lm -o "$test_build/n64_page"
 "$test_build/n64_page"

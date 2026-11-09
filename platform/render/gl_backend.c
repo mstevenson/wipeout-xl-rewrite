@@ -79,7 +79,17 @@ static int initialised;
 #define MAX_WIDE_MARGIN 400
 static int wideMargin;                         /* console pixels beyond each side; 0: no wide framebuffer */
 static GLuint wideFramebuffer, wideColour, wideDepth;
+/* The HDR draw FBO shares SDR colour and depth, keeping the draw buffer
+   configuration stable across batches. The auxiliary FBO seeds and copies HDR. */
+typedef struct SceneHdr {
+    GLuint textures[2], framebuffer, drawFramebuffer;
+    unsigned bands;
+    int unavailable;
+} SceneHdr;
+static SceneHdr sceneHdr, wideHdr;
+static const GLenum hdrDrawBuffers[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
 static int wideDirty;                          /* drawn into since its middle was copied to video memory's */
+static int wideHdrDirty;                       /* HDR needs its own copy only for narrow presentation */
 static int areaWide;                           /* the draw area is in the screen's columns: drawn wide */
 static int sceneWide;                          /* the game built a race's scene since the last new picture */
 static int drawnSincePresent;                  /* the game drew anything since the last picture shown */
@@ -103,6 +113,7 @@ typedef struct BatchVertex {
     uint16_t hd[4];     /* HD texture: its part of the atlas, x, y, w, h (w 0: none) */
     int16_t filterBounds[4]; /* full image's left/top/right/bottom texels; prevents sampling adjacent images */
     int16_t hdTexels[4]; /* ... the texels of the page it covers, x, y, w, h */
+    int16_t emissionUv[4]; /* source emission centre and half-size; width zero means whole face */
 } BatchVertex;
 static BatchVertex batch[BATCH_VERTICES];
 static int primitiveFilterBounds[4];
@@ -220,6 +231,114 @@ static int CreateFramebuffer(void)
     return 1;
 }
 
+static void DeleteHdr(SceneHdr *hdr)
+{
+    if (hdr->drawFramebuffer) glDeleteFramebuffers(1, &hdr->drawFramebuffer);
+    if (hdr->framebuffer) glDeleteFramebuffers(1, &hdr->framebuffer);
+    if (hdr->textures[0] || hdr->textures[1]) glDeleteTextures(2, hdr->textures);
+    *hdr = (SceneHdr){0};
+}
+
+static int CreateHdr(SceneHdr *hdr, GLuint sdr, GLuint depth, int width)
+{
+    if (hdr->unavailable) return 0;
+    if (hdr->framebuffer) return 1;
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(2, hdr->textures);
+    glGenFramebuffers(1, &hdr->framebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->framebuffer);
+    for (int i = 0; i < 2; i++) {
+        glBindTexture(GL_TEXTURE_2D, hdr->textures[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, i ? GL_RG8 : GL_RGBA16F, width, PixelY(VRAM_HEIGHT),
+                     0, i ? GL_RG : GL_RGBA, i ? GL_UNSIGNED_BYTE : GL_HALF_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, hdr->textures[i], 0);
+    }
+    glDrawBuffers(2, hdrDrawBuffers);
+    if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+        glGenFramebuffers(1, &hdr->drawFramebuffer);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->drawFramebuffer);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, sdr, 0);
+        for (int i = 0; i < 2; i++)
+            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1 + i, GL_TEXTURE_2D, hdr->textures[i], 0);
+        glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+        glDrawBuffers(3, hdrDrawBuffers);
+        if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) return 1;
+    }
+    DeleteHdr(hdr);
+    hdr->unavailable = 1;
+    SDL_Log("HDR scene target unavailable at %dx%d", width, PixelY(VRAM_HEIGHT));
+    return 0;
+}
+
+static unsigned HdrBands(float top, float bottom)
+{
+    return ((top < 256 && bottom > 0) ? 1u : 0u) |
+           ((top < 512 && bottom > 256) ? 2u : 0u);
+}
+
+static void SeedHdrRect(const SceneHdr *hdr, GLuint sdr, int left, int top, int right, int bottom)
+{
+    if (hdr->bands & HdrBands(top, bottom))
+        RenderGlSeedHdr(sdr, hdr->framebuffer, PixelX(left), PixelY(top),
+                         PixelX(right) - PixelX(left), PixelY(bottom) - PixelY(top));
+}
+
+/* A solid background can clear the HDR attachments in the existing scissor. */
+static void ClearHdr(const SceneHdr *hdr, int y, int h, const GLfloat sdr[4])
+{
+    if (!(hdr->bands & HdrBands(y, y + h))) return;
+    const GLfloat mask[4] = {0};
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->framebuffer);
+    glClearBufferfv(GL_COLOR, 0, sdr);
+    glClearBufferfv(GL_COLOR, 1, mask);
+}
+
+static void SeedHdrBands(SceneHdr *hdr, GLuint sdr, unsigned bands, int width)
+{
+    for (int i = 0; i < 2; i++) {
+        unsigned band = 1u << i;
+        if ((bands & band) && !(hdr->bands & band)) {
+            int y = PixelY(i * 256);
+            RenderGlSeedHdr(sdr, hdr->framebuffer, 0, y, width, PixelY((i + 1) * 256) - y);
+            hdr->bands |= band;
+        }
+    }
+}
+
+static void BlitHdr(const SceneHdr *src, const SceneHdr *dst, int x, int y, int right, int bottom,
+                    int leftTo, int topTo, int rightTo, int bottomTo)
+{
+    const GLenum maskOnly[] = {GL_NONE, GL_COLOR_ATTACHMENT1};
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src->framebuffer);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, dst->framebuffer);
+    glDrawBuffers(1, hdrDrawBuffers);
+    glBlitFramebuffer(x, y, right, bottom, leftTo, topTo, rightTo, bottomTo, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    glDrawBuffers(2, maskOnly);
+    glBlitFramebuffer(x, y, right, bottom, leftTo, topTo, rightTo, bottomTo, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glDrawBuffers(2, hdrDrawBuffers);
+}
+
+/* Preserve both display buffers when adding or removing widescreen columns. */
+static void CopyHdrCentre(const SceneHdr *src, int from, SceneHdr *dst, int to,
+                          GLuint sdr, GLuint depth, int width)
+{
+    dst->bands &= src->bands;
+    if (!src->bands || !CreateHdr(dst, sdr, depth, PixelX(width))) return;
+    if (to) SeedHdrBands(dst, sdr, src->bands, PixelX(width));
+    for (int i = 0; i < 2; i++) {
+        if (!(src->bands & (1u << i))) continue;
+        int y = PixelY(i * 256), bottom = PixelY((i + 1) * 256);
+        BlitHdr(src, dst, PixelX(from), y, PixelX(from + SCREEN_COLUMNS), bottom,
+                PixelX(to), y, PixelX(to + SCREEN_COLUMNS), bottom);
+    }
+    dst->bands |= src->bands;
+}
+
 static void UsePipeline(RendererId id)
 {
     const RenderPipeline *next = RenderGlPipeline(id);
@@ -237,6 +356,10 @@ void GpuRendererShutdown(void)
     if (presentPipeline && presentPipeline != pipeline) presentPipeline->destroy();
     pipeline = presentPipeline = NULL;
     scene = NULL;
+    DeleteHdr(&sceneHdr);
+    DeleteHdr(&wideHdr);
+    RenderGlSeedShutdown();
+    wideHdrDirty = 0;
     SaturnNativeShutdown();
     memset(saturnPixels, 0, sizeof(saturnPixels));
     saturnLeft=SATURN_WIDTH;saturnTop=VRAM_HEIGHT;saturnRight=saturnBottom=0;
@@ -288,6 +411,9 @@ int GpuInit(void)
     glEnableVertexAttribArray(8);
     glVertexAttribIPointer(8, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, filterBounds));
 
+    glEnableVertexAttribArray(9);
+    glVertexAttribIPointer(9, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, emissionUv));
+
     glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glGenTextures(1, &vramTexture);
@@ -331,6 +457,41 @@ int GpuInit(void)
     glClear(GL_COLOR_BUFFER_BIT);
     initialised = 1;
     return 1;
+}
+
+/* Distances to the four edges of the upload that supplied each VRAM word.
+   PS1 pages overlap at indexed depths, so record physical words, not UVs. */
+static uint32_t vramBounds[VRAM_HEIGHT * 2][VRAM_WIDTH];
+
+static void SetVramBounds(int x, int y, int w, int h, int upload)
+{
+    if (w <= 0 || h <= 0) return;
+    int top = y >= VRAM_HEIGHT ? VRAM_HEIGHT : 0;
+    if (x < 0 || y < top || x + w > VRAM_WIDTH || y + h > top + VRAM_HEIGHT) {
+        memset(vramBounds[top], 0, sizeof(vramBounds[0]) * VRAM_HEIGHT);
+        return;
+    }
+    upload &= w <= 256 && h <= 256;
+    for (int row = 0; row < h; row++) {
+        uint32_t *dst = &vramBounds[y + row][x];
+        if (!upload) {
+            memset(dst, 0, (size_t)w * sizeof(*dst));
+            continue;
+        }
+        uint32_t vertical = (uint32_t)row << 16 | (uint32_t)(h - 1 - row) << 24;
+        for (int col = 0; col < w; col++)
+            dst[col] = vertical | (uint32_t)col | (uint32_t)(w - 1 - col) << 8;
+    }
+}
+
+void GpuVramUploaded(int x, int y, int w, int h)
+{
+    SetVramBounds(x, y, w, h, 1);
+}
+
+void GpuVramOverwritten(int x, int y, int w, int h)
+{
+    SetVramBounds(x, y, w, h, 0);
 }
 
 void GpuVramChanged(int x, int y, int w, int h)
@@ -448,6 +609,14 @@ static void SyncWide(void)
     wideDirty = 0;
 }
 
+static void SyncWideHdr(void)
+{
+    if (!wideHdrDirty) return;
+    CopyHdrCentre(&wideHdr, wideMargin, &sceneHdr, 0, colour, depthBuffer, VRAM_WIDTH);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    wideHdrDirty = 0;
+}
+
 /* Clears rows y to y + h of the wide framebuffer beyond the screen's columns. */
 static void ClearWideSides(int y, int h, float r, float g, float b)
 {
@@ -458,6 +627,8 @@ static void ClearWideSides(int y, int h, float r, float g, float b)
     glClear(GL_COLOR_BUFFER_BIT);
     glScissor(PixelX(wideMargin) + PixelX(SCREEN_COLUMNS), PixelY(y), PixelX(wideMargin), PixelY(y + h) - PixelY(y));
     glClear(GL_COLOR_BUFFER_BIT);
+    SeedHdrRect(&wideHdr, wideColour, 0, y, wideMargin, y + h);
+    SeedHdrRect(&wideHdr, wideColour, wideMargin + SCREEN_COLUMNS, y, WideWidth(), y + h);
     glDisable(GL_SCISSOR_TEST);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 }
@@ -476,6 +647,7 @@ static void CopyToWide(int x, int y, int w, int h)
     glDisable(GL_SCISSOR_TEST);
     glBlitFramebuffer(PixelX(left), PixelY(y), PixelX(right), PixelY((y + h)), PixelX(wideMargin) + PixelX(left), PixelY(y),
                       PixelX(wideMargin) + PixelX(right), PixelY((y + h)), GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    SeedHdrRect(&wideHdr, wideColour, left + wideMargin, y, right + wideMargin, y + h);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     if (left == 0 && right == SCREEN_COLUMNS) {
         ClearWideSides(y, h, 0, 0, 0);
@@ -518,7 +690,9 @@ static void SetWideMargin(int margin)
     }
     PictureChanged(0, VRAM_HEIGHT);
     SyncWide();
+    SyncWideHdr();
     if (wideFramebuffer) {
+        DeleteHdr(&wideHdr);
         glDeleteFramebuffers(1, &wideFramebuffer);
         glDeleteTextures(1, &wideColour);
         glDeleteRenderbuffers(1, &wideDepth);
@@ -540,6 +714,7 @@ static void SetWideMargin(int margin)
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
         CopyToWide(0, 0, SCREEN_COLUMNS, VRAM_HEIGHT);
+        CopyHdrCentre(&sceneHdr, 0, &wideHdr, wideMargin, wideColour, wideDepth, WideWidth());
     }
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     areaWide = InScreenColumns(areaX, areaW) && areaX >= 0 && areaX + areaW <= SCREEN_COLUMNS;
@@ -585,7 +760,7 @@ void GpuBackdrop(int on)
 }
 
 /* The framebuffer the next primitives go to, its viewport and the draw area's scissor. */
-static void BindTarget(void)
+static void BindTarget(GLuint hdrTarget)
 {
     glUniform2f(scene->uniformNativeGrid, rasterX, rasterY);
     if (areaWide) {
@@ -593,7 +768,7 @@ static void BindTarget(void)
            them and the panels that slide out to the window's edges and back */
         int full = areaX == 0 && areaW == SCREEN_COLUMNS;
 
-        glBindFramebuffer(GL_FRAMEBUFFER, wideFramebuffer);
+        glBindFramebuffer(GL_FRAMEBUFFER, hdrTarget ? hdrTarget : wideFramebuffer);
         glViewport(0, 0, PixelX(WideWidth()), PixelY(VRAM_HEIGHT));
         glEnable(GL_SCISSOR_TEST);
         glScissor(full ? 0 : PixelX((areaX + wideMargin)), PixelY(areaY), full ? PixelX(WideWidth()) : PixelX(areaX + wideMargin + areaW) - PixelX(areaX + wideMargin),
@@ -601,10 +776,11 @@ static void BindTarget(void)
         glUniform2f(scene->uniformTarget, TargetWidth(WideWidth()), TargetHeight(VRAM_HEIGHT));
         glUniform2f(scene->uniformOrigin, WideOrigin(wideMargin), 0.0f);
         wideDirty = 1;
+        wideHdrDirty |= wideHdr.bands != 0 || sceneHdr.bands != 0;
         drawnSincePresent |= !interpolatingDraw;
         return;
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, hdrTarget ? hdrTarget : framebuffer);
     glViewport(0, 0, PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT));
     glEnable(GL_SCISSOR_TEST);
     glScissor(PixelX(areaX), PixelY(areaY), PixelX(areaX + areaW) - PixelX(areaX), PixelY(areaY + areaH) - PixelY(areaY));
@@ -661,7 +837,9 @@ static void Flush(void)
     if (!batchCount) {
         return;
     }
-    UsePipeline(RenderCurrent()->id);
+    const RenderFrame *render = RenderCurrent();
+    RenderResources resources = RenderResourcesFor(render);
+    UsePipeline(render->id);
     int fullWide = areaWide && areaX == 0 && areaW == SCREEN_COLUMNS;
     float left = SDL_max(batchLeft, fullWide ? -wideMargin : areaX);
     float right = SDL_min(batchRight, fullWide ? SCREEN_COLUMNS + wideMargin : areaX + areaW);
@@ -669,8 +847,19 @@ static void Flush(void)
     if (right > left) PictureChanged(top, bottom - top);
     RememberPicture(left, top, right - left, bottom - top);
     UploadVram();
+    SceneHdr *hdr = areaWide ? &wideHdr : &sceneHdr;
+    unsigned bands = right > left && left < SCREEN_COLUMNS + (areaWide ? wideMargin : 0) && bottom > top
+                         ? HdrBands(top, bottom) : 0;
+    int writeHdr = 0;
+    if (bands && resources.hdr && GpuRaceWide()) {
+        int width = PixelX(areaWide ? WideWidth() : VRAM_WIDTH);
+        writeHdr = CreateHdr(hdr, areaWide ? wideColour : colour, areaWide ? wideDepth : depthBuffer, width);
+        if (writeHdr) SeedHdrBands(hdr, areaWide ? wideColour : colour, bands,
+                                   areaWide ? width : PixelX(SCREEN_COLUMNS));
+    }
+    if (!writeHdr) hdr->bands &= ~bands;
     glUseProgram(scene->program);
-    BindTarget();
+    BindTarget(writeHdr ? hdr->drawFramebuffer : 0);
     glUniform1f(scene->uniformPointSize, batchPoints ? (float)scale : 0.0f);
 #if !defined(__EMSCRIPTEN__) && !defined(PORT_GL_LINKED)
     if (batchPoints) glEnable(GL_PROGRAM_POINT_SIZE);
@@ -685,11 +874,13 @@ static void Flush(void)
     glBindTexture(GL_TEXTURE_2D, glyphTexture);
     glUniform1i(scene->uniformGlyphs, 1);
     glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, hdAtlas);
+    /* Profiles using original art still need a complete texture for the unused sampler. */
+    glBindTexture(GL_TEXTURE_2D, resources.originalTextures ? glyphTexture : hdAtlas);
     glUniform1i(scene->uniformHdAtlas, 2);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, portPagesTexture);
     glUniform1i(scene->uniformPortPages, 3);
+    if (pipeline->bind) pipeline->bind(RenderProfile(render), writeHdr);
     glActiveTexture(GL_TEXTURE0);
     /* The depth buffer: what has a depth is drawn where nothing nearer is, give or take DEPTH_SLACK (the game's own
        order decides among things at about the same depth: a shadow or a pad on the track). The depth of the batch's
@@ -697,7 +888,7 @@ static void Flush(void)
        the same batch (a far wall in the same batch as the track in front of it) is hidden by it whatever their
        order in the batch, as by one of an earlier batch. Without it (the console's look) the game's order alone
        decides. */
-    if (RenderDepth(RenderCurrent())) {
+    if (RenderDepth(render)) {
         glEnable(GL_DEPTH_TEST);
         /* Check the whole batch: a leading translucent effect must not suppress an opaque road's depth. */
         if (batchDepth) {
@@ -867,7 +1058,7 @@ static void FindHd(const GpuDrawState *state, const GpuVertex *vertices, int cou
         primitiveHdTexels[3] = (int16_t)v1;
         return;
     }
-    if (scale == 1 || !HdTexActive()) {
+    if (scale == 1 || RenderResourcesFor(RenderCurrent()).originalTextures || !HdTexActive()) {
         return;
     }
     if (!HdTexFind(state->pageX, state->pageY, state->depth, state->clutX, state->clutY, u0, v0, u1, v1, &hit) ||
@@ -938,14 +1129,17 @@ static void Add(const GpuVertex *v, unsigned shade)
     out->window[3] = (uint8_t)primitiveState.windowOffsetY;
     out->mode[0] = (uint8_t)primitiveState.textured;
     out->mode[1] = (uint8_t)shade;
-    /* Low two bits: depth; next three: addressing; bit 5: source light encoding. */
+    /* Depth and addressing, then source light encoding, emission and screen overlay. */
     out->mode[2] = (uint8_t)(primitiveState.depth | (primitiveState.textureFlags >> 2) |
-                             (primitiveState.ps1Light ? 32 : 0));
-    /* Shader flags: bit 0 depth bias, bits 1-2 filtering (1 N64, 2 bilinear), bits 4-7 blend mode + 1. */
-    out->mode[3] = (uint8_t)((v->backFacing || v->exactDepth) | (primitiveState.filtered << 1) | (primitiveState.semi + 1) << 4);
+                             (primitiveState.ps1Light ? 32 : 0) |
+                             (primitiveState.emission.enabled ? 64 : 0) | (primitiveState.screenOverlay ? 128 : 0));
+    /* Depth bias, sampling rule and blend mode + 1. */
+    out->mode[3] = (uint8_t)((v->backFacing || v->exactDepth) | (primitiveState.filtered << 1) |
+                             (primitiveState.semi + 1) << 4);
     for (int i = 0; i < 4; i++) out->filterBounds[i] = (int16_t)primitiveFilterBounds[i];
     memcpy(out->hd, primitiveHd, sizeof(out->hd));
     memcpy(out->hdTexels, primitiveHdTexels, sizeof(out->hdTexels));
+    for (int i = 0; i < 4; i++) out->emissionUv[i] = (int16_t)primitiveState.emission.uv[i];
 }
 
 /* Video memory is kept twice: psxVram (what the CPU uploads and reads, and
@@ -1051,12 +1245,13 @@ static void SaturnFlushPixels(void)
 {
     if(saturnRight<=saturnLeft || saturnBottom<=saturnTop) return;
     UsePipeline(RENDER_SATURN);
-    glUseProgram(scene->program); BindTarget();
+    glUseProgram(scene->program); BindTarget(0);
     int left=saturnLeft-SATURN_MARGIN, right=saturnRight-SATURN_MARGIN;
     RenderSaturnPixels(&saturnPixels[0][0][0], SATURN_WIDTH, VRAM_HEIGHT, SATURN_MARGIN,
         left,saturnTop,right,saturnBottom,(areaWide ? TargetWidth(WideWidth()) : TargetWidth(VRAM_WIDTH))*rasterX,
         TargetHeight(VRAM_HEIGHT)*rasterY,areaWide ? WideOrigin(wideMargin)*rasterX : 0,(float)scale,(float)scale);
     glUseProgram(scene->program);
+    (areaWide ? &wideHdr : &sceneHdr)->bands &= ~HdrBands(saturnTop / rasterY, saturnBottom / rasterY);
     PictureChanged(saturnTop/rasterY,(saturnBottom-saturnTop)/rasterY);
     RememberPicture(left/rasterX,saturnTop/rasterY,(right-left)/rasterX,(saturnBottom-saturnTop)/rasterY);
     for(int y=saturnTop;y<saturnBottom;y++)
@@ -1069,12 +1264,13 @@ static void SaturnFlushGpu(void)
     if(!RenderSaturnQuadsPending()) return;
     UsePipeline(RENDER_SATURN);
     glActiveTexture(GL_TEXTURE0);UploadVram();
-    glUseProgram(scene->program);BindTarget();
+    glUseProgram(scene->program);BindTarget(0);
     int left=areaWide ? -wideMargin : areaX;
     int right=areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW;
     RenderSaturnFlushQuads(vramTexture,PixelX(areaWide ? WideWidth() : VRAM_WIDTH),PixelY(VRAM_HEIGHT),
         areaWide ? WideOrigin(wideMargin) : 0,ScaleX(),ScaleY(),scale,left,areaY,right,areaY+areaH);
     glUseProgram(scene->program);
+    (areaWide ? &wideHdr : &sceneHdr)->bands &= ~HdrBands(areaY, areaY + areaH);
     PictureChanged(areaY,areaH);RememberPicture(left,areaY,right-left,areaH);
 }
 
@@ -1095,29 +1291,54 @@ static void SaturnBackground(const GpuDrawState *state)
     Flush();
     UsePipeline(RENDER_SATURN);
     glUseProgram(scene->program);
-    BindTarget();
+    BindTarget(0);
     int left = areaWide ? -wideMargin : areaX;
     int right = areaWide ? SCREEN_COLUMNS + wideMargin : areaX + areaW;
     RenderSaturnBackground(picture, palette, width, height, SaturnNativeSkyRevision(),
-        state, !RenderCurrent()->settings.saturn.cameraAlignedSky, left, areaY, right, areaY + areaH,
+        state, !RenderResourcesFor(RenderCurrent()).cameraAlignedSky, left, areaY, right, areaY + areaH,
         areaX + areaW*.5f, areaY + areaH*.5f,
         areaWide ? TargetWidth(WideWidth()) : TargetWidth(VRAM_WIDTH), TargetHeight(VRAM_HEIGHT),
         areaWide ? WideOrigin(wideMargin) : 0, ScaleX(), ScaleY(), scale);
     glUseProgram(scene->program);
+    (areaWide ? &wideHdr : &sceneHdr)->bands &= ~HdrBands(areaY, areaY + areaH);
     PictureChanged(areaY, areaH);
     RememberPicture(left, areaY, right-left, areaH);
     MarkDrawn(areaX,areaY,areaX+areaW,areaY+areaH);
+}
+
+/* Match the whole primitive to an uploaded image. Texture windows still
+   use the console's per-tap address calculation. */
+static int NativeFilterBounds(const GpuDrawState *state, const GpuVertex *v, int count, int bounds[4])
+{
+    if (state->windowMaskX || state->windowMaskY || state->depth >= 3) return 0;
+    int shift = 2 - state->depth;
+    int u = (int)floorf(v[0].u), t = (int)floorf(v[0].v);
+    if (u < 0 || u > 255 || t < 0 || t > 255) return 0;
+    int x = state->pageX + (u >> shift), y = state->pageY + t;
+    if (x >= VRAM_WIDTH || y >= VRAM_HEIGHT * 2) return 0;
+    uint32_t rect = vramBounds[y][x];
+    if (!rect) return 0;
+    int left = ((u >> shift) - (int)(rect & 255)) * (1 << shift);
+    int right = (((u >> shift) + (int)((rect >> 8) & 255) + 1) << shift) - 1;
+    int top = t - (int)((rect >> 16) & 255), bottom = t + (int)(rect >> 24);
+    if (left < 0 || right > 255 || top < 0 || bottom > 255) return 0;
+    for (int i = 0; i < count; i++) {
+        if (v[i].u < left || v[i].u >= right + 1 || v[i].v < top || v[i].v >= bottom + 1)
+            return 0;
+    }
+    bounds[0] = left; bounds[1] = top; bounds[2] = right; bounds[3] = bottom;
+    return 1;
 }
 
 void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int count)
 {
     if (RenderCurrent()->id == RENDER_SATURN) {
         if (given->saturnSky) { SaturnBackground(given); return; }
-        if (given->saturn && RenderCurrent()->settings.saturn.affineTextures) {
+        if (given->saturn && RenderResourcesFor(RenderCurrent()).nativeQuads) {
             if (batchCount) Flush();
             SaturnDraw d = {.source = *given, .noDepth = vertices[0].noDepth};
             SaturnNativePoly poly = *given->saturn;
-            poly.alphaMesh = (poly.mode & 0x100) && !RenderCurrent()->settings.saturn.mesh;
+            poly.alphaMesh = (poly.mode & 0x100) && RenderResourcesFor(RenderCurrent()).alphaMesh;
             if (poly.dynamicLight) {
                 SaturnShipLight(SaturnTrackLight(vertices[0].r, vertices[0].g, vertices[0].b), poly.gouraud);
             }
@@ -1192,9 +1413,16 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
     int bounds = faded.n64 && faded.textured && faded.depth < 3 &&
         PortN64TextureInfo(faded.pageX, faded.pageY, faded.depth, faded.clutX, faded.clutY,
                            vertices[0].u, vertices[0].v, primitiveFilterBounds, &faded.textureFlags);
-    RenderMaterial material = {faded.n64, faded.depth == 3, faded.textured, perspective, faded.raw, faded.dither, bounds, !world};
-    RenderStyle style = RenderPrepare(RenderCurrent(), &material);
+    int nativeBounds[4] = {0, 0, -1, -1};
+    int native = world && faded.textured && !faded.n64 &&
+                 NativeFilterBounds(state, vertices, count, nativeBounds);
+    const RenderFrame *render = RenderCurrent();
+    RenderMaterial material = {faded.n64, faded.depth == 3, faded.textured, perspective, faded.raw, faded.dither,
+                               bounds || native, !world};
+    RenderStyle style = RenderPrepare(render, &material);
+    if (style.nativeBounds) memcpy(primitiveFilterBounds, nativeBounds, sizeof(nativeBounds));
     faded.filtered = style.filter;
+    faded.screenOverlay = !world;
     FindHd(state, vertices, count);
     Begin(state, count);
     for (i = 0; i < count; i++) {
@@ -1260,12 +1488,13 @@ void GpuFill(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b)
     }
     GpuVramChanged(x, y, w, h);
     HdTexOverwritten(x, y, w, h);
+    GpuVramOverwritten(x, y, w, h);
     ClearDrawn(x, y, w, h);
     GpuClearArea(x, y, w, h, r, g, b);
 }
 
 /* Clears (x, y, w, h) of the framebuffers: `buffers` (colour to r, g, b, depth to the farthest). */
-static void Clear(int x, int y, int w, int h, GLbitfield buffers, uint8_t r, uint8_t g, uint8_t b)
+static void Clear(int x, int y, int w, int h, GLbitfield buffers, int seedHdr, uint8_t r, uint8_t g, uint8_t b)
 {
     Flush();
     /* Every cleared render pass needs its own sky, including interpolated
@@ -1278,9 +1507,11 @@ static void Clear(int x, int y, int w, int h, GLbitfield buffers, uint8_t r, uin
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glEnable(GL_SCISSOR_TEST);
     glScissor(PixelX(x), PixelY(y), PixelX(x + w) - PixelX(x), PixelY(y + h) - PixelY(y));
-    glClearColor(r / 255.0f, g / 255.0f, b / 255.0f, 1.0f);
+    const GLfloat background[] = {r / 255.0f, g / 255.0f, b / 255.0f, 1.0f};
+    glClearColor(background[0], background[1], background[2], background[3]);
     glDepthMask(GL_TRUE);
     glClear(buffers);
+    if (buffers & GL_COLOR_BUFFER_BIT) ClearHdr(&sceneHdr, y, h, background);
     if (InScreenColumns(x, w) && wideFramebuffer) {
         /* across the whole screen: the sides too */
         int left = x <= 0 && x + w >= SCREEN_COLUMNS ? 0 : SDL_max(x, 0) + wideMargin;
@@ -1289,19 +1520,27 @@ static void Clear(int x, int y, int w, int h, GLbitfield buffers, uint8_t r, uin
         glBindFramebuffer(GL_FRAMEBUFFER, wideFramebuffer);
         glScissor(PixelX(left), PixelY(y), PixelX(right) - PixelX(left), PixelY(y + h) - PixelY(y));
         glClear(buffers);
-        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+        if (buffers & GL_COLOR_BUFFER_BIT) ClearHdr(&wideHdr, y, h, background);
+        else if (seedHdr) SeedHdrRect(&wideHdr, wideColour, left, y, right, y + h);
     }
+    if (seedHdr && !(buffers & GL_COLOR_BUFFER_BIT))
+        SeedHdrRect(&sceneHdr, colour, x, y, SDL_min(x + w, SCREEN_COLUMNS), y + h);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glDisable(GL_SCISSOR_TEST);
 }
 
 void GpuClearArea(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b)
 {
-    Clear(x, y, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, r, g, b);
+    Clear(x, y, w, h, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, 0, r, g, b);
 }
 
-void GpuClearDepth(int x, int y, int w, int h)
+void GpuClearDepth(int x, int y, int w, int h, int mainTable)
 {
-    Clear(x, y, w, h, GL_DEPTH_BUFFER_BIT, 0, 0, 0);
+    const RenderFrame *render = RenderCurrent();
+    int seedHdr = mainTable && RenderResourcesFor(render).hdr &&
+                  GpuRaceWide() && (sceneHdr.bands || wideHdr.bands);
+    if (seedHdr && w > 0) PictureChanged(y, h);
+    Clear(x, y, w, h, GL_DEPTH_BUFFER_BIT, seedHdr, 0, 0, 0);
 }
 
 /* Reads drawn pixels back into video memory (15-bit, each the framebuffer's
@@ -1402,6 +1641,8 @@ void GpuWriteFramebuffer(int x, int y, int w, int h)
     glBlitFramebuffer(0, 0, w, h, PixelX(x), PixelY(y), PixelX((x + w)), PixelY((y + h)), GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     ClearDrawn(x, y, w, h);
+    SeedHdrRect(&sceneHdr, colour, x, y, SDL_min(x + w, SCREEN_COLUMNS), y + h);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
     CopyToWide(x, y, w, h);
 }
 
@@ -1446,6 +1687,8 @@ void GpuMoveFramebuffer(int x, int y, int w, int h, int toX, int toY)
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     /* both copies now agree in the destination */
     ClearDrawn(toX, toY, w, h);
+    SeedHdrRect(&sceneHdr, colour, toX, toY, SDL_min(toX + w, SCREEN_COLUMNS), toY + h);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
     CopyToWide(toX, toY, w, h);
 }
 
@@ -1511,7 +1754,14 @@ static void BlitShown(int wide, int left, int top, int right, int bottom, int x0
         revision = SDL_max(pictureRevision[0], pictureRevision[1]);
     RenderPresent p = {wide ? wideColour : colour, wide ? wideFramebuffer : framebuffer,
                        revision, scale, owner->valid ? owner->race : GpuRaceWide(),
-                       left, top, right, bottom, x0, y0, x1, y1};
+                       left, top, right, bottom, x0, y0, x1, y1, 0, 0, 0};
+    const SceneHdr *hdr = wide ? &wideHdr : &sceneHdr;
+    unsigned bands = (top < PixelY(256) ? 1u : 0u) | (bottom > PixelY(256) ? 2u : 0u);
+    if ((hdr->bands & bands) == bands && (wide || right <= PixelX(SCREEN_COLUMNS))) {
+        p.hdrTexture = hdr->textures[0];
+        p.hdrMask = hdr->textures[1];
+        if (wide) p.hdrWidth = PixelX(WideWidth());
+    }
     const RenderPipeline *next = RenderGlPipeline(shown->id);
     /* Presenting an older buffer neither compiles a scene shader nor evicts the
        drawing renderer. Release resources once neither path uses their owner. */
@@ -1560,6 +1810,7 @@ static void Present(int x, int y, int w, int h, int interpolated)
         outY -= (int)SDL_lround(displayShakeY * (h > 288 ? 2.0 : 1.0) * outH / h);
         if (!wide) {
             SyncWide();
+            SyncWideHdr();
         }
         left = wide ? PixelX((WideWidth() - across) / 2) : PixelX(x);
         right = wide ? PixelX(WideWidth()) - left : PixelX((x + w));
@@ -1620,6 +1871,13 @@ static void SetScale(int newScale, int nativeW, int nativeH)
         glDisable(GL_SCISSOR_TEST);
         glBlitFramebuffer(0, 0, oldWidth, oldHeight, 0, 0, PixelX(VRAM_WIDTH),
                           PixelY(VRAM_HEIGHT), GL_COLOR_BUFFER_BIT, scale < oldScale ? GL_LINEAR : GL_NEAREST);
+        SceneHdr oldHdr = sceneHdr;
+        sceneHdr = (SceneHdr){0};
+        if (oldHdr.bands && CreateHdr(&sceneHdr, colour, depthBuffer, PixelX(VRAM_WIDTH))) {
+            BlitHdr(&oldHdr, &sceneHdr, 0, 0, oldWidth, oldHeight, 0, 0, PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT));
+            sceneHdr.bands = oldHdr.bands;
+        }
+        DeleteHdr(&oldHdr);
         glDeleteFramebuffers(1, &oldFramebuffer);
         glDeleteTextures(1, &oldColour);
         glDeleteRenderbuffers(1, &oldDepth);
@@ -1723,7 +1981,10 @@ static void ScalePicture(int x, int y, int w, int h, int margin, int outW, int o
     int wide = margin && margin == GpuShownMargin(x, w);
 
     Flush();
-    SyncWide();
+    if (!wide) {
+        SyncWide();
+        SyncWideHdr();
+    }
     if (!small || smallW != outW || smallH != outH) {
         if (!small) {
             glGenFramebuffers(1, &small);
@@ -1873,6 +2134,7 @@ void GpuPresentSplit(int x, int y, int w, int h, const uint8_t *lower, int lower
     Flush();
     if (!wide) {
         SyncWide();
+        SyncWideHdr();
     }
     PortDrawableSize(&width, &height);
     /* the other game draws the lower half as wide, and hands it over at its size in pixels */

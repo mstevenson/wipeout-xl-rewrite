@@ -1907,7 +1907,7 @@ static void Console(void)
                 Changed();
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip(
-                "Original follows the active renderer profile: PS1 30/25, N64 30, Saturn 20, PC 60 fps.\n"
+                "Original follows the active renderer profile: PS1 30/25, N64 30, Saturn 20, PC and Modern 60 fps.\n"
                 "Game simulation keeps its original timing; other platforms use interpolated display frames.");
             if (portSettings.frameRate == FRAME_RATE_CAPPED) {
                 int cap = portSettings.frameCap;

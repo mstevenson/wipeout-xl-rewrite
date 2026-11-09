@@ -128,11 +128,46 @@ static void *LinkPointer(uint32_t id)
     return linkPointers[id];
 }
 
+/* Source material tags survive regardless of the selected profile. Keep them across
+   both ordering tables and interpolation, and drop them when a packet is reused. */
+static struct {
+    const uint32_t *packet;
+    MaterialEmission emission;
+} emissionPackets[32];
+static unsigned emissionPacketNext;
+
+static int EmissionPacket(const uint32_t *packet)
+{
+    unsigned count = SDL_min(emissionPacketNext, SDL_arraysize(emissionPackets));
+    for (unsigned i = 0; i < count; i++) {
+        if (emissionPackets[i].packet == packet) return (int)i;
+    }
+    return -1;
+}
+
+void GpuTagEmission(const void *start, const void *end, const MaterialEmission *emission)
+{
+    const uint32_t *packet = start, *limit = end;
+    while (packet < limit) {
+        unsigned words = (*packet >> 24) + 1;
+        if (words <= 1 || words > (size_t)(limit - packet)) break;
+        int slot = EmissionPacket(packet);
+        if (slot < 0) slot = emissionPacketNext++ % SDL_arraysize(emissionPackets);
+        emissionPackets[slot].packet = packet;
+        emissionPackets[slot].emission = *emission;
+        packet += words;
+    }
+}
+
 void AddPrim(u_long *ot, void *primitive)
 {
     u_long *p = primitive; /* the game passes any POLY_*, LINE_*, TILE or DR_* packet (psyq.h) */
 
     SaturnNativeForget(p);
+    if (emissionPacketNext) {
+        int slot = EmissionPacket(p);
+        if (slot >= 0) emissionPackets[slot].packet = NULL;
+    }
     *p = (*p & 0xFF000000u) | (*ot & 0x00FFFFFFu);
     *ot = (*ot & 0xFF000000u) | (LinkId(p) & 0x00FFFFFFu);
 }
@@ -777,6 +812,7 @@ int LoadImage(RECT *rect, u_long *p)
 
     ForgetDrawnFrame();
     TraceTransfer(0xA0000000u, rect, p);
+    GpuVramUploaded(rect->x, rect->y, rect->w, rect->h);
 
     if (rect->y >= VRAM_HEIGHT) {
         /* the second half (gpu.h): textures only */
@@ -847,6 +883,7 @@ int MoveImage(RECT *rect, int x, int y)
     }
     GpuVramChanged(x, y, rect->w, rect->h);
     HdTexOverwritten(x, y, rect->w, rect->h);
+    GpuVramOverwritten(x, y, rect->w, rect->h);
     GpuMoveFramebuffer(rect->x, rect->y, rect->w, rect->h, x, y);
     FrameCapVramChanged();
     return 0;
@@ -1710,6 +1747,14 @@ static void Polygon(const uint32_t *w, uint32_t code)
         SetTexpage(page);
     }
     StateFor(&draw, textured, semi, raw);
+    if (textured && emissionPacketNext) {
+        int slot = EmissionPacket(w - 1);
+        if (slot >= 0) {
+            draw.emission = emissionPackets[slot].emission;
+            if (draw.emission.whiteOnly && (v[0].r != 255 || v[0].g != 255 || v[0].b != 255))
+                draw.emission.enabled = 0;
+        }
+    }
     if (draw.semi == 2 && RenderCurrent()->id == RENDER_SATURN && ShadowPacket(w)) {
         /* Use the shadow texture as a mask over the packet's black vertex colour.
            Half blending lets the Saturn shader apply its usual mesh or alpha coverage. */
@@ -1724,6 +1769,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
         TextureFromPage(&draw, page);
         draw.clutX = (int)(clut & 0x3F) * 16;
         draw.clutY = (int)((clut >> 6) & 0x3FF); /* (bit 15: a palette in the second half, gpu.h) */
+        draw.trackTile = TrackPacket(w);
     }
     if (!gouraud && !textured) {
         for (i = 1; i < count; i++) {
@@ -2620,10 +2666,11 @@ void DrawOTag(u_long *p)
 {
     u_long *node;
     int tracing = PortTracing() && pendingCount < PENDING_TABLES, inHud = p == hudTable;
+    int mainTable = p == upcoming.table;
 
     WalkTable(p, 1);
     tablesDrawn++;
-    if (p == upcoming.table) {
+    if (mainTable) {
         /* the frame interpolated towards is drawn: the next starts from here */
         uint64_t now = SDL_GetTicksNS();
 
@@ -2657,7 +2704,8 @@ void DrawOTag(u_long *p)
     FrameCapTable(state.offsetX, state.offsetY, state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1,
                   state.areaBottom - state.areaTop + 1);
     /* each table drawn over what is there (the depth buffer: render/gl_backend.c) */
-    GpuClearDepth(state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1, state.areaBottom - state.areaTop + 1);
+    GpuClearDepth(state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1,
+                  state.areaBottom - state.areaTop + 1, mainTable);
     drawnSinceRead = 1;
     if (PortLinkSplit() && !tracing) {
         DrawAnchored(p, PortScreenMargin(), 1);

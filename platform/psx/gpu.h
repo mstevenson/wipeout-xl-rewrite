@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include "../render/renderer.h"
+#include "../material_source.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,6 +26,9 @@ void GpuVramChanged(int x, int y, int w, int h);
    (platform/original.c), as they do not fit beside XL's own. Wipeout 64's palettes go there too, reached with
    bit 15 of a palette's address (the row's tenth bit: rows 512 on), which the console's GPU ignores. */
 extern uint16_t psxVramHigh[VRAM_HEIGHT][VRAM_WIDTH];
+/* The upload's rectangle identifies the original image inside a packed texture page. */
+void GpuVramUploaded(int x, int y, int w, int h);
+void GpuVramOverwritten(int x, int y, int w, int h);
 void GpuVramHighChanged(void);
 
 /* The port's own page of texture memory, beyond the console's video memory, that a textured
@@ -74,7 +78,7 @@ typedef struct GpuDrawState {
     int dither;
     int fade;          /* the port's distance fade: the vertices' alpha (GpuVertex.a) blends it out */
     /* Append new fields here so the frame recorder's first 14 saved fields keep their layout. */
-    int filtered;      /* backend-selected sampler: 0 nearest, 1 three-point, 2 bilinear */
+    int filtered;      /* backend-selected sampling rule */
     int n64;           /* source encoding, independent of the selected sampler */
     int textureFlags;  /* N64 source flags 0x10/20 mirror S/T, 0x40 wrap */
     int ps1Light;      /* imported road texture with gameplay-authored 128-neutral tint */
@@ -82,8 +86,13 @@ typedef struct GpuDrawState {
     int saturnSky;
     float skyYaw, skyPitch, skyRoll;
     float skyFocal;
+    int trackTile;     /* The packet came from the track polygon pools. */
+    int screenOverlay;
+    MaterialEmission emission;
 
 } GpuDrawState;
+
+void GpuTagEmission(const void *start, const void *end, const MaterialEmission *emission);
 
 int GpuInit(void);
 void GpuRendererShutdown(void);
@@ -123,7 +132,8 @@ extern int portPal;
 #define GPU_SPLIT_ROWS (portPal ? 145 : 136)
 uint8_t *GpuReadArea(int x, int y, int w, int h, int *outW, int *outH);
 /* The depth buffer in that area of video memory starts afresh (each ordering table: libgpu's DrawOTag). */
-void GpuClearDepth(int x, int y, int w, int h);
+/* The main table also starts a fresh HDR scene from the unprocessed picture. */
+void GpuClearDepth(int x, int y, int w, int h, int mainTable);
 /* Brings psxVram up to date with what was drawn into the rectangle (before
    the CPU reads or copies it). */
 void GpuReadBack(int x, int y, int w, int h);

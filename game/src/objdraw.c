@@ -688,7 +688,8 @@ static char *DrawSaturnBillboard(Object *object, int index, char *out, const SPR
         poly->u2 = texture->u2; poly->v2 = texture->v2;
         poly->u3 = texture->u3; poly->v3 = texture->v3;
         AddPrim(PortFarSlot((int)(depth / 4), depth), poly);
-        PortTagObjectPrims(out, out + sizeof(*poly), "native billboard", object->name, SaturnNativeStoredTag(parts), piece);
+        PortTagObjectPrims(out, out + sizeof(*poly), "native billboard", object->name, SaturnNativeStoredTag(parts), piece,
+                           object->skeleton->relative.t);
         out += sizeof(*poly);
     }
     (void)index;
@@ -936,7 +937,8 @@ static int DrawNearPrimitive(Object *object, int index, u_long *ordering, Poly p
         out += count == 4 ? sizeof(POLY_G4) : sizeof(POLY_G3);
     }
     /* Port: tag the emitted packet with the model identity from the synthetic PRM. */
-    PortTagObjectPrims(start, out, "near object", object->name, object->scratch, index);
+    PortTagObjectPrims(start, out, "near object", object->name, object->scratch, index,
+                       object->skeleton->relative.t);
     return 1;
 }
 
@@ -1134,9 +1136,10 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             drawnFlags[index] = out != before || (culled && CulledForCertain(culledVertex[0], culledVertex[1], culledVertex[2])) ||
                                 (!culled && kind == DRAW_PLAIN && DrawNearPrimitive(object, index, ordering, prim));
         }
-        /* Port: the frame recorder and the Saturn model registry. */
+        /* Port: recorder identity and source placement for renderer material tags. */
         if (!nativeBillboardPieces)
-            PortTagObjectPrims(before, out, farView ? "far object" : "object", object->name, object->scratch, index);
+            PortTagObjectPrims(before, out, farView ? "far object" : "object", object->name, object->scratch, index,
+                               object->skeleton->relative.t);
         index++;
     } while (--count > 0);
 finished:

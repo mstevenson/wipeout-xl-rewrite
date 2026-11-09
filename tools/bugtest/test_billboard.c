@@ -25,8 +25,9 @@ int PortNativeObjectDepthVisible(const double depths[4], unsigned int tag, int i
     for (int i = 0; i < 4; i++) z[i] = (int32_t)(depths[poly->corners[i]] * 8192);
     return SaturnModelDepthVisible(z, poly->depthMode, 0);
 }
-void PortTagObjectPrims(const void *first, const void *end, const char *kind, const char *name, uint32_t tag, int index)
+void PortTagObjectPrims(const void *first, const void *end, const char *kind, const char *name, uint32_t tag, int index, const int position[3])
 {
+    (void)position;
     (void)kind; (void)name;
     /* Same byte-order boundary as framecap.c, with the real registry/binder. */
     SaturnNativeBind(first, end, SaturnNativeObjectTag(tag), index);

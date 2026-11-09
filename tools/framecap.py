@@ -28,7 +28,7 @@ DRAW_FIELDS = ('textured', 'raw', 'semi', 'depth', 'pageX', 'pageY', 'clutX', 'c
                'windowOffsetX', 'windowOffsetY', 'dither', 'fade', 'depthTest')
 KINDS = ('polygon', 'line', 'rectangle', 'fill')
 SKIP0, SKIP1, FAR, PRECISE, DROPPED = 1, 2, 4, 8, 16
-SHADE_AFFINE_COLOUR, SHADE_AFFINE_UV, SHADE_SNAP = 16, 32, 128
+SHADE_WORLD_TINT, SHADE_AFFINE_COLOUR, SHADE_AFFINE_UV, SHADE_SNAP = 2, 16, 32, 128
 BLENDS = ('B/2+F/2', 'B+F', 'B-F', 'B+F/4')
 
 
@@ -69,7 +69,16 @@ def load(folder):
     assert data[:4] == b'XLFC', 'not a frame recording'
     version, count = struct.unpack_from('<ii', data, 4)
     pos = 12
-    default_shade = legacy_shade(legacy_policy(folder))
+    policy = legacy_policy(folder)
+    default_shade = legacy_shade(policy)
+    world_brightness = 1.0
+    if policy and policy.get('active') == 'Modern':
+        try:
+            brightness = int(policy.get('modern_brightness', '100'))
+        except ValueError:
+            brightness = 100
+        if 50 <= brightness <= 100:
+            world_brightness = brightness / 100
     frames = []
     for index in range(count):
         game, shown, ox, oy, ax, ay, aw, ah, vram, n = FRAME.unpack_from(data, pos)
@@ -108,7 +117,7 @@ def load(folder):
                 pos += 4
             prims.append(p)
         frames.append(dict(index=index, game=game, shown=shown, offset=(ox, oy), area=(ax, ay, aw, ah), vram=vram,
-                           prims=prims, folder=folder, picture_x=picture_x, between=between, picture_extent=(picture_game_w, picture_game_h)))
+                           prims=prims, folder=folder, picture_x=picture_x, between=between, picture_extent=(picture_game_w, picture_game_h), world_brightness=world_brightness))
     return frames
 
 
@@ -220,7 +229,8 @@ def shade(frame, p, t, l):
     out['transparent'] = texel == 0
     t8 = [(texel & 31) * 8, ((texel >> 5) & 31) * 8, ((texel >> 10) & 31) * 8]
     if not d['raw']:
-        t8 = [min(t8[i] * c[i] / 128.0, 255.0) for i in range(3)]
+        gain = frame.get('world_brightness', 1.0) if flags & SHADE_WORLD_TINT else 1.0
+        t8 = [min(t8[i] * c[i] * gain / 128.0, 255.0) for i in range(3)]
     out['rgb'] = t8
     return out
 

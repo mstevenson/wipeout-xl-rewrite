@@ -12,10 +12,13 @@ rotating adverts, radar dishes and neon animate. No further missing scenery
 assets were confirmed. Valparaiso's Saturn data contains no torch placements.
 Gare d'Europa's train was restored separately; see [train notes](saturn-train.md).
 
-Video screens and Red Bull boards retain static Saturn artwork. Their playback
-still needs comparison with the retail Saturn game before treating it as a
-missing effect. Validation used the European disc, not the Japanese release,
-and does not establish console equivalence.
+Video screens and Red Bull boards retain static Saturn artwork in the native
+Saturn material path. A subsequent [retail-code audit](saturn-screens.md) found
+that the European executable draws Red Bull boards statically and skips the
+five screen instances entirely. The port's screen visibility is therefore a
+separate fidelity question, not evidence of missing playback. Validation used
+the European disc, not the Japanese release, and does not establish console
+equivalence.
 
 To include the disc-dependent tests:
 

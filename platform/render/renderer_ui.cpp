@@ -161,6 +161,29 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
     ImGui::PushTextWrapPos(0);
     changed |= Resolution(s, edit);
     switch (edit) {
+    case RENDER_MODERN: {
+        changed |= Check("Bilinear texture filtering", &s->modern.bilinear,
+            "Blends neighbouring texels on world textures. Disable for sharp, nearest-neighbour sampling. "
+            "HUD and 2D menus use nearest sampling.");
+        ImGui::TextUnformatted("Brightness");
+        ImGui::SetNextItemWidth(-1);
+        changed |= ImGui::SliderInt("##Brightness", &s->modern.brightness,
+                                    MODERN_BRIGHTNESS_MIN, MODERN_BRIGHTNESS_MAX, "%d%%", ImGuiSliderFlags_NoInput);
+        Tooltip("Controls world texture tint. 100% uses the PlayStation level. "
+                "50% halves the tint and approximates the PC level.");
+        changed |= DisplaySettings(&s->modern.resample);
+        changed |= Check("HDR bloom", &s->modern.bloom,
+                         "Adds glow from overbright surfaces and track lights during races.");
+        const char *tonemappers[] = {"Classic", "Soft Highlights"};
+        ImGui::BeginDisabled(!s->modern.bloom);
+        ImGui::TextUnformatted("Tonemapper");
+        ImGui::SetNextItemWidth(-1);
+        changed |= ImGui::Combo("##Tonemapper", &s->modern.tonemapper, tonemappers, IM_ARRAYSIZE(tonemappers));
+        Tooltip("Maps the HDR race picture to SDR when HDR bloom is enabled. "
+                "Soft Highlights preserves Classic's shadows and rolls off bright colours earlier.");
+        ImGui::EndDisabled();
+        break;
+    }
     case RENDER_SATURN: changed |= SaturnSettings(&s->saturn); break;
     case RENDER_PC: changed |= PcSettings(&s->pc); break;
     case RENDER_N64: changed |= N64Settings(&s->n64); break;
@@ -178,7 +201,9 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
 
 bool RenderSettingsUi(RenderSettings *s)
 {
-    const char *names[] = {"PlayStation", "PC", "Nintendo 64", "Sega Saturn"};
+    const int profiles = RENDER_COUNT - RENDER_PS1;
+    const char *names[profiles];
+    for (int i = 0; i < profiles; i++) names[i] = RenderGet((RendererId)(i + RENDER_PS1))->name;
     RendererId *selections[] = {&s->ps1Selection, &s->pcSelection, &s->n64Selection, &s->saturnSelection};
     bool changed = false;
 
@@ -210,13 +235,13 @@ bool RenderSettingsUi(RenderSettings *s)
     const ImGuiStyle &style = ImGui::GetStyle();
     float panelWidth = ImGui::CalcTextSize("VI divot filtering (approximate)").x +
         ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + style.CellPadding.x * 2;
-    float width = panelWidth * 4;
+    float width = panelWidth * profiles;
     if (width < ImGui::GetContentRegionAvail().x) width = ImGui::GetContentRegionAvail().x;
     float height = ImGui::GetFrameHeightWithSpacing() * 13 + style.ScrollbarSize;
     ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings |
         ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollX;
-    if (ImGui::BeginTable("Renderer settings", 4, flags, ImVec2(0, height), width)) {
-        for (int i = 0; i < 4; i++) {
+    if (ImGui::BeginTable("Renderer settings", profiles, flags, ImVec2(0, height), width)) {
+        for (int i = 0; i < profiles; i++) {
             ImGui::TableNextColumn();
             ImGui::PushID(i);
             changed |= ProfileSettings(s, (RendererId)(i + RENDER_PS1));

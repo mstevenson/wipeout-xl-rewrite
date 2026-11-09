@@ -417,6 +417,49 @@ static void BillboardModulation(void)
     puts("Affine world primitives use PC tint; HUD/PS1 brightness and depth-free transport are preserved: OK");
 }
 
+static void ModernBrightness(void)
+{
+    RenderSettings saved = portSettings.render;
+    const float full = 248.0f / 255.0f;
+    words[0] = 0x7fff;
+    Upload();
+    portSettings.render.selection = RENDER_MODERN;
+    const int levels[] = {100, 75, 50};
+    for (int i = 0; i < SDL_arraysize(levels); i++) {
+        portSettings.render.modern.brightness = levels[i];
+        RenderCommit();
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        for (int mode = 0; mode < 4; mode++) {
+            int x = 2 * mode, tint = mode == 1 ? 255 : mode == 3 ? 32 : 128;
+            GpuDrawState draw = {.textured = 1, .raw = mode == 3, .depth = 2, .semi = -1};
+            GpuVertex v[3] = {
+                {.x = x, .y = 100}, {.x = x + 2, .y = 100}, {.x = x, .y = 102}
+            };
+            for (int corner = 0; corner < 3; corner++) {
+                v[corner].r = v[corner].g = v[corner].b = tint;
+                v[corner].a = 255;
+                v[corner].world = mode != 2;
+                v[corner].u = v[corner].v = .5f;
+            }
+            GpuTriangles(&draw, v, 3);
+        }
+        Flush();
+        float gain = levels[i] / 100.0f;
+        float expected[] = {full * gain, fminf(full * 255 / 128 * gain, 1.0f), full, full};
+        for (int mode = 0; mode < 4; mode++) {
+            float pixel[4];
+            glReadPixels(2 * mode, 100, 1, 1, GL_RGBA, GL_FLOAT, pixel);
+            for (int c = 0; c < 3; c++) assert(fabsf(pixel[c] - expected[mode]) < .002f);
+            assert(fabsf(pixel[3] - 1) < .002f);
+        }
+    }
+    portSettings.render = saved; RenderCommit();
+    assert(glGetError() == GL_NO_ERROR);
+    puts("Modern brightness: PS1 maximum, half-strength floor, tint before clipping, and HUD/raw texture handling: OK");
+}
+
 /* Exercise a tilted 3D billboard through the production shader and depth batches. */
 static void BillboardQuad(int textured, int ui, float topDepth, float bottomDepth)
 {
@@ -436,6 +479,80 @@ static void BillboardQuad(int textured, int ui, float topDepth, float bottomDept
     Begin(&draw, 6);
     for (int i = 0; i < 6; i++) Add(&v[corners[i]], style.shade);
     Flush();
+}
+
+static void ModernFilteredTriangle(const GpuDrawState *draw, int x, float u, float du, int world)
+{
+    GpuVertex v[3] = {
+        {.x = x, .y = 100, .u = u},
+        {.x = x + 3, .y = 100, .u = u + du},
+        {.x = x, .y = 103, .u = u}
+    };
+    for (int i = 0; i < 3; i++) {
+        v[i].v = 202.5f;
+        v[i].a = 255;
+        v[i].world = world;
+    }
+    GpuTriangles(draw, v, 3);
+}
+
+static void ModernFiltering(void)
+{
+    RenderSettings saved = portSettings.render;
+    portSettings.render.selection = RENDER_MODERN;
+
+    /* One 32x32 indexed tile and a contrasting word on its left. Every
+       other row is blue; the remaining rows alternate red and yellow. */
+    GpuDrawState draw = {.textured = 1, .raw = 1, .semi = -1, .pageX = 64,
+                         .clutY = 400, .trackTile = 1};
+    psxVram[400][1] = 31;
+    psxVram[400][2] = 31 | (31 << 5);
+    psxVram[400][3] = 31 << 10;
+    psxVram[400][4] = 31 << 5;
+    for (int y = 192; y < 224; y++) {
+        psxVram[y][71] = 0x4444;
+        for (int x = 72; x < 80; x++) psxVram[y][x] = y & 1 ? 0x3333 : 0x2121;
+    }
+    GpuVramUploaded(72, 192, 8, 32);
+    GpuVramChanged(71, 192, 9, 32);
+    GpuVramChanged(0, 400, 16, 1);
+    for (int bilinear = 0; bilinear <= 1; bilinear++) {
+        portSettings.render.modern.bilinear = bilinear;
+        RenderCommit();
+        glDisable(GL_SCISSOR_TEST);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ModernFilteredTriangle(&draw, 0, 33.0f, 0.0f, 1);
+        assert(primitiveState.filtered == (bilinear ? 2 : 0));
+        ModernFilteredTriangle(&draw, 3, 32.25f, 0.0f, 1);
+        ModernFilteredTriangle(&draw, 6, 33.0f, 0.0f, 0);
+        assert(!primitiveState.filtered); /* HUD uses nearest in both modes. */
+        Flush();
+        uint8_t pixel[4];
+        glReadPixels(0, 100, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        int expectedGreen = bilinear ? 124 : 248;
+        assert(pixel[0] == 248 && abs(pixel[1] - expectedGreen) <= 1 && pixel[2] == 0);
+        glReadPixels(3, 100, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        assert(pixel[0] == 248 && pixel[1] == 0 && pixel[2] == 0); /* No green from the neighboring upload. */
+        glReadPixels(6, 100, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+        assert(pixel[0] == 248 && pixel[1] == 248 && pixel[2] == 0);
+    }
+    psxVram[400][1] = psxVram[400][2] = 31 << 10;
+    GpuVramChanged(0, 400, 16, 1);
+    ModernFilteredTriangle(&draw, 0, 32.5f, 24.0f, 1);
+    Flush();
+    uint8_t pixel[4];
+    glReadPixels(0, 100, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    assert(pixel[0] == 0 && pixel[1] == 0 && pixel[2] == 248);
+    psxVram[400][1] = 0;
+    GpuVramChanged(0, 400, 16, 1);
+    ModernFilteredTriangle(&draw, 0, 32.5f, 24.0f, 1);
+    assert(primitiveState.filtered == 2); /* Transparent tiles stay on the coverage-aware sampler. */
+    Flush();
+    GpuVramOverwritten(72, 192, 8, 32);
+    portSettings.render = saved;
+    RenderCommit();
+    assert(glGetError() == GL_NO_ERROR);
+    puts("Modern filtering: nearest and bilinear pixels, texture edges, palette updates and HUD: OK");
 }
 
 static void WorldBillboardDepth(void)
@@ -567,6 +684,8 @@ static void DepthBatches(GLuint fbo, GLuint output, GLuint dummy)
     portSettings.render.ps1.depth = 0; portSettings.render.pc.depth = 1; RenderCommit();
     assert(glGetError() == GL_NO_ERROR);
     BillboardModulation();
+    ModernBrightness();
+    ModernFiltering();
     WorldBillboardDepth();
     glDeleteRenderbuffers(1, &depth);
     puts("PC depth batches occlude correctly; PS1 and PC depth toggles are independent: OK");
@@ -724,7 +843,7 @@ static void NativeSaturn(void)
     SaturnNativeSky(NULL,NULL,0,0);saturnSkyDrawn=0;
     areaX=oldX;areaY=oldY;areaW=oldW;areaH=oldH;
     portSettings.render=saved;RenderCommit();memset(pictureOwners,0,sizeof(pictureOwners));
-    BindTarget();
+    BindTarget(0);
     assert(glGetError()==GL_NO_ERROR);
     puts("Saturn production pixels: native quad additive RGB555 and full-resolution VDP2 plane wrapping/heading/pitch/roll: OK");
     puts("Saturn sky landmarks follow world projection through yaw/pitch/roll, focal changes and full-turn wrapping: OK");
@@ -808,7 +927,7 @@ static void SaturnGpuReference(void)
                 v[k].a=128+k*30;
             }
             Flush();glDisable(GL_SCISSOR_TEST);glClearColor(24/255.0f,48/255.0f,72/255.0f,1);
-            glClear(GL_COLOR_BUFFER_BIT);BindTarget();
+            glClear(GL_COLOR_BUFFER_BIT);BindTarget(0);
             for(int k=0;k<4;k++) {
                 scaled[k]=v[k];
                 scaled[k].x*=scale;scaled[k].y*=scale;
@@ -917,7 +1036,7 @@ static void SaturnGpuReference(void)
         portSettings.render.saturn.mesh=0;
         portSettings.render.saturn.depth=1;RenderCommit();
         GpuClearArea(0,100,64,64,0,0,0);
-        GpuClearDepth(0,100,64,64);
+        GpuClearDepth(0,100,64,64,0);
         GpuTriangles(&flareDraw,flareQuad,4);
         SaturnNativePoly solid={.mode=0xc0,.colour=0xfc00,.corners={0,1,2,3}};
         GpuDrawState solidDraw={.saturn=&solid};
@@ -959,7 +1078,7 @@ static void SaturnGpuReference(void)
        in either order. A preceding half blend must not disable later depth writes. */
     for(int enabled=0;enabled<2;enabled++) for(int reverse=0;reverse<2;reverse++) {
         portSettings.render.saturn.depth=enabled;RenderCommit();
-        BindTarget();glDisable(GL_SCISSOR_TEST);glDepthMask(GL_TRUE);
+        BindTarget(0);glDisable(GL_SCISSOR_TEST);glDepthMask(GL_TRUE);
         glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
         flat.mode=0xc3;flat.colour=0xffff;
         for(int k=0;k<4;k++) square[k].w=200;
@@ -1036,7 +1155,7 @@ static void SaturnGpuReference(void)
     glDeleteFramebuffers(1,&framebuffer);glDeleteTextures(1,&testTexture);glDeleteRenderbuffers(1,&testDepth);
     framebuffer=oldFramebuffer;scale=oldScale;
     areaX=ox;areaY=oy;areaW=ow;areaH=oh;
-    portSettings.render=saved;RenderCommit();memset(pictureOwners,0,sizeof(pictureOwners));BindTarget();
+    portSettings.render=saved;RenderCommit();memset(pictureOwners,0,sizeof(pictureOwners));BindTarget(0);
     assert(glGetError()==GL_NO_ERROR);
     printf("Saturn GPU forward quads vs software reference: %u channel comparisons, coverage/collapsed/reversed/mesh/end-codes/shading/blending/VRAM/clipping/fades/scaling/depth/batch ordering: OK\n",checked);
 }
@@ -1900,7 +2019,7 @@ static void ScreenBufferOwnership(void)
             assert(drawCalls == (repeat ? 0 : 3));
         }
     }
-    GpuClearDepth(0, 248, 16, 16);
+    GpuClearDepth(0, 248, 16, 16, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
     drawCalls = 0;
     BlitShown(0, 0, 248, 16, 264, 0, 0, 16, 16);
@@ -1975,14 +2094,15 @@ static void ProfileNativeResolution(void)
     assert(CreateFramebuffer());
     initialised = 1;
     portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
     portSettings.hdTextures = 1;
     for (portPal = 0; portPal <= 1; portPal++) {
-        for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+        for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
             portSettings.render.selection = (RendererId)id;
             for (int multiplier = 1; multiplier <= 2; multiplier++) {
                 *RenderScaleSetting(&portSettings.render, (RendererId)id) = multiplier;
                 RenderCommit(); GpuUpdateResolution();
-                CheckHdLookup(multiplier > 1);
+                CheckHdLookup(multiplier > 1 && id != RENDER_MODERN);
                 int nativeW, nativeH, width, height;
                 RenderNativeSize((RendererId)id, portPal, &nativeW, &nativeH);
                 GpuPixelSize(320, GPU_LINES, &width, &height);
@@ -2055,6 +2175,222 @@ static void ProfileNativeResolution(void)
          "readback, widescreen and HD texture gating: OK");
 }
 
+static void HdrQuad(const GpuDrawState *draw, int x, int y, float depth, int tint, float u)
+{
+    GpuVertex v[6];
+    static const int corners[] = {0, 1, 2, 1, 2, 3};
+    for (int i = 0; i < 6; i++) {
+        int corner = corners[i];
+        v[i] = (GpuVertex){.x = x + (corner & 1) * 4, .y = y + (corner >> 1) * 4, .w = depth,
+                           .u = u + 0.5f, .v = 148.5f, .r = tint, .g = tint, .b = tint, .a = 255};
+    }
+    GpuTriangles(draw, v, 6);
+}
+
+static int HdrRed(const uint8_t *pixels, int x, int y)
+{
+    return pixels[(y * 64 + x) * 4];
+}
+
+static void ModernHdr(void)
+{
+    Flush();
+    GpuRendererShutdown();
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &colour);
+    glDeleteRenderbuffers(1, &depthBuffer);
+    wideMargin = areaWide = wideDirty = 0;
+    portPal = 0;
+    scale = 1; rasterX = rasterY = 1;
+    assert(CreateFramebuffer());
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.selection = RENDER_MODERN;
+    portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
+    PortWideScene();
+    RenderCommit();
+    GpuSetDrawArea(0, 0, 320, 240, 0, 0);
+    psxVram[148][174] = psxVram[148][180] = psxVram[148][200] = 31;
+    GpuVramChanged(174, 148, 27, 1);
+
+    /* The same highlight must survive nearest and filtered material paths. */
+    for (int bilinear = 0; bilinear <= 1; bilinear++) {
+        portSettings.render.modern.bilinear = bilinear;
+        RenderCommit();
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0);
+        GpuClearArea(32, 24, 4, 4, 179, 130, 90); /* A coloured midtone near a linear peak of 0.45. */
+        GpuDrawState draw = {.textured = 1, .depth = 2, .semi = -1};
+        HdrQuad(&draw, 10, 10, 100, 255, 174);
+        HdrQuad(&draw, 24, 10, 200, 255, 174);
+        GpuDrawState solid = {.semi = -1};
+        HdrQuad(&solid, 24, 10, 50, 0, 0); /* A nearer surface hides the emitter. */
+        draw.emission = (MaterialEmission){.enabled = 1, .uv = {174, 148, 11, 9}};
+        HdrQuad(&draw, 38, 10, 100, 128, 174);
+        HdrQuad(&draw, 54, 10, 100, 128, 200); /* Bright texel outside the tagged bulb's UVs. */
+        HdrQuad(&solid, 24, 24, 50, 60, 0); /* Below the blend range. */
+        GpuClearDepth(0, 0, 320, 240, 0);
+        HdrQuad(&solid, 7, 10, 0, 22, 0); /* Opaque HUD covers both the source and its halo. */
+        Flush();
+
+        float encoded[4];
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, sceneHdr.framebuffer);
+        glReadPixels(11, 11, 1, 1, GL_RGBA, GL_FLOAT, encoded);
+        assert(encoded[0] > 1.9f && encoded[1] == 0.0f);
+
+        const uint8_t *shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(HdrRed(shown, 14, 11) > 20); /* Unmarked overbright surface emits. */
+        assert(HdrRed(shown, 10, 11) == 22);
+        assert(HdrRed(shown, 28, 11) == 0);
+        assert(HdrRed(shown, 42, 11) > 8);
+        assert(HdrRed(shown, 58, 11) == 0);
+        if (!bilinear) {
+            const int highlight = (11 * 64 + 11) * 4;
+            const int hud = (11 * 64 + 10) * 4;
+            const int midtone = (25 * 64 + 33) * 4;
+            assert(shown[highlight + 1] == 0 && shown[highlight + 2] == 0);
+            assert(HdrRed(shown, 25, 25) == 60 && HdrRed(shown, 33, 25) == 179);
+            assert(shown[midtone + 2] == 90);
+            portSettings.render.modern.tonemapper = MODERN_TONEMAP_SOFT_SHADOWS;
+            assert(RenderCommit());
+            /* Apply the new profile to the same pixels and exercise the resolve cache. */
+            RememberPicture(0, 0, 320, 240);
+            shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+            assert(shown[highlight] > shown[highlight + 1] && shown[highlight + 1] > 100);
+            assert(shown[highlight + 1] == shown[highlight + 2]);
+            assert(HdrRed(shown, 25, 25) == 60);
+            assert(abs(shown[midtone] - 177) <= 1 && abs(shown[midtone + 2] - 86) <= 1);
+            assert(shown[hud] == 22 && shown[hud + 1] == 22 && shown[hud + 2] == 22);
+            portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
+            assert(RenderCommit());
+            RememberPicture(0, 0, 320, 240);
+            shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+            assert(shown[highlight + 1] == 0 && shown[highlight + 2] == 0);
+        }
+        int outW, outH;
+        const uint8_t *raw = GpuReadArea(0, 0, 64, 32, &outW, &outH);
+        assert(outW == 64 && outH == 32);
+        assert(HdrRed(raw, 11, 11) == 255 && HdrRed(raw, 14, 11) == 0);
+        GpuReadBack(10, 10, 5, 4);
+        assert((psxVram[11][11] & 0x7fff) == 31 && (psxVram[11][14] & 0x7fff) == 0);
+
+        SetWideMargin(12);
+        GLuint output, destination = ViTarget(&output, 64, 32, NULL);
+        uint8_t wide[64 * 32 * 4];
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        BlitShown(1, 12, 0, 76, 32, 0, 0, 64, 32);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+        glReadPixels(0, 0, 64, 32, GL_RGBA, GL_UNSIGNED_BYTE, wide);
+        assert(!memcmp(shown, wide, sizeof(wide)));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
+        BlitShown(1, 14, 0, 74, 32, 0, 0, 60, 32);
+        uint8_t cropped[60 * 32 * 4];
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
+        glReadPixels(0, 0, 60, 32, GL_RGBA, GL_UNSIGNED_BYTE, cropped);
+        for (int y = 0; y < 32; y++)
+            assert(!memcmp(cropped + y * 60 * 4, wide + (y * 64 + 2) * 4, 60 * 4));
+
+        draw.emission = (MaterialEmission){0};
+        HdrQuad(&draw, 54, 10, 50, 255, 200);
+        raw = GpuReadArea(0, 0, 64, 32, &outW, &outH);
+        assert(HdrRed(raw, 55, 11) == 255 && HdrRed(raw, 58, 11) == 0);
+        assert(wideHdrDirty && !wideDirty); /* Raw VRAM has no use for the HDR copy. */
+        shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(HdrRed(shown, 58, 11) > 20 && !wideHdrDirty);
+        SetWideMargin(0);
+        glDeleteFramebuffers(1, &destination);
+        glDeleteTextures(1, &output);
+
+        /* A console write replaces both the scene colour and its emission. */
+        for (int y = 10; y < 14; y++) memset(&psxVram[y][10], 0, 4 * sizeof(uint16_t));
+        GpuWriteFramebuffer(10, 10, 4, 4);
+        shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(HdrRed(shown, 14, 11) == 0);
+        assert(glGetError() == GL_NO_ERROR);
+    }
+
+    SetScale(2, 320, 240);
+    const uint8_t *shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+    assert(HdrRed(shown, 42, 11) > 8); /* The displayed scene survives resizing. */
+
+    /* A thin emitter at high scale must give one halo with no secondary peaks. */
+    SetScale(4, 320, 240);
+    GpuClearArea(0, 0, 320, 240, 0, 0, 0);
+    GpuSetDrawArea(30, 10, 1, 4, 0, 0);
+    GpuDrawState light = {.textured = 1, .semi = -1};
+    HdrQuad(&light, 30, 10, 100, 255, 174);
+    GpuSetDrawArea(0, 0, 320, 240, 0, 0);
+    shown = GpuReadPicture(0, 0, 64, 32, 0, 256, 128);
+    const uint8_t *row = shown + 47 * 256 * 4;
+    assert(row[124 * 4] > 20 && row[164 * 4] == 0);
+    for (int x = 125; x < 164; x++) assert(row[x * 4] <= row[(x - 1) * 4] + 1);
+    SetScale(1, 320, 240);
+
+    /* Compare a textured subtractive shadow, an additive flare and a flare over
+       a shadow clipped to black with opaque patches of the expected SDR colours. */
+    psxVram[148][208] = 0x8000 | (8 << 10) | (8 << 5) | 8;
+    GpuVramChanged(208, 148, 1, 1);
+    for (int bilinear = 0; bilinear <= 1; bilinear++) {
+        portSettings.render.modern.bilinear = bilinear;
+        RenderCommit();
+        GpuClearArea(0, 0, 320, 240, 96, 96, 96);
+        GpuDrawState solid = {.semi = -1};
+        GpuDrawState shadow = {.textured = 1, .raw = 1, .depth = 2, .semi = 2};
+        GpuDrawState flare = {.semi = 1};
+        HdrQuad(&shadow, 4, 4, 50, 255, 208);
+        HdrQuad(&flare, 12, 4, 50, 80, 0);
+        HdrQuad(&solid, 20, 4, 50, 24, 0);
+        HdrQuad(&shadow, 20, 4, 50, 255, 208);
+        HdrQuad(&flare, 20, 4, 50, 80, 0);
+        HdrQuad(&solid, 28, 4, 50, 32, 0);
+        HdrQuad(&solid, 36, 4, 50, 176, 0);
+        HdrQuad(&solid, 44, 4, 50, 80, 0);
+        int outW, outH;
+        const uint8_t *raw = GpuReadArea(0, 0, 64, 32, &outW, &outH);
+        assert(HdrRed(raw, 5, 5) == 32 && HdrRed(raw, 13, 5) == 176 && HdrRed(raw, 21, 5) == 80);
+        for (int mapper = MODERN_TONEMAP_ORIGINAL; mapper <= MODERN_TONEMAP_SOFT_SHADOWS; mapper++) {
+            portSettings.render.modern.tonemapper = mapper;
+            RenderCommit();
+            RememberPicture(0, 0, 320, 240);
+            shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+            for (int x = 5; x <= 21; x += 8)
+                assert(abs(HdrRed(shown, x, 5) - HdrRed(shown, x + 24, 5)) <= 1);
+            if (mapper == MODERN_TONEMAP_ORIGINAL)
+                assert(HdrRed(shown, 5, 5) == 32 && HdrRed(shown, 13, 5) == 176 && HdrRed(shown, 21, 5) == 80);
+        }
+    }
+
+    /* Emission masks are per-material source data, not a fixture baked into GLSL. */
+    portSettings.render.modern.bilinear = 0;
+    portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
+    RenderCommit();
+    GpuClearArea(0, 0, 320, 240, 0, 0, 0);
+    GpuDrawState masked = {.textured = 1, .depth = 2, .semi = -1,
+                           .emission = {.enabled = 1, .uv = {200, 148, 2, 2}}};
+    HdrQuad(&masked, 10, 10, 100, 128, 200);
+    HdrQuad(&masked, 38, 10, 100, 128, 174);
+    shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+    assert(HdrRed(shown, 14, 11) > 8 && HdrRed(shown, 42, 11) == 0);
+
+    /* Both an explicit opt-out and an unavailable half-float target use SDR. */
+    for (int enabled = 0; enabled <= 1; enabled++) {
+        portSettings.render.modern.bloom = enabled;
+        RenderCommit();
+        DeleteHdr(&sceneHdr);
+        sceneHdr.unavailable = enabled;
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0);
+        GpuDrawState draw = {.textured = 1, .depth = 2, .semi = -1};
+        HdrQuad(&draw, 10, 10, 100, 255, 174);
+        shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(HdrRed(shown, 11, 11) == 255 && HdrRed(shown, 14, 11) == 0);
+        assert(glGetError() == GL_NO_ERROR);
+    }
+    GpuRendererShutdown();
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &colour);
+    glDeleteRenderbuffers(1, &depthBuffer);
+    puts("Modern HDR: overbright nearest and filtered materials, fixture mask, HUD, depth, smooth high-scale bloom, "
+         "tonemapper switching, legacy blends, widescreen, SDR fallback and raw VRAM: OK");
+}
+
 int main(void)
 {
     assert(SDL_Init(SDL_INIT_VIDEO));
@@ -2087,7 +2423,8 @@ int main(void)
     glVertexAttribIPointer(6, 4, GL_UNSIGNED_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, hd));
     glVertexAttribIPointer(7, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, hdTexels));
     glVertexAttribIPointer(8, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, filterBounds));
-    for (int i = 0; i < 9; i++) glEnableVertexAttribArray((GLuint)i);
+    glVertexAttribIPointer(9, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, emissionUv));
+    for (int i = 0; i < 10; i++) glEnableVertexAttribArray((GLuint)i);
 
     glGenTextures(1, &vramTexture); glBindTexture(GL_TEXTURE_2D, vramTexture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, 1024, 1024, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, words);
@@ -2127,7 +2464,7 @@ int main(void)
     ThreePointSquare(2);
     BilinearSquare(2);
     Interpolation();
-    testShade = SHADE_PC_TINT | SHADE_AFFINE_COLOUR;
+    testShade = SHADE_WORLD_TINT | SHADE_AFFINE_COLOUR;
     Render(RENDER_PC, 2, 2, .5f, .5f, 255, -1, 0, full, 0, 0, 1);
     Render(RENDER_PC, 2, 2, .5f, .5f, 128, -1, 0, full * 128 / 255, 0, 0, 1);
     testShade = SHADE_PS1_COLOUR | SHADE_AFFINE_COLOUR | SHADE_AFFINE_UV;
@@ -2220,6 +2557,7 @@ int main(void)
     ScreenBufferOwnership();
     PcRgb565();
     ProfileNativeResolution();
+    ModernHdr();
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
     puts("Production GL shaders: N64 three-point, optional bilinear native/HD, bounds/wrapping/windows, coverage/blend passes and default PS1 sampling: OK");
     return 0;
