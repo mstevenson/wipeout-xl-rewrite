@@ -3,12 +3,8 @@
 static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
 {
     const Ps1RenderSettings *p = profile;
-    RenderStyle s = {m->raw ? SHADE_RAW : 0, 0};
+    RenderStyle s = {.shade = RenderBaseShade(m)};
 
-    if (m->n64) {
-        s.shade |= SHADE_N64;
-    }
-    s.shade |= SHADE_AFFINE_COLOUR;
     if (p->quantizeVertices) {
         s.shade |= SHADE_SNAP;
     }
@@ -36,4 +32,4 @@ static RenderGeometry Geometry(const void *profile)
     return (RenderGeometry){0, 0, 0, RENDER_LIGHT_PS1};
 }
 
-const Renderer ps1Renderer = {RENDER_PS1, "PlayStation", Prepare, Depth, Geometry};
+const Renderer ps1Renderer = {"PlayStation", Prepare, Depth, Geometry};

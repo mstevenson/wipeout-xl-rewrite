@@ -172,10 +172,14 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
         Tooltip("Controls world texture tint. 100% uses the PlayStation level. "
                 "50% halves the tint and approximates the PC level.");
         changed |= DisplaySettings(&s->modern.resample);
-        changed |= Check("HDR bloom", &s->modern.bloom,
-                         "Adds glow from overbright surfaces and track lights during races.");
+        const char *bloomTooltip = "Adds glow from overbright surfaces and track lights during races.";
+        if (s->modernBloomOverride)
+            bloomTooltip = RenderModernBloom(s)
+                ? "WIPEOUT_MODERN_BLOOM enables bloom for this run. This checkbox sets the saved preference."
+                : "WIPEOUT_MODERN_BLOOM disables bloom for this run. This checkbox sets the saved preference.";
+        changed |= Check("HDR bloom", &s->modern.bloom, bloomTooltip);
         const char *tonemappers[] = {"Classic", "Soft Highlights"};
-        ImGui::BeginDisabled(!s->modern.bloom);
+        ImGui::BeginDisabled(!RenderModernBloom(s));
         ImGui::TextUnformatted("Tonemapper");
         ImGui::SetNextItemWidth(-1);
         changed |= ImGui::Combo("##Tonemapper", &s->modern.tonemapper, tonemappers, IM_ARRAYSIZE(tonemappers));

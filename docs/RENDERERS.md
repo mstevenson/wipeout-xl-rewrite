@@ -98,7 +98,8 @@ and a tunnel bulb in Gare d'Europa on PlayStation tracks. The renderer adds
 the glow in linear light and maps the highlights to SDR for the window and
 frame captures. Opaque HUD pixels retain their original colours. Systems
 without a renderable half-float scene target use the SDR path. Set
-`WIPEOUT_MODERN_BLOOM=0` to compare a race with the effect disabled.
+`WIPEOUT_MODERN_BLOOM=0` to disable it for one run or `WIPEOUT_MODERN_BLOOM=1`
+to enable it for one run. The checkbox controls the saved preference.
 
 While racing, open the debug console with the backtick key and use
 **Graphics → Modern → Tonemapper** to compare the two presets. The control
@@ -106,8 +107,7 @@ requires HDR bloom. **Classic** is saved as `original`.
 **Soft Highlights** (`pbr_neutral_soft_shadows`) is the default. It uses Classic
 through a linear RGB peak of 0.15 and smoothly blends into full PBR Neutral
 by 0.75, favouring Classic in the midtones. The selection is saved as
-`modern_tonemapper`. Existing `pbr_neutral` selections load as
-`pbr_neutral_soft_shadows`.
+`modern_tonemapper`.
 [Khronos PBR Neutral specification](https://github.com/KhronosGroup/ToneMapping/tree/main/PBR_Neutral)
 
 ## PC profile
@@ -232,30 +232,23 @@ captures validate this implementation; they do not establish console equivalence
 | INI value | Meaning |
 | --- | --- |
 | `ps1_renderer`, `pc_renderer`, `n64_renderer`, `saturn_renderer` | Profile for that platform: `ps1`, `pc`, `n64`, `saturn` or `modern`; defaults to the matching profile |
-| Old `renderer = auto` or `n64` | `automatic_renderer` migrates to the PlayStation preference; N64 defaults to its own profile |
-| Old `renderer = ps1`, `pc` or `saturn` | Migrates to the PlayStation and N64 preferences (the old N64 override was off) |
-| `ps1_*`, `pc_*`, `saturn_*`, `n64_*`, `modern_*` controls | Independent profile settings; obsolete `n64_depth` ignored and no longer saved |
+| `ps1_*`, `pc_*`, `saturn_*`, `n64_*`, `modern_*` controls | Independent profile settings |
 | `ps1_render_scale`, `pc_render_scale`, `n64_render_scale`, `saturn_render_scale`, `modern_render_scale` | Profile resolution multiplier, limited by GPU capacity. Use 0 for Auto. |
 
-The old global `render_scale` migrates only where a profile scale is missing.
-Positive values become native multipliers; PC halves the old multiplier, rounding
-up, because its base is now 640×480. The former default Auto value becomes 1× so
-each platform starts at its native/default resolution. Explicit new profile keys
-win regardless of line order. `WIPEOUT_RENDER_SCALE` overrides all profile
-multipliers for a run, including 0 for Auto.
+The old global `render_scale` migrates to the four hardware profiles where a
+profile scale is missing. Positive values become native multipliers. PC halves
+the old multiplier, rounding up, because its base is now 640×480. The former
+default Auto value gives way to each profile's default. `WIPEOUT_RENDER_SCALE`
+overrides all profile multipliers, including 0 for Auto.
 
-Migration keeps existing profile controls. The newly independent PC and Saturn
-preferences default to their matching profiles. Old `pc_rendering` (preferred)
-or `smooth_textures` initializes the PlayStation preference when neither
-`automatic_renderer` nor `ps1_renderer` is present. Old `depth_buffer` initializes
-PC depth. New keys win regardless of line order.
+Old `depth_buffer` initializes PC depth when `pc_depth` is missing.
+Explicit profile keys take precedence regardless of line order.
+`WIPEOUT_DEPTH_BUFFER` overrides PC depth.
 
-`WIPEOUT_RENDERER=ps1|pc|saturn|modern` forces that renderer for the run; `auto|n64`
-follows platform preferences. Legacy `WIPEOUT_PC_RENDERING` /
-`WIPEOUT_SMOOTH_TEXTURES` choose the PlayStation preference;
-`WIPEOUT_DEPTH_BUFFER` sets PC depth for that run. The forced renderer is not
-saved over platform preferences. Hidden regression runs neither read nor save
-player settings.
+`WIPEOUT_RENDERER=ps1|pc|n64|saturn|modern` forces a renderer for the run and
+`auto` follows platform preferences. The INI stores each platform's chosen
+profile. Hidden regression runs use defaults and environment overrides and skip
+reading and saving player settings.
 
 ## Implementation
 

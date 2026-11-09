@@ -3,12 +3,8 @@
 static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
 {
     const PcRenderSettings *settings = profile;
-    RenderStyle s = {m->raw ? SHADE_RAW : 0, 0};
+    RenderStyle s = {.shade = RenderBaseShade(m)};
 
-    if (m->n64) {
-        s.shade |= SHADE_N64;
-    }
-    s.shade |= SHADE_AFFINE_COLOUR;
     /* Affine world billboards use PC modulation too; HUD colours retain the PS1 scale. */
     if (!m->ui && !m->fullColour) {
         s.shade |= SHADE_WORLD_TINT;
@@ -34,4 +30,4 @@ static RenderGeometry Geometry(const void *profile)
                             settings->lighting ? RENDER_LIGHT_RGB8 : RENDER_LIGHT_PS1, 1};
 }
 
-const Renderer pcRenderer = {RENDER_PC, "PC", Prepare, Depth, Geometry};
+const Renderer pcRenderer = {"PC", Prepare, Depth, Geometry};

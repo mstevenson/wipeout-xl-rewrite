@@ -1544,7 +1544,7 @@ static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count, int 
     /* Clipped geometry is projected world geometry. Ask the renderer for operations,
        just as the GPU backend does; the adapter never selects a renderer/profile. */
     RenderMaterial material = {.n64 = draw->n64, .fullColour = draw->depth == 3,
-        .textured = draw->textured, .spatial = 1, .raw = draw->raw, .dither = draw->dither};
+        .textured = draw->textured, .raw = draw->raw, .dither = draw->dither};
     double near = GteNearPlane();
     float along = interpolating ? interpolationAlong : 1.0f;
     int i, behind = 0;

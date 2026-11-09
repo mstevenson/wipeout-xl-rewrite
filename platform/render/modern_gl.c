@@ -3,15 +3,11 @@
 #include <string.h>
 #include "shaders/bilinear.h"
 
-#define RENDER_POSITION "    vec2 pixel = position.xy;\n"
-#define RENDER_TEXCOORD "    vTexel = vec3(texel, 1.0);\n"
 #define RENDER_FRAGMENT_UNIFORMS "uniform float worldBrightness;\n"
 #define RENDER_FILTER_BOUNDS \
     "    if ((mode.y & 64) == 0 && filterBounds.z >= filterBounds.x)\n" \
     "        return clamp(p, filterBounds.xy, filterBounds.zw);\n"
 #define RENDER_VERTEX_COLOUR "    return c * ((mode.y & 2) != 0 ? worldBrightness : 1.0);\n"
-#define RENDER_TINT "vec3 TextureTint() { return VertexColour() * ((mode.y & 64) != 0 && ps1Light == 0 ? 1.0 : 255.0 / 128.0); }\n"
-#define RENDER_OUTPUT_COLOUR "vec3 OutputColour(vec3 c) { return c; }\n"
 
 /* Decode the composited scene to linear light, extending sRGB above white. */
 #define LINEAR_COLOUR \

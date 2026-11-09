@@ -37,11 +37,25 @@
     "uint FetchClut(ivec2 p) { return texelFetch(vram, ivec2(p.x & 1023, p.y & 1023), 0).r; }\n"
     "vec3 VertexColour() {\n"
     "    vec3 c = vColour.rgb / vColourWeight;\n"
+#ifdef RENDER_VERTEX_COLOUR
     RENDER_VERTEX_COLOUR
+#elif defined(RENDER_RGB5_VERTEX_COLOUR)
+    "    return (mode.y & 4) != 0 ? floor(c * 255.0 + 0.0001) / 255.0 : c;\n"
+#else
+    "    return c;\n"
+#endif
     "}\n"
-    /* PC D3DTBLEND_MODULATE uses 255 as neutral; PS1 modulation uses 128. */
+#ifdef RENDER_TINT
     RENDER_TINT
+#else
+    /* Imported RGB8 light uses 255 as neutral. PlayStation-scale light uses 128. */
+    "vec3 TextureTint() { return VertexColour() * ((mode.y & 64) != 0 && ps1Light == 0 ? 1.0 : 255.0 / 128.0); }\n"
+#endif
+#ifdef RENDER_OUTPUT_COLOUR
     RENDER_OUTPUT_COLOUR
+#else
+    "vec3 OutputColour(vec3 c) { return c; }\n"
+#endif
     /* colour col with coverage cov (premultiplied), blended or opaque, faded with distance (vColour.a) */
     "vec4 BlendMaterial(vec3 col, float cov, bool blended) {\n"
     "    if (!blended) return vec4(col, cov);\n"

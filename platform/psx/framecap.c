@@ -487,13 +487,12 @@ FrameCapPrim *FrameCapAdd(void)
 /* Derive operations from the captured policy, never the current UI settings. */
 static unsigned PrimitiveShade(const RenderFrame *render, const FrameCapPrim *p)
 {
-    int spatial = 1, world = 0, n64 = p->draw.n64;
+    int world = 0, n64 = p->draw.n64;
     for (int i = 0; i < p->count; i++) {
-        spatial &= p->v[i].w > 0;
         world |= p->v[i].world || p->v[i].w > 0;
         n64 |= p->v[i].n64;
     }
-    RenderMaterial material = {n64, p->draw.depth == 3, p->draw.textured, spatial,
+    RenderMaterial material = {n64, p->draw.depth == 3, p->draw.textured,
                                p->draw.raw, p->draw.dither, 0, !world};
     return RenderPrepare(render, &material).shade;
 }

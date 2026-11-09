@@ -225,7 +225,7 @@ static void HdFiltering(void)
     Upload();
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
         RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
-        RenderMaterial material = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
+        RenderMaterial material = {.n64 = 1, .textured = 1, .bounds = 1};
         frame.settings.pc.bilinear = 0;
         frame.settings.n64.threePoint = 0;
         RenderStyle style = RenderPrepare(&frame, &material);
@@ -316,8 +316,8 @@ static void FullColourProfiles(void)
         for (int id = RENDER_PS1; id <= RENDER_N64; id++) for (int enabled = 0; enabled < 2; enabled++)
         for (int spatial = 0; spatial < 2; spatial++) {
             for (int other = 0; other < 2; other++) {
-                RenderFrame f = {.settings = RENDER_DEFAULTS, .id = (RendererId)id, .n64Track = 1};
-                RenderMaterial m = {.fullColour = 1, .textured = 1, .spatial = spatial, .dither = 1, .ui = !spatial};
+                RenderFrame f = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+                RenderMaterial m = {.fullColour = 1, .textured = 1, .dither = 1, .ui = !spatial};
                 f.settings.ps1 = (Ps1RenderSettings){other, other, other, other, other};
                 f.settings.pc = (PcRenderSettings){other, other, other};
                 f.settings.n64 = (N64RenderSettings){other, other, other, other, other, other};
@@ -361,7 +361,7 @@ static void DepthTriangle(const GpuDrawState *state, float x, float depth, int r
     v.x = x; v.y = 100; v.w = depth;
     v.r = (uint8_t)red; v.g = (uint8_t)green; v.a = 255;
     v.u = v.v = .5f;
-    RenderMaterial material = {state->n64, state->depth == 3, state->textured, 1,
+    RenderMaterial material = {state->n64, state->depth == 3, state->textured,
                                state->raw, state->dither, primitiveFilterBounds[2] >= 0};
     RenderStyle style = RenderPrepare(RenderCurrent(), &material);
     Begin(state, 3);
@@ -463,7 +463,7 @@ static void ModernBrightness(void)
 /* Exercise a tilted 3D billboard through the production shader and depth batches. */
 static void BillboardQuad(int textured, int ui, float topDepth, float bottomDepth)
 {
-    RenderMaterial material = {.textured = textured, .spatial = !ui, .ui = ui};
+    RenderMaterial material = {.textured = textured, .ui = ui};
     RenderStyle style = RenderPrepare(RenderCurrent(), &material);
     GpuDrawState draw = {.textured = textured, .depth = 2, .semi = -1, .filtered = style.filter};
     GpuVertex v[4] = {0};
@@ -1188,20 +1188,14 @@ static void N64SharedMaterials(void)
         assert(style.filter == 0);
         Render(RENDER_N64, style.filter, 2, .5f, .5f, 128, -1, 0, full, 0, 0, 1);
         RenderMaterial world = ui;
-        world.spatial = 1;
         world.ui = 0;
-        style = RenderPrepare(RenderCurrent(), &world);
-        assert(style.filter == 1);
-        testShade = style.shade;
-        Render(RENDER_N64, style.filter, 2, .5f, .5f, 128, -1, 0, 0, full / 2, full / 2, 1);
-        world.spatial = 0; /* affine world billboards must retain filtering too */
         style = RenderPrepare(RenderCurrent(), &world);
         assert(style.filter == 1);
         testShade = style.shade;
         Render(RENDER_N64, style.filter, 2, .5f, .5f, 128, -1, 0, 0, full / 2, full / 2, 1);
         portSettings.render.n64.threePoint = 0; RenderCommit();
         for (int spatial = 0; spatial < 2; spatial++) {
-            RenderMaterial material = {.spatial = spatial, .dither = 1};
+            RenderMaterial material = {.dither = 1};
             GpuVertex v = {.y = 100, .w = spatial ? 100 : 0, .r = 100, .g = 100, .b = 100, .a = 255};
             float pixels[4 * 4 * 4];
             style = RenderPrepare(RenderCurrent(), &material);
@@ -1227,7 +1221,7 @@ static void WorldDithering(void)
 {
     static const int offsets[16] = {-4,0,-3,1, 2,-2,3,-1, -3,1,-4,0, 3,-1,2,-2};
     RenderSettings saved = portSettings.render;
-    RenderMaterial material = {.spatial = 1, .dither = 1};
+    RenderMaterial material = {.dither = 1};
     GpuDrawState effect = {.semi = 1, .dither = 1};
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) for (int dither = 0; dither < 2; dither++) {
         portSettings.render = (RenderSettings)RENDER_DEFAULTS;
@@ -1364,7 +1358,7 @@ static void N64GameplayLight(void)
     Upload();
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
         RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
-        RenderMaterial material = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
+        RenderMaterial material = {.n64 = 1, .textured = 1, .bounds = 1};
         RenderStyle style = RenderPrepare(&frame, &material);
         testShade = (uint8_t)style.shade;
         for (int filtering = 0; filtering < 2; filtering++) {
@@ -1406,7 +1400,7 @@ static void N64SaturatedLight(void)
     testPs1Light = 1;
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
         RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
-        RenderMaterial material = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
+        RenderMaterial material = {.n64 = 1, .textured = 1, .bounds = 1};
         RenderStyle style = RenderPrepare(&frame, &material);
         testShade = (uint8_t)style.shade;
         float full = id == RENDER_PS1 ? 248.0f / 255 : 1.0f;
@@ -1442,7 +1436,7 @@ static void N64Materials(void)
         GpuVertex v = {.w = 7, .r = 137, .g = 137, .b = 137, .a = 255};
         portSettings.render.selection = RENDER_AUTO;
         portSettings.render.ps1Selection = pc ? RENDER_PC : RENDER_PS1; RenderCommit();
-        RenderMaterial description = {.n64 = 1, .textured = 1, .spatial = 1, .bounds = 1};
+        RenderMaterial description = {.n64 = 1, .textured = 1, .bounds = 1};
         RenderStyle style = RenderPrepare(RenderCurrent(), &description);
         batchCount = 0; Begin(&material, 3); Add(&v, style.shade);
         assert(batch[0].mode[1] == (SHADE_N64 | SHADE_AFFINE_COLOUR));

@@ -3,12 +3,8 @@
 static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
 {
     const SaturnRenderSettings *p = profile;
-    RenderStyle s = {m->raw ? SHADE_RAW : 0, 0};
+    RenderStyle s = {.shade = RenderBaseShade(m)};
 
-    if (m->n64) {
-        s.shade |= SHADE_N64;
-    }
-    s.shade |= SHADE_AFFINE_COLOUR;
     if (p->quantizeVertices) {
         s.shade |= SHADE_SNAP;
     }
@@ -43,4 +39,4 @@ static RenderResources Resources(const void *profile)
                              .alphaMesh = !settings->mesh, .cameraAlignedSky = settings->cameraAlignedSky};
 }
 
-const Renderer saturnRenderer = {RENDER_SATURN, "Sega Saturn", Prepare, Depth, Geometry, Resources};
+const Renderer saturnRenderer = {"Sega Saturn", Prepare, Depth, Geometry, Resources};

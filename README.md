@@ -208,11 +208,9 @@ filtering of the original world textures. Bilinear is the default.
 Frame rate and draw distance are shared. HD replacements are shared by the
 hardware profiles.
 
-Existing profile parameters are retained. The former global choice migrates to
-the PlayStation preference, along with its N64 override behavior; PC and Saturn
-start with their matching profiles. `WIPEOUT_RENDERER=ps1|pc|saturn|modern` temporarily
-forces a renderer; `auto` and the legacy `n64` value follow platform preferences.
-Old PC/filter and depth settings are migrated. See [rendering profiles](docs/RENDERERS.md)
+`WIPEOUT_RENDERER=ps1|pc|n64|saturn|modern` forces a renderer for one run.
+`auto` follows platform preferences. The previous global scale and depth
+settings migrate to profile settings. See [rendering profiles](docs/RENDERERS.md)
 for defaults, controls and migration.
 These are rendering approximations using the loaded assets, not changes of game
 version or pixel-exact emulation.

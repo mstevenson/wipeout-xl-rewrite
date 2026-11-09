@@ -2,11 +2,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define RENDER_POSITION "    vec2 pixel = position.xy;\n"
-#define RENDER_TEXCOORD "    vTexel = vec3(texel, 1.0);\n"
-#define RENDER_VERTEX_COLOUR "    return c;\n"
-#define RENDER_OUTPUT_COLOUR "vec3 OutputColour(vec3 c) { return c; }\n"
-#define RENDER_TINT "vec3 TextureTint() { return VertexColour() * ((mode.y & 64) != 0 && ps1Light == 0 ? 1.0 : 255.0 / 128.0); }\n"
 #define RENDER_FILTER \
     "#define FILTER_TAPS 3\n" \
     "vec2 FilterPosition(vec2 t) { return t; }\n" \

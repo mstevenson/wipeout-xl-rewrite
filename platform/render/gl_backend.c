@@ -1417,7 +1417,7 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
     int native = world && faded.textured && !faded.n64 &&
                  NativeFilterBounds(state, vertices, count, nativeBounds);
     const RenderFrame *render = RenderCurrent();
-    RenderMaterial material = {faded.n64, faded.depth == 3, faded.textured, perspective, faded.raw, faded.dither,
+    RenderMaterial material = {faded.n64, faded.depth == 3, faded.textured, faded.raw, faded.dither,
                                bounds || native, !world};
     RenderStyle style = RenderPrepare(render, &material);
     if (style.nativeBounds) memcpy(primitiveFilterBounds, nativeBounds, sizeof(nativeBounds));

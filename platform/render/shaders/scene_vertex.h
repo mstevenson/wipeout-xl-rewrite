@@ -37,7 +37,11 @@
     /* position.z: the depth (perspective), negative when left out of the depth buffer, 0 in 2D. The depth buffer
        holds 1 - 1/depth; what is left out and 2D are in front of it (always drawn) and never written. */
     "    float w = position.z != 0.0 ? abs(position.z) : 1.0;\n"
+#ifdef RENDER_POSITION
     RENDER_POSITION
+#else
+    "    vec2 pixel = position.xy;\n"
+#endif
     "    vec2 ndc = (pixel - origin) / target * 2.0 - 1.0;\n"
     /* modeIn.w: bit 0 a polygon seen from behind or exactly placed, tested without the slack (hidden by anything
        nearer); from bit 4
@@ -54,7 +58,11 @@
     "    clut = ivec4(textureIn.zw, 0, 0);\n"
     "    vWindow = ivec4(window);\n"
     "    mode = ivec4(int(modeIn.x), int(modeIn.y), pass, int(modeIn.z & 3u));\n"
-    RENDER_TEXCOORD
+#ifdef RENDER_AFFINE_TEXTURES
+    "    vTexel = (modeIn.y & 32u) != 0u ? vec3(texel * w, w) : vec3(texel, 1.0);\n"
+#else
+    "    vTexel = vec3(texel, 1.0);\n"
+#endif
     "    hd = hdIn;\n"
     "    hdTexels = hdTexelsIn;\n"
     "    filterBounds = filterBoundsIn;\n"

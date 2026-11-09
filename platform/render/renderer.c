@@ -11,15 +11,34 @@
 static RenderFrame current;
 static int valid;
 
+typedef struct Profile {
+    const Renderer *renderer;
+    const char *key, *scaleKey;
+    size_t offset, size, scaleOffset;
+    int width, height, palHeight, fps, palFps;
+} Profile;
+
+static const Profile profiles[RENDER_COUNT] = {
+#define PROFILE(field, w, h, palH, rate, palRate) \
+    { &field##Renderer, #field, #field "_render_scale", offsetof(RenderSettings, field), \
+      sizeof(((RenderSettings *)0)->field), offsetof(RenderSettings, field.scale), w, h, palH, rate, palRate }
+    [RENDER_PS1] = PROFILE(ps1, 320, 240, 256, 30, 25),
+    [RENDER_PC] = PROFILE(pc, 640, 480, 480, 60, 60),
+    [RENDER_N64] = PROFILE(n64, 320, 240, 240, 30, 30),
+    [RENDER_SATURN] = PROFILE(saturn, 352, 240, 240, 20, 20),
+    [RENDER_MODERN] = PROFILE(modern, 320, 240, 256, 60, 60),
+#undef PROFILE
+};
+
+static const Profile *ProfileFor(RendererId id)
+{
+    return &profiles[id >= RENDER_PS1 && id < RENDER_COUNT ? id : RENDER_PS1];
+}
+
 int RenderOriginalFrameRate(int pal)
 {
-    switch (RenderCurrent()->id) {
-    case RENDER_SATURN: return 20;
-    case RENDER_MODERN:
-    case RENDER_PC: return 60;
-    case RENDER_N64: return 30; /* the supported USA Wipeout 64 import */
-    default: return pal ? 25 : 30;
-    }
+    const Profile *profile = ProfileFor(RenderCurrent()->id);
+    return pal ? profile->palFps : profile->fps;
 }
 
 int RenderPcViewLimits(const RenderFrame *frame, int *sections, int *scenery)
@@ -37,24 +56,25 @@ int RenderPcViewLimits(const RenderFrame *frame, int *sections, int *scenery)
 
 const Renderer *RenderGet(RendererId id)
 {
-    switch (id) {
-    case RENDER_MODERN: return &modernRenderer;
-    case RENDER_SATURN: return &saturnRenderer;
-    case RENDER_PC: return &pcRenderer;
-    case RENDER_N64: return &n64Renderer;
-    default: return &ps1Renderer;
+    return ProfileFor(id)->renderer;
+}
+
+RendererId RenderIdFromName(const char *name)
+{
+    for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
+        if (!strcmp(name, profiles[id].key)) return (RendererId)id;
     }
+    return RENDER_AUTO;
+}
+
+int RenderModernBloom(const RenderSettings *s)
+{
+    return s->modernBloomOverride ? s->modernBloomOverride > 0 : s->modern.bloom;
 }
 
 const void *RenderProfile(const RenderFrame *f)
 {
-    switch (f->id) {
-    case RENDER_MODERN: return &f->settings.modern;
-    case RENDER_SATURN: return &f->settings.saturn;
-    case RENDER_PC: return &f->settings.pc;
-    case RENDER_N64: return &f->settings.n64;
-    default: return &f->settings.ps1;
-    }
+    return (const char *)&f->settings + ProfileFor(f->id)->offset;
 }
 
 int RenderDepth(const RenderFrame *f)
@@ -62,32 +82,26 @@ int RenderDepth(const RenderFrame *f)
     return RenderGet(f->id)->depth(RenderProfile(f));
 }
 
+const char *RenderScaleKey(RendererId id)
+{
+    return ProfileFor(id)->scaleKey;
+}
+
 int *RenderScaleSetting(RenderSettings *s, RendererId id)
 {
-    switch (id) {
-    case RENDER_PC: return &s->pc.scale;
-    case RENDER_N64: return &s->n64.scale;
-    case RENDER_MODERN: return &s->modern.scale;
-    case RENDER_SATURN: return &s->saturn.scale;
-    default: return &s->ps1.scale;
-    }
+    return (int *)((char *)s + ProfileFor(id)->scaleOffset);
 }
 
 int RenderScale(const RenderFrame *f)
 {
-    switch (f->id) {
-    case RENDER_PC: return f->settings.pc.scale;
-    case RENDER_N64: return f->settings.n64.scale;
-    case RENDER_MODERN: return f->settings.modern.scale;
-    case RENDER_SATURN: return f->settings.saturn.scale;
-    default: return f->settings.ps1.scale;
-    }
+    return *(const int *)((const char *)&f->settings + ProfileFor(f->id)->scaleOffset);
 }
 
 void RenderNativeSize(RendererId id, int pal, int *width, int *height)
 {
-    *width = id == RENDER_PC ? 640 : id == RENDER_SATURN ? 352 : 320;
-    *height = id == RENDER_PC ? 480 : (id == RENDER_PS1 || id == RENDER_MODERN) && pal ? 256 : 240;
+    const Profile *profile = ProfileFor(id);
+    *width = profile->width;
+    *height = pal && id >= RENDER_PS1 && id < RENDER_COUNT ? profile->palHeight : profile->height;
 }
 
 RenderStyle RenderPrepare(const RenderFrame *f, const RenderMaterial *m)
@@ -105,13 +119,11 @@ void RenderDefaults(RenderSettings *s, RendererId id)
 {
     const RenderSettings defaults = RENDER_DEFAULTS;
 
-    switch (id) {
-    case RENDER_PS1: s->ps1 = defaults.ps1; break;
-    case RENDER_MODERN: s->modern = defaults.modern; break;
-    case RENDER_SATURN: s->saturn = defaults.saturn; break;
-    case RENDER_PC: s->pc = defaults.pc; break;
-    case RENDER_N64: s->n64 = defaults.n64; break;
-    default: *s = defaults; break;
+    if (id >= RENDER_PS1 && id < RENDER_COUNT) {
+        const Profile *profile = ProfileFor(id);
+        memcpy((char *)s + profile->offset, (const char *)&defaults + profile->offset, profile->size);
+    } else {
+        *s = defaults;
     }
 }
 
@@ -121,10 +133,10 @@ int RenderCommit(void)
     int changed;
 
     next.settings = portSettings.render;
-    next.n64Track = PortOriginalTrackIs64();
+    next.settings.modern.bloom = RenderModernBloom(&next.settings);
     next.id = next.settings.selection;
     if (next.id == RENDER_AUTO) {
-        if (next.n64Track) {
+        if (PortOriginalTrackIs64()) {
             next.id = next.settings.n64Selection;
         } else if (PortOriginalTrack() >= 0) {
             next.id = next.settings.ps1Selection;
@@ -139,24 +151,8 @@ int RenderCommit(void)
     changed = !valid || current.id != next.id;
     if (!changed) {
         /* Preferences for an inactive renderer must not disturb the displayed frame,
-           interpolation or the frame recorder. Selection aliases are not policy. */
-        switch (next.id) {
-        case RENDER_MODERN:
-            changed = memcmp(&current.settings.modern, &next.settings.modern, sizeof(next.settings.modern)) != 0;
-            break;
-        case RENDER_SATURN:
-            changed = memcmp(&current.settings.saturn, &next.settings.saturn, sizeof(next.settings.saturn)) != 0;
-            break;
-        case RENDER_PC:
-            changed = memcmp(&current.settings.pc, &next.settings.pc, sizeof(next.settings.pc)) != 0;
-            break;
-        case RENDER_N64:
-            changed = memcmp(&current.settings.n64, &next.settings.n64, sizeof(next.settings.n64)) != 0;
-            break;
-        default:
-            changed = memcmp(&current.settings.ps1, &next.settings.ps1, sizeof(next.settings.ps1)) != 0;
-            break;
-        }
+           interpolation or the frame recorder. */
+        changed = memcmp(RenderProfile(&current), RenderProfile(&next), ProfileFor(next.id)->size) != 0;
     }
     current = next;
     valid = 1;
@@ -186,7 +182,15 @@ RenderGeometry PortRenderGeometry(void)
     return RenderGeometryFor(RenderCurrent());
 }
 
-static const char *const names[] = {"auto", "ps1", "pc", "n64", "saturn", "modern"};
+static const struct {
+    const char *key;
+    size_t offset;
+} platforms[] = {
+    {"ps1_renderer", offsetof(RenderSettings, ps1Selection)},
+    {"pc_renderer", offsetof(RenderSettings, pcSelection)},
+    {"n64_renderer", offsetof(RenderSettings, n64Selection)},
+    {"saturn_renderer", offsetof(RenderSettings, saturnSelection)},
+};
 static const struct {
     const char *key;
     size_t offset;
@@ -211,7 +215,6 @@ static const struct {
 #undef OPTION
 };
 
-static const char *const scaleKeys[] = {"", "ps1_render_scale", "pc_render_scale", "n64_render_scale", "saturn_render_scale", "modern_render_scale"};
 static const char *const tonemapperKeys[] = {
     [MODERN_TONEMAP_ORIGINAL] = "original",
     [MODERN_TONEMAP_SOFT_SHADOWS] = "pbr_neutral_soft_shadows"
@@ -220,7 +223,7 @@ static const char *const tonemapperKeys[] = {
 int RenderSet(RenderSettings *s, const char *key, const char *value)
 {
     for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
-        if (!strcmp(key, scaleKeys[id])) {
+        if (!strcmp(key, profiles[id].scaleKey)) {
             char *end;
             long scale = strtol(value, &end, 10);
             if (end != value && !*end && scale >= 0 && scale <= 16)
@@ -229,10 +232,6 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
         }
     }
     if (!strcmp(key, "modern_tonemapper")) {
-        if (!strcmp(value, "pbr_neutral")) {
-            s->modern.tonemapper = MODERN_TONEMAP_SOFT_SHADOWS;
-            return 1;
-        }
         for (size_t i = 0; i < sizeof(tonemapperKeys) / sizeof(tonemapperKeys[0]); i++) {
             if (!strcmp(value, tonemapperKeys[i])) {
                 s->modern.tonemapper = (int)i;
@@ -255,29 +254,13 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
             s->pc.drawDistance = (int)level;
         return 1;
     }
-    RendererId *platform = !strcmp(key, "ps1_renderer") ? &s->ps1Selection :
-        !strcmp(key, "pc_renderer") ? &s->pcSelection :
-        !strcmp(key, "n64_renderer") ? &s->n64Selection :
-        !strcmp(key, "saturn_renderer") ? &s->saturnSelection : NULL;
-    if (platform) {
-        for (int i = RENDER_PS1; i < RENDER_COUNT; i++) {
-            if (!strcmp(value, names[i])) *platform = (RendererId)i;
+    for (size_t i = 0; i < sizeof(platforms) / sizeof(platforms[0]); i++) {
+        if (!strcmp(key, platforms[i].key)) {
+            RendererId id = RenderIdFromName(value);
+            if (id != RENDER_AUTO)
+                *(RendererId *)((char *)s + platforms[i].offset) = id;
+            return 1;
         }
-        return 1;
-    }
-    if (!strcmp(key, "renderer") || !strcmp(key, "automatic_renderer")) {
-        for (int i = 0; i < (int)(sizeof(names) / sizeof(names[0])); i++) {
-            if (!strcmp(value, names[i])) {
-                if (!strcmp(key, "renderer")) {
-                    /* The former forced N64 option now applies only to Wipeout 64 tracks. */
-                    s->selection = i == RENDER_N64 ? RENDER_AUTO : (RendererId)i;
-                } else if (i == RENDER_PS1 || i == RENDER_PC || i == RENDER_SATURN) {
-                    s->ps1Selection = (RendererId)i;
-                }
-                return 1;
-            }
-        }
-        return 1; /* unknown value leaves a safe selection intact */
     }
     for (size_t i = 0; i < sizeof(options) / sizeof(options[0]); i++) {
         if (!strcmp(key, options[i].key)) {
@@ -293,8 +276,8 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
 void RenderSave(FILE *file, const RenderSettings *s)
 {
     for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
-        RenderFrame frame = {.settings = *s, .id = (RendererId)id};
-        fprintf(file, "%s = %d\n", scaleKeys[id], RenderScale(&frame));
+        const int *scale = (const int *)((const char *)s + profiles[id].scaleOffset);
+        fprintf(file, "%s = %d\n", profiles[id].scaleKey, *scale);
     }
     fprintf(file, "pc_draw_distance = %d\n", s->pc.drawDistance);
     fprintf(file, "modern_brightness = %d\n", s->modern.brightness);
@@ -302,8 +285,10 @@ void RenderSave(FILE *file, const RenderSettings *s)
     if (tonemapper >= sizeof(tonemapperKeys) / sizeof(tonemapperKeys[0]))
         tonemapper = MODERN_TONEMAP_SOFT_SHADOWS;
     fprintf(file, "modern_tonemapper = %s\n", tonemapperKeys[tonemapper]);
-    fprintf(file, "ps1_renderer = %s\npc_renderer = %s\nn64_renderer = %s\nsaturn_renderer = %s\n",
-            names[s->ps1Selection], names[s->pcSelection], names[s->n64Selection], names[s->saturnSelection]);
+    for (size_t i = 0; i < sizeof(platforms) / sizeof(platforms[0]); i++) {
+        RendererId id = *(const RendererId *)((const char *)s + platforms[i].offset);
+        fprintf(file, "%s = %s\n", platforms[i].key, ProfileFor(id)->key);
+    }
     for (size_t i = 0; i < sizeof(options) / sizeof(options[0]); i++) {
         fprintf(file, "%s = %d\n", options[i].key, *(const int *)((const char *)s + options[i].offset));
     }

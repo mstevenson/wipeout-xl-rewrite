@@ -21,7 +21,7 @@ for mode, frame in enumerate(frames):
     assert len(fc.hits(frame, 0, 0)) == (1 if mode < 2 else 0)
 
 # Version 5 operations take precedence over sidecar/current policy.
-(folder / 'renderer.ini').write_text('# Active renderer: PC\nrenderer = pc\n')
+(folder / 'renderer.ini').write_text('# Active renderer: PC\n')
 assert fc.load(folder)[0]['prims'][0].shade == frames[0]['prims'][0].shade
 
 # Downgrade a fixture to the historical v3 layout (no shading word).
@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory() as old:
     assert math.isclose(result['u'], 200/7)
     assert not fc.hits(legacy[0], 0, 0)
     # The interim renderer-split v3 captures already have a policy sidecar.
-    (old / 'renderer.ini').write_text('# Active renderer: PlayStation\nrenderer = auto\nps1_affine_textures = 1\n')
+    (old / 'renderer.ini').write_text('# Active renderer: PlayStation\nps1_affine_textures = 1\n')
     legacy = fc.load(old)
     p = legacy[0]['prims'][0]
     result = fc.shade(legacy[0], p, p.v[:3], [1/3]*3)

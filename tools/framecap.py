@@ -54,9 +54,8 @@ def legacy_policy(folder):
 def legacy_shade(policy):
     if policy is None:
         return 0  # historical renderer used perspective UVs and colours
-    ps1 = policy.get('active') == 'PlayStation' or policy.get('renderer') == 'ps1'
     flags = SHADE_AFFINE_COLOUR
-    if ps1:
+    if policy.get('active') == 'PlayStation':
         if policy.get('ps1_affine_textures', '1') != '0':
             flags |= SHADE_AFFINE_UV
         if policy.get('ps1_quantize_vertices', '1') != '0':

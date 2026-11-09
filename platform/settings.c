@@ -109,10 +109,8 @@ void PortSettingsLoad(void)
     char *base = SDL_GetPrefPath("Psygnosis", "WipeoutXL");
     char *text, *line, *next;
     const char *value;
-    RenderSettings platformRender = RENDER_DEFAULTS;
-    int legacyRendering = -1, legacyPc = -1, legacyDepth = -1, havePcDepth = 0, haveAuto = 0;
-    int havePs1Renderer = 0, haveN64Renderer = 0;
-    int legacyScale = -1, haveScale[RENDER_SATURN + 1] = {0};
+    int legacyDepth = -1, havePcDepth = 0;
+    int legacyScale = -1, haveScale[RENDER_COUNT] = {0};
     RenderDefaults(&portSettings.render, RENDER_AUTO);
     RenderInvalidate();
 
@@ -149,40 +147,18 @@ void PortSettingsLoad(void)
             }
             if (!strcmp(line, "render_scale")) {
                 legacyScale = SDL_clamp(SDL_atoi(value), 0, 16);
-            } else if (!strcmp(line, "pc_rendering")) {
-                legacyPc = SDL_atoi(value) != 0;
             } else if (!strcmp(line, "depth_buffer")) {
                 legacyDepth = SDL_atoi(value) != 0;
-            } else if (!strcmp(line, "smooth_textures")) {
-                legacyRendering = SDL_atoi(value) != 0;
             } else {
-                const char *scaleKeys[] = {"", "ps1_render_scale", "pc_render_scale", "n64_render_scale", "saturn_render_scale"};
-                for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) haveScale[id] |= !strcmp(line, scaleKeys[id]);
+                for (int id = RENDER_PS1; id <= RENDER_SATURN; id++)
+                    haveScale[id] |= !strcmp(line, RenderScaleKey((RendererId)id));
                 havePcDepth |= !strcmp(line, "pc_depth");
-                haveAuto |= !strcmp(line, "automatic_renderer");
-                havePs1Renderer |= !strcmp(line, "ps1_renderer");
-                haveN64Renderer |= !strcmp(line, "n64_renderer");
-                if (!strcmp(line, "ps1_renderer") || !strcmp(line, "n64_renderer"))
-                    RenderSet(&platformRender, line, value);
                 Set(line, value);
             }
         }
         SDL_free(text);
     }
-    if (!haveAuto && !havePs1Renderer && (legacyPc >= 0 || legacyRendering >= 0))
-        portSettings.render.ps1Selection = (legacyPc >= 0 ? legacyPc : legacyRendering) ? RENDER_PC : RENDER_PS1;
-    if (legacyDepth >= 0) {
-        if (!havePcDepth) portSettings.render.pc.depth = legacyDepth;
-    }
-    /* The former global preference belongs to PlayStation content. Newly independent
-       PC and Saturn choices start with their matching profiles. New keys win in any order. */
-    if (portSettings.render.selection != RENDER_AUTO) {
-        if (!havePs1Renderer) portSettings.render.ps1Selection = portSettings.render.selection;
-        if (!haveN64Renderer) portSettings.render.n64Selection = portSettings.render.selection;
-    }
-    if (havePs1Renderer) portSettings.render.ps1Selection = platformRender.ps1Selection;
-    if (haveN64Renderer) portSettings.render.n64Selection = platformRender.n64Selection;
-    portSettings.render.selection = RENDER_AUTO;
+    if (legacyDepth >= 0 && !havePcDepth) portSettings.render.pc.depth = legacyDepth;
     /* The former default Auto setting gives way to native defaults. Retain explicit
        positive scales where no profile preference exists (PC's base is now 2x). */
     if (legacyScale > 0) {
@@ -209,14 +185,8 @@ void PortSettingsLoad(void)
         for (int id = RENDER_PS1; id < RENDER_COUNT; id++)
             *RenderScaleSetting(&portSettings.render, (RendererId)id) = SDL_clamp(SDL_atoi(value), 0, 16);
     }
-    /* The old texture-only option migrates to the complete rendering mode. */
-    value = SDL_getenv("WIPEOUT_PC_RENDERING");
-    if (!value) value = SDL_getenv("WIPEOUT_SMOOTH_TEXTURES");
-    if (value) {
-        portSettings.render.ps1Selection = SDL_atoi(value) ? RENDER_PC : RENDER_PS1;
-    }
-    if ((value = SDL_getenv("WIPEOUT_RENDERER"))) RenderSet(&portSettings.render, "renderer", value);
-    if ((value = SDL_getenv("WIPEOUT_MODERN_BLOOM"))) portSettings.render.modern.bloom = SDL_atoi(value) != 0;
+    if ((value = SDL_getenv("WIPEOUT_RENDERER"))) portSettings.render.selection = RenderIdFromName(value);
+    if ((value = SDL_getenv("WIPEOUT_MODERN_BLOOM"))) portSettings.render.modernBloomOverride = SDL_atoi(value) ? 1 : -1;
     if ((value = SDL_getenv("WIPEOUT_HD_PACK"))) {
         /* a pack's .zip or folder, drawn ("" not) */
         SDL_strlcpy(portSettings.hdPackPath, value, sizeof(portSettings.hdPackPath));

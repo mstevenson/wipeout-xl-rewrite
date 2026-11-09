@@ -12,10 +12,9 @@
     "precision highp usampler2D;\n" \
     "#endif\n"
 
+#define RENDER_AFFINE_TEXTURES
+#define RENDER_RGB5_VERTEX_COLOUR
 #define RENDER_POSITION "    vec2 pixel = (modeIn.y & 128u) != 0u ? floor(position.xy * nativeGrid) / nativeGrid : position.xy;\n    if (pointSize > 0.0) pixel += vec2(0.5) / nativeGrid;\n    gl_PointSize = max(pointSize, 1.0);\n"
-#define RENDER_TEXCOORD "    vTexel = (modeIn.y & 32u) != 0u ? vec3(texel * w, w) : vec3(texel, 1.0);\n"
-#define RENDER_VERTEX_COLOUR "    return (mode.y & 4) != 0 ? floor(c * 255.0 + 0.0001) / 255.0 : c;\n"
-#define RENDER_TINT "vec3 TextureTint() { return VertexColour() * ((mode.y & 64) != 0 && ps1Light == 0 ? 1.0 : 255.0 / 128.0); }\n"
 /* VDP2 places RGB555 in the high five bits of each 8-bit channel. */
 #define RENDER_OUTPUT_COLOUR \
     "vec3 OutputColour(vec3 col) {\n" \

@@ -3,8 +3,7 @@
 static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
 {
     const ModernRenderSettings *settings = profile;
-    RenderStyle style = {SHADE_AFFINE_COLOUR | (m->raw ? SHADE_RAW : 0) |
-                         (m->n64 ? SHADE_N64 : 0), 0};
+    RenderStyle style = {.shade = RenderBaseShade(m)};
     if (m->textured && !m->ui) {
         if (!m->raw) style.shade |= SHADE_WORLD_TINT;
         if (settings->bilinear) {
@@ -33,4 +32,4 @@ static RenderResources Resources(const void *profile)
     return (RenderResources){.originalTextures = 1, .hdr = settings->bloom};
 }
 
-const Renderer modernRenderer = {RENDER_MODERN, "Modern", Prepare, Depth, Geometry, Resources};
+const Renderer modernRenderer = {"Modern", Prepare, Depth, Geometry, Resources};
