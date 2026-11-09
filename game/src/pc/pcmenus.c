@@ -187,7 +187,8 @@ static void DrawMenuModel(int x, int y, int z, short dir, short scale, Object *o
     for (i = 0; i < 3; i++) {
         obj->skeleton->relative.m[1][i] = (short)(obj->skeleton->relative.m[1][i] * 3 / 4);
     }
-    if (render->id == RENDER_PC && render->settings.pc.correctMenuAspect) {
+    if (render->id == RENDER_MODERN ||
+        (render->id == RENDER_PC && render->settings.pc.correctMenuAspect)) {
         /* Port: match the displayed Y scale, including PAL's extra lines, while keeping the model's anchor. */
         for (i = 0; i < 3; i++) {
             obj->skeleton->relative.m[0][i] = (short)(obj->skeleton->relative.m[0][i] * (240 * 3 / 4) / SCREEN_HEIGHT);
