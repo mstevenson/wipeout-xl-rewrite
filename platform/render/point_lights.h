@@ -5,6 +5,7 @@
 
 /* 30 projectiles, 32 explosions and two lights for each of 15 ships. */
 enum { GPU_POINT_LIGHTS = 16, GPU_LIGHT_SOURCES = 96 };
+enum { GPU_SHIELD_LIGHT_BASE = 4096 }; /* one source ID per ship, in ship slot order */
 typedef struct GpuPointLight {
     float position[3], radius;
     float colour[3], intensity;

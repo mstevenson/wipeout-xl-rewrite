@@ -792,7 +792,8 @@ static int Blended(const GpuDrawState *s)
 static int SameState(const GpuDrawState *a, const GpuDrawState *b)
 {
     /* (the console's subtraction is a blend of its own; the opaque are drawn without blending, which is cheaper) */
-    return (a->semi == 2) == (b->semi == 2) && Blended(a) == Blended(b) && a->pointLights == b->pointLights;
+    return (a->semi == 2) == (b->semi == 2) && Blended(a) == Blended(b) && a->pointLights == b->pointLights &&
+           !memcmp(a->shieldGlow, b->shieldGlow, sizeof(a->shieldGlow));
 }
 
 /* The premultiplied blend every fragment says how much of what is behind stays in (the shader's Out), or the
@@ -872,7 +873,7 @@ static void Flush(void)
     glBindTexture(GL_TEXTURE_2D, portPagesTexture);
     glUniform1i(scene->uniformPortPages, 3);
     if (pipeline->bind) pipeline->bind(RenderProfile(render), writeHdr);
-    if (pipeline->lights) pipeline->lights(RenderProfile(render), batchState.pointLights);
+    if (pipeline->lights) pipeline->lights(RenderProfile(render), batchState.pointLights, batchState.shieldGlow);
     glActiveTexture(GL_TEXTURE0);
     /* The depth buffer: what has a depth is drawn where nothing nearer is, give or take DEPTH_SLACK (the game's own
        order decides among things at about the same depth: a shadow or a pad on the track). The depth of the batch's

@@ -102,7 +102,7 @@ void PortCaptureWeaponLights(void)
             float green = shieldFlash[i].green / 255.0f;
             /* Hits raise red alone or both channels. The shell's blue varies per vertex. */
             float idle = 1.0f - red;
-            sources[count++] = Light(4096u + (unsigned)i, 1,
+            sources[count++] = Light(GPU_SHIELD_LIGHT_BASE + (unsigned)i, 1,
                                       ship->ppivot.vx, ship->ppivot.vy, ship->ppivot.vz,
                                       1600, idle * 0.08f + red, idle * 0.32f + green,
                                       idle + red * 0.12f, 1.8f);

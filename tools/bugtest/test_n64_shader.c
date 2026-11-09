@@ -2458,6 +2458,7 @@ static void ModernHdr(void)
 }
 
 /* A surface with known view coordinates: real material, batch and presentation paths. */
+enum { DARK_HULL = 6 };
 static void LitSurface(GpuDrawState draw, int kind)
 {
     GpuVertex v[4] = {0};
@@ -2465,6 +2466,10 @@ static void LitSurface(GpuDrawState draw, int kind)
         v[i] = (GpuVertex){.x = (i & 1) * 64, .y = (i >> 1) * 32, .w = kind == 1 ? 0 : 1000,
             .r = 64, .g = 64, .b = 64, .a = 255, .u = .5f, .v = .5f,
             .noDepth = kind == 2, .view = {((i & 1) * 64 - 32) * 20, ((i >> 1) * 32 - 16) * 20, 1000}};
+        if (kind == DARK_HULL) {
+            v[i].r = v[i].g = v[i].b = 0;
+            v[i].u = (i & 1) * 20.0f;
+        }
     }
     GpuTriangles(&draw, v, 3); GpuTriangles(&draw, v + 1, 3);
 }
@@ -2484,6 +2489,10 @@ static void ModernWeaponLights(void)
     GpuSetDrawArea(0, 0, 320, 240, 0, 0);
     psxVram[0][0] = 0x2108; /* grey material, kept dim by its original tint */
     GpuVramChanged(0, 0, 1, 1);
+    /* Light and dark paint, repeated light paint for the rim, black, and yellow livery. */
+    const uint16_t hull[] = {0x7fff, 0x2108, 0x7fff, 0x8000, 0x03ff};
+    for (int i = 0; i < 20; i++) psxVram[1][i] = hull[i / 4];
+    GpuVramChanged(0, 1, 20, 1);
     GpuLightSet lights = {.count = 1, .lights = {{{0, 0, 800}, 700, {1, .03f, .01f}, 3}}};
     GpuDrawState draw = {.textured = 1, .depth = 2, .semi = -1, .pointLights = &lights};
     uint8_t reference[64 * 32 * 4];
@@ -2516,6 +2525,32 @@ static void ModernWeaponLights(void)
             pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
             assert(abs(pixels[centre] - pixels[centre + 2]) <= 1);
         }
+        /* In complete darkness, the shield alone reveals the paint without filling black texels. */
+        GpuLightSet empty = {0};
+        GpuDrawState shielded = draw;
+        shielded.pointLights = &empty;
+        shielded.pageY = 1;
+        shielded.shieldGlow[1] = .32f;
+        shielded.shieldGlow[2] = shielded.shieldGlow[3] = 1.0f;
+        const int darkPaint = (16 * 64 + 19) * 4, rim = (16 * 64 + 6) * 4;
+        const int black = (16 * 64 + 44) * 4, yellow = (16 * 64 + 57) * 4;
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(shielded, DARK_HULL);
+        pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(pixels[centre + 2] > pixels[centre] + 25);
+        assert(pixels[rim + 2] > pixels[centre + 2]);
+        assert(pixels[centre + 2] > pixels[darkPaint + 2] + 60 && pixels[darkPaint + 2] > 10);
+        assert(pixels[black] == 0 && pixels[black + 1] == 0 && pixels[black + 2] == 0);
+        assert(pixels[yellow] > 60 && pixels[yellow + 1] > 60 && pixels[yellow + 2] == 0);
+        shielded.shieldGlow[0] = 1.0f;
+        shielded.shieldGlow[1] = shielded.shieldGlow[2] = 0.0f;
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(shielded, DARK_HULL);
+        pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(pixels[centre] > pixels[centre + 2] + 25);
+        portSettings.render.modern.weaponLights = 0; RenderCommit();
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(shielded, DARK_HULL);
+        pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(pixels[centre] == 0 && pixels[centre + 1] == 0 && pixels[centre + 2] == 0);
+        portSettings.render.modern.weaponLights = 1; RenderCommit();
     }
     /* Bloom and lights have independent switches; overbright light enters HDR,
        and raw VRAM reads remain bounded SDR. */
@@ -2545,7 +2580,7 @@ static void ModernWeaponLights(void)
     assert(glGetError() == GL_NO_ERROR);
     GpuRendererShutdown();
     glDeleteFramebuffers(1, &framebuffer); glDeleteTextures(1, &colour); glDeleteRenderbuffers(1, &depthBuffer);
-    puts("Modern weapon lights: coloured diffuse surfaces, radius/normals, filtered/nearest, HUD/sky/shadow exclusion, bloom independence, HDR/SDR and profile isolation: OK");
+    puts("Modern dynamic lights: diffuse falloff, shield-lit hull textures in darkness and hit tint, filtered/nearest, HUD/sky/shadow exclusion, bloom independence, HDR/SDR and profile isolation: OK");
 }
 
 int main(void)

@@ -16,21 +16,29 @@
     "}\n"
 /* Flat geometric normals keep the original faceted models. Evaluate derivatives
    before texture coverage branches; add light in linear space, then return to
-   the encoded colour used by the console's blend operations and HDR transport. */
+   the encoded colour used by the console's blend operations and HDR transport.
+   Light from the shield wraps around the hull, with more light at grazing angles. */
 #define RENDER_LIGHTING \
     LINEAR_COLOUR \
     "in vec3 vViewPosition;\n" \
     "flat in float receivesLight;\n" \
     "uniform int lightCount;\n" \
     "uniform vec4 lightPosition[16], lightColour[16];\n" \
+    "uniform vec4 shieldGlow;\n" \
     "vec3 illumination;\n" \
     "void SurfaceLighting() {\n" \
     "    vec3 normal = cross(dFdx(vViewPosition), dFdy(vViewPosition));\n" \
     "    float length2 = dot(normal, normal);\n" \
     "    illumination = vec3(0.0);\n" \
-    "    if (receivesLight < 0.5 || lightCount == 0 || length2 < 0.00000001 || mode.z == 3) return;\n" \
+    "    if (receivesLight < 0.5 || (lightCount == 0 && shieldGlow.a == 0.0) || length2 < 0.00000001 || mode.z == 3) return;\n" \
     "    normal *= inversesqrt(length2);\n" \
     "    if (dot(normal, vViewPosition) > 0.0) normal = -normal;\n" \
+    "    if (shieldGlow.a > 0.0) {\n" \
+    "        vec3 viewDir = -vViewPosition * inversesqrt(max(dot(vViewPosition, vViewPosition), 1.0));\n" \
+    "        float rim = 1.0 - clamp(dot(normal, viewDir), 0.0, 1.0);\n" \
+    "        vec3 tint = mix(vec3(1.0), shieldGlow.rgb, 0.72);\n" \
+    "        illumination += tint * shieldGlow.a * (0.35 + 0.95 * rim * rim);\n" \
+    "    }\n" \
     "    for (int i = 0; i < 16; i++) {\n" \
     "        if (i >= lightCount) break;\n" \
     "        vec3 delta = lightPosition[i].xyz - vViewPosition;\n" \
@@ -77,13 +85,14 @@ static const char *modernFragmentSource =
 ;
 static RenderProgram modernProgram;
 static GLint uniformWorldBrightness, uniformHdrActive;
-static GLint uniformLightCount, uniformLightPosition, uniformLightColour;
+static GLint uniformLightCount, uniformLightPosition, uniformLightColour, uniformShieldGlow;
 
-static void Lights(const void *profile, const GpuLightSet *lights)
+static void Lights(const void *profile, const GpuLightSet *lights, const float shieldGlow[4])
 {
     const ModernRenderSettings *settings = profile;
     int count = settings->weaponLights && lights ? SDL_clamp(lights->count, 0, GPU_POINT_LIGHTS) : 0;
     float position[GPU_POINT_LIGHTS][4], colour[GPU_POINT_LIGHTS][4];
+    static const float noGlow[4];
     for (int i = 0; i < count; i++) {
         const GpuPointLight *light = &lights->lights[i];
         for (int k = 0; k < 3; k++) {
@@ -94,6 +103,7 @@ static void Lights(const void *profile, const GpuLightSet *lights)
         colour[i][3] = light->intensity;
     }
     glUniform1i(uniformLightCount, count);
+    glUniform4fv(uniformShieldGlow, 1, settings->weaponLights ? shieldGlow : noGlow);
     if (count) {
         glUniform4fv(uniformLightPosition, count, &position[0][0]);
         glUniform4fv(uniformLightColour, count, &colour[0][0]);
@@ -117,6 +127,7 @@ static RenderProgram *ModernScene(void)
         uniformLightCount = glGetUniformLocation(program, "lightCount");
         uniformLightPosition = glGetUniformLocation(program, "lightPosition");
         uniformLightColour = glGetUniformLocation(program, "lightColour");
+        uniformShieldGlow = glGetUniformLocation(program, "shieldGlow");
         glUniform1f(uniformWorldBrightness, 1.0f);
     }
     return &modernProgram;

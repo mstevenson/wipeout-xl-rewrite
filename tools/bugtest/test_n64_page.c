@@ -262,7 +262,10 @@ static void ShieldOrdering(void)
     PortShieldPackets(3, shield, shield + 2);
     PortShipPackets(3, hull, hull + 2, NULL);
     PortShipPackets(2, &other, &other + 1, NULL);
+    GpuLightSource flash = {.id = GPU_SHIELD_LIGHT_BASE + 3, .light.colour = {1.0f, .7f, .1f}};
+    PsxCaptureLights(&flash, 1);
     WalkTable(&ot[3], 1);
+    PsxCaptureLights(NULL, 0);
     assert(tableTrack[walkTrack].shields[0].lastHull == &hull[0].tag);
     assert(!HoldShield(&other.tag));
     state.texpage = 0x220;
@@ -271,6 +274,12 @@ static void ShieldOrdering(void)
     assert(NodeAfter(&shield[0].tag) == &ot[2]);
     WalkTable(&ot[3], 0);
     assert(heldShields[0].count == 0 && HoldShield(&shield[0].tag));
+    float glow[4] = {0};
+    ShieldHullGlow(&other.tag, glow);
+    ShieldHullGlow(&shield[0].tag, glow);
+    assert(!glow[3]);
+    ShieldHullGlow(&hull[1].tag, glow);
+    assert(glow[3] == 1.0f && glow[0] == 1.0f && glow[1] == .7f && glow[2] == .1f);
     WalkTable(NULL, 0);
     assert(!HoldShield(&shield[0].tag));
 
@@ -294,6 +303,8 @@ static void ShieldOrdering(void)
         assert(!HoldShield(&shield[0].tag));
         assert(HoldShield(&nextShield.tag));
         assert(SceneSprite(&nextShield.tag) && SceneSprite(&nextHull.tag));
+        ShieldHullGlow(&nextHull.tag, glow);
+        assert(!glow[3]); /* The shell packet alone does not mark an active shield light. */
     }
     /* Expiration must also be visible on the very first interpolated picture. */
     ClearOTagR(ot, 4);

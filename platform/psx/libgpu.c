@@ -1135,6 +1135,7 @@ typedef struct ShieldPackets {
     int ship;
     PacketRange shell, hull;
     const u_long *lastHull;
+    float glow[4];
 } ShieldPackets;
 
 typedef struct ShipLightRange {
@@ -1237,9 +1238,37 @@ static void BlendShipLight(const uint32_t *packet, GpuVertex *vertices, int coun
 static void OrderShields(TrackPackets *table)
 {
     if (!table->shieldCount) return;
+    /* Keep the active shield tint with its hull for repeated presentation.
+       A hull can glow even if its shield did not make the point light budget. */
+    if (lightFrame.frame == GteFrameRecorded()) {
+        for (int i = 0; i < table->shieldCount; i++) {
+            ShieldPackets *shield = &table->shields[i];
+            unsigned id = GPU_SHIELD_LIGHT_BASE + (unsigned)shield->ship;
+            for (int j = 0; j < lightFrame.count; j++) {
+                const GpuLightSource *source = &lightFrame.sources[j];
+                if (source->id != id) continue;
+                memcpy(shield->glow, source->light.colour, sizeof(source->light.colour));
+                shield->glow[3] = 1.0f;
+                break;
+            }
+        }
+    }
     for (u_long *node = PacketFrom(table->table); node; node = PacketFrom(NodeAfter(node))) {
         for (int i = 0; i < table->shieldCount; i++) {
             if (PacketInRange(node, table->shields[i].hull)) table->shields[i].lastHull = node;
+        }
+    }
+}
+
+static void ShieldHullGlow(const u_long *node, float glow[4])
+{
+    if (walkTrack < 0) return;
+    const TrackPackets *table = &tableTrack[walkTrack];
+    for (int i = 0; i < table->shieldCount; i++) {
+        const ShieldPackets *shield = &table->shields[i];
+        if (PacketInRange(node, shield->hull)) {
+            memcpy(glow, shield->glow, sizeof(shield->glow));
+            return;
         }
     }
 }
@@ -1821,6 +1850,7 @@ static void Record(int kind, uint32_t code, int count, const int32_t *ix, const 
     if (draw) {
         p->draw = *draw;
         p->draw.pointLights = NULL; /* Live lighting is captured in the rendered picture. */
+        memset(p->draw.shieldGlow, 0, sizeof(p->draw.shieldGlow));
         p->draw.saturn = NULL; /* Frame inspection uses the compatibility texture and UVs. */
     }
     p->address = (uint64_t)(uintptr_t)(w - 1);
@@ -1913,6 +1943,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
         }
     }
     draw.pointLights = !ShadowPacket(w) ? &drawnLights : NULL;
+    if (draw.pointLights && draw.semi < 0 && !draw.raw) ShieldHullGlow(w - 1, draw.shieldGlow);
     RenderPacketPolicy policy = RenderPacketPolicyFor(RenderCurrent());
     if (policy.smoothTrackLighting && quad && textured && !raw && !gouraud &&
         trackLightFrame && trackLightFrame == GteFrameRecorded()) {

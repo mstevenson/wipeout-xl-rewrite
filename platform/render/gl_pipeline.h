@@ -59,7 +59,7 @@ typedef struct RenderPipeline {
     int (*submitNative)(const void *profile, const RenderNativeTarget *, const GpuDrawState *,
                         const GpuVertex *, int count);
     void (*flushNative)(const RenderNativeTarget *);
-    void (*lights)(const void *profile, const GpuLightSet *);
+    void (*lights)(const void *profile, const GpuLightSet *, const float shieldGlow[4]);
 } RenderPipeline;
 extern const RenderPipeline ps1Pipeline, pcPipeline, n64Pipeline, saturnPipeline, modernPipeline;
 const RenderPipeline *RenderGlPipeline(RendererId id);

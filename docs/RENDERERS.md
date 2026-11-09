@@ -132,7 +132,9 @@ textures. HUD and menu art use their own brightness.
 **Dynamic lights** (`modern_weapon_lights`, on by default) adds coloured,
 unshadowed point lights to rockets, missiles, plasma shots and electrobolts,
 plus fading explosion flashes. Each live ship emits subtle blue light from its
-engine, with a stronger blue light centred on the ship while its shield is active.
+engine. An active shield lights nearby surfaces and casts soft light onto its
+ship's hull. The light brings out the hull texture in shadow and brightens at
+grazing angles. Both effects follow the shield's hit flashes.
 Holding an unused shield does not emit shield light. Up to sixteen lights per view illuminate
 opaque track, scenery and ships, preserving their original shading. HUD, sky,
 shadow decals and translucent effects do not receive this lighting. Lights

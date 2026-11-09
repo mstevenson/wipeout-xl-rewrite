@@ -128,3 +128,18 @@ new textures, normal maps, shadow maps or simulation changes.
 No performance guarantee or new console lockstep result is claimed. Split-screen
 state separation is covered by the second-game build and existing CPU suite;
 this change has not been visually exercised in a live two-player race.
+
+## Shield hull glow
+
+Each ordering table keeps the active shield tint alongside its owning hull
+packets. The Modern shader lights the hull's unshaded texture in linear space,
+with stronger illumination at grazing angles. The light uses the same idle and hit colors as the shield's
+point light and follows the Dynamic lights toggle independently of bloom. It
+uses the captured source tint before point light selection, so a crowded light
+list does not cause the hull to flicker.
+
+The only game source edit names the existing shield light ID base in
+`PortCaptureWeaponLights` (`game/src/portlights.c`). The value, source records,
+and simulation are unchanged. Compiler diagnostics were clean and the MIPS
+oracle matched all three functions in the file against the pre-change revision.
+The original `B0` snapshot was unavailable.
