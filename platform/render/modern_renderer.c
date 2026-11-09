@@ -4,6 +4,7 @@ static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
 {
     const ModernRenderSettings *settings = profile;
     RenderStyle style = {.shade = RenderBaseShade(m)};
+    if (settings->smoothTrackLighting && m->smoothTrackLighting) style.shade &= ~SHADE_AFFINE_COLOUR;
     if (m->textured && !m->ui) {
         if (!m->raw) style.shade |= SHADE_WORLD_TINT;
         if (settings->bilinear) {
@@ -22,8 +23,9 @@ static int Depth(const void *profile)
 
 static RenderGeometry Geometry(const void *profile)
 {
-    (void)profile;
-    return (RenderGeometry){0, 0, 0, RENDER_LIGHT_PS1, 1};
+    const ModernRenderSettings *settings = profile;
+    return (RenderGeometry){.lightFormat = RENDER_LIGHT_PS1, .worldBillboards = 1,
+                            .smoothTrackLighting = settings->smoothTrackLighting};
 }
 
 static RenderResources Resources(const void *profile)
@@ -32,4 +34,10 @@ static RenderResources Resources(const void *profile)
     return (RenderResources){.originalTextures = 1, .hdr = settings->bloom};
 }
 
-const Renderer modernRenderer = {"Modern", Prepare, Depth, Geometry, Resources};
+static RenderPacketPolicy Packets(const void *profile)
+{
+    const ModernRenderSettings *settings = profile;
+    return (RenderPacketPolicy){.smoothTrackLighting = settings->smoothTrackLighting};
+}
+
+const Renderer modernRenderer = {"Modern", Prepare, Depth, Geometry, Resources, Packets};

@@ -159,11 +159,51 @@ void GpuTagEmission(const void *start, const void *end, const MaterialEmission *
     }
 }
 
+/* Track RGB is sidecar data: original packets keep their size, colour and
+   ordering-table links. It lives as long as the precise projections, including
+   redraws of the ordering table between game frames. */
+#define TRACK_LIGHT_SLOTS (1u << 15)
+typedef struct TrackLightPacket {
+    const void *packet;
+    uint32_t frame;
+    uint32_t colours[4];
+    int tagged;
+} TrackLightPacket;
+static TrackLightPacket trackLights[TRACK_LIGHT_SLOTS];
+static uint32_t trackLightFrame;
+
+static TrackLightPacket *FindTrackLight(const void *packet, uint32_t frame, int create)
+{
+    unsigned slot = HashPointer(packet) & (TRACK_LIGHT_SLOTS - 1);
+    for (unsigned probe = 0; probe < 32; probe++) {
+        TrackLightPacket *entry = &trackLights[(slot + probe) & (TRACK_LIGHT_SLOTS - 1)];
+        if (entry->frame != frame) return create ? entry : NULL;
+        if (entry->packet == packet) return entry;
+    }
+    return NULL;
+}
+
+void PortTagTrackLight(const void *packet, const uint32_t colours[4])
+{
+    uint32_t frame = GteFrameRecorded();
+    TrackLightPacket *entry = FindTrackLight(packet, frame, 1);
+    if (entry) {
+        entry->packet = packet;
+        entry->frame = trackLightFrame = frame;
+        memcpy(entry->colours, colours, sizeof(entry->colours));
+        entry->tagged = 1;
+    }
+}
+
 void AddPrim(u_long *ot, void *primitive)
 {
     u_long *p = primitive; /* the game passes any POLY_*, LINE_*, TILE or DR_* packet (psyq.h) */
 
     SaturnNativeForget(p);
+    if (trackLightFrame && trackLightFrame == GteFrameRecorded()) {
+        TrackLightPacket *entry = FindTrackLight(p, trackLightFrame, 0);
+        if (entry) entry->tagged = 0;
+    }
     if (emissionPacketNext) {
         int slot = EmissionPacket(p);
         if (slot >= 0) emissionPackets[slot].packet = NULL;
@@ -1755,6 +1795,14 @@ static void Polygon(const uint32_t *w, uint32_t code)
         }
     }
     RenderPacketPolicy policy = RenderPacketPolicyFor(RenderCurrent());
+    if (policy.smoothTrackLighting && quad && textured && !raw && !gouraud &&
+        trackLightFrame && trackLightFrame == GteFrameRecorded()) {
+        const TrackLightPacket *entry = FindTrackLight(w - 1, trackLightFrame, 0);
+        if (entry && entry->tagged) {
+            draw.smoothTrackLighting = 1;
+            for (i = 0; i < count; i++) Colour(&v[i], entry->colours[i]);
+        }
+    }
     if (draw.semi == 2 && policy.shadowMask && ShadowPacket(w)) {
         /* Use the shadow texture as a mask over the packet's black vertex colour.
            Half blending lets the Saturn shader apply its usual mesh or alpha coverage. */

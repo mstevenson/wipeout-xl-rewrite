@@ -89,6 +89,7 @@ typedef struct GpuDrawState {
     int trackTile;     /* The packet came from the track polygon pools. */
     int screenOverlay;
     MaterialEmission emission;
+    int smoothTrackLighting;
 
 } GpuDrawState;
 
@@ -97,7 +98,8 @@ typedef struct GpuDrawState {
 static inline RenderMaterial GpuMaterialFor(const GpuDrawState *draw, const GpuVertex *vertices, int count)
 {
     RenderMaterial material = {.n64 = draw->n64, .fullColour = draw->depth == 3,
-        .textured = draw->textured, .raw = draw->raw, .dither = draw->dither, .ui = 1, .perspective = 1};
+        .textured = draw->textured, .raw = draw->raw, .dither = draw->dither, .ui = 1, .perspective = 1,
+        .smoothTrackLighting = draw->smoothTrackLighting};
     for (int i = 0; i < count; i++) {
         int projected = vertices[i].w > 0.0f;
         material.perspective &= projected;

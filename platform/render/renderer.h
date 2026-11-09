@@ -24,7 +24,7 @@ typedef struct SaturnRenderSettings {
 enum { MODERN_BRIGHTNESS_MIN = 50, MODERN_BRIGHTNESS_DEFAULT = 85, MODERN_BRIGHTNESS_MAX = 100 };
 enum { MODERN_TONEMAP_ORIGINAL, MODERN_TONEMAP_SOFT_SHADOWS };
 typedef struct ModernRenderSettings {
-    int resample, scale, brightness, bilinear, bloom, tonemapper;
+    int resample, scale, brightness, bilinear, bloom, tonemapper, smoothTrackLighting;
 } ModernRenderSettings;
 typedef struct RenderSettings {
     RendererId selection; /* runtime override; AUTO follows the loaded platform */
@@ -37,7 +37,7 @@ typedef struct RenderSettings {
     ModernRenderSettings modern;
     int modernBloomOverride; /* 0 follows the setting, -1 forces off, 1 forces on */
 } RenderSettings;
-#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0,1}, {1,1,1,1,1,1,1,0}, {1,1,1,1,1,1,1}, {1,1,1,1,0,0,0,1}, {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS}, 0 }
+#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0,1}, {1,1,1,1,1,1,1,0}, {1,1,1,1,1,1,1}, {1,1,1,1,0,0,0,1}, {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1}, 0 }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef union RenderProfileSettings {
@@ -59,6 +59,7 @@ enum { SHADE_RAW = 1, SHADE_WORLD_TINT = 2, SHADE_PS1_COLOUR = 4, SHADE_DITHER =
 /* UI is independent of perspective/depth: affine world billboards are not screen-space UI. */
 typedef struct RenderMaterial {
     int n64, fullColour, textured, raw, dither, bounds, ui, perspective;
+    int smoothTrackLighting;
 } RenderMaterial;
 typedef enum RenderFilter {
     RENDER_NEAREST, RENDER_THREE_POINT, RENDER_BILINEAR
@@ -83,7 +84,7 @@ typedef struct RenderResources {
     int originalTextures, hdr;
 } RenderResources;
 typedef struct RenderPacketPolicy {
-    int nativeQuads, nativeSky, shadowMask;
+    int nativeQuads, nativeSky, shadowMask, smoothTrackLighting;
 } RenderPacketPolicy;
 typedef struct Renderer {
     const char *name;

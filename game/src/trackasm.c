@@ -135,6 +135,7 @@ void AsmGenerateTiles(TexTemplate *tiles, short tileCount)
 {
     short tile;
 
+    PortResetTrackLighting(); /* Port: the race has loaded new track geometry. */
     for (tile = 0; tile < tileCount; tile++) {
         AsmLowResTile(tiles, tile, 0);
         AsmLowResTile(tiles, tile, 1);

@@ -12,6 +12,7 @@ typedef struct RenderGeometry {
     int lightAllVertices; /* replace every lit object's emitted corner colour */
     int lightFormat;      /* RENDER_LIGHT_* expected for shared object lighting */
     int worldBillboards;  /* upright 3D sprite quads instead of screen-space sprite arithmetic */
+    int smoothTrackLighting; /* attach interpolated colour to track packets */
 } RenderGeometry;
 RenderGeometry PortRenderGeometry(void);
 #ifdef __cplusplus

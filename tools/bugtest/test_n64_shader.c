@@ -463,6 +463,61 @@ static void ModernBrightness(void)
     puts("Modern brightness: PS1 maximum, half-strength floor, tint before clipping, and HUD/raw texture handling: OK");
 }
 
+/* The same sloped road patch is drawn at the four track grid resolutions.
+   Far vertices have twice the depth, so a screen-linear tint fails this test. */
+static void ModernTrackLighting(void)
+{
+    RenderSettings saved = portSettings.render;
+    portSettings.render.selection = RENDER_MODERN;
+    portSettings.render.modern.brightness = 100;
+    portSettings.render.modern.bilinear = 0;
+    portSettings.render.modern.bloom = 0;
+    portSettings.render.modern.smoothTrackLighting = 1;
+    RenderCommit();
+    words[0] = 0x7fff;
+    Upload();
+
+    GpuDrawState draw = {.textured = 1, .depth = 2, .semi = -1, .smoothTrackLighting = 1};
+    float reference[24][32], pixels[24][32];
+    for (int size = 1; size <= 8; size *= 2) {
+        glDisable(GL_SCISSOR_TEST); glDepthMask(GL_TRUE);
+        glClearColor(0, 0, 0, 1); glClearDepth(1);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        for (int row = 0; row < size; row++) {
+            for (int col = 0; col < size; col++) {
+                GpuVertex v[4] = {0};
+                for (int i = 0; i < 4; i++) {
+                    float u = (float)(col + (i & 1)) / size, t = (float)(row + (i >> 1)) / size;
+                    v[i].w = 100 * (1 + t);
+                    v[i].x = 3200 * u / v[i].w;
+                    v[i].y = 100 + 4800 * t / v[i].w;
+                    v[i].r = v[i].g = v[i].b = 32 + (int)(96 * t);
+                    v[i].a = 255;
+                    v[i].u = v[i].v = .5f;
+                }
+                GpuTriangles(&draw, v, 3);
+                GpuTriangles(&draw, v + 1, 3);
+            }
+        }
+        Flush();
+        glReadPixels(0, 100, 32, 24, GL_RED, GL_FLOAT, pixels);
+        for (int y = 0; y < 24; y++) {
+            float screen = (y + .5f) / 24;
+            float along = screen / (2 - screen);
+            float expected = (248.0f / 255) * (32 + 96 * along) / 128;
+            /* Every row covers at least the first sixteen pixels. */
+            for (int x = 0; x < 16; x++) assert(fabsf(pixels[y][x] - expected) < .003f);
+            for (int x = 0; x < 32; x++) {
+                if (size == 1) reference[y][x] = pixels[y][x];
+                else assert(fabsf(pixels[y][x] - reference[y][x]) < .003f);
+            }
+        }
+    }
+    portSettings.render = saved; RenderCommit();
+    assert(glGetError() == GL_NO_ERROR);
+    puts("Modern track lighting: perspective-correct tint matches across all four detail grids: OK");
+}
+
 /* Exercise a tilted 3D billboard through the production shader and depth batches. */
 static void BillboardQuad(int textured, int ui, float topDepth, float bottomDepth)
 {
@@ -688,6 +743,7 @@ static void DepthBatches(GLuint fbo, GLuint output, GLuint dummy)
     assert(glGetError() == GL_NO_ERROR);
     BillboardModulation();
     ModernBrightness();
+    ModernTrackLighting();
     ModernFiltering();
     WorldBillboardDepth();
     glDeleteRenderbuffers(1, &depth);

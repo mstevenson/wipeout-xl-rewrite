@@ -44,6 +44,8 @@ int PortScreenMargin(void) { return 0; }
 char *PortNearAlloc(int bytes) { (void)bytes; return NULL; }
 unsigned char *PortFarObjectPrimitives(Object *object) { (void)object; return NULL; }
 void PortFarMarkFace(Face *face) { (void)face; }
+void PortTagTrackLight(const void *packet, const uint32_t colours[4])
+{ (void)packet; (void)colours; }
 void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index)
 { (void)start; (void)end; (void)what; (void)name; (void)index; }
 void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index, const int position[3])

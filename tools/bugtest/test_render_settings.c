@@ -108,6 +108,7 @@ static void ModernProfile(void)
     assert(RenderCurrent()->settings.modern.brightness == 85);
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.bloom);
+    assert(RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     Load("ps1_renderer = modern\nmodern_render_scale = 3\n"
          "modern_bilinear = 0\nmodern_tonemapper = original\n");
@@ -118,6 +119,7 @@ static void ModernProfile(void)
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     assert(RenderSet(&portSettings.render, "modern_tonemapper", "unknown") && !RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bloom", "0") && RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_smooth_track_lighting", "0") && RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bilinear", "2") && !RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bilinear", "-1") && !RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bilinear", "1") && RenderCommit());
@@ -129,12 +131,14 @@ static void ModernProfile(void)
     char *saved = SDL_LoadFile(PortSettingsPath(), NULL);
     assert(saved && strstr(saved, "modern_tonemapper = pbr_neutral_soft_shadows\n"));
     assert(strstr(saved, "modern_bilinear = 0\n"));
+    assert(strstr(saved, "modern_smooth_track_lighting = 0\n"));
     SDL_free(saved);
     PortSettingsLoad();
     assert(RenderCurrent()->id == RENDER_MODERN && RenderScale(RenderCurrent()) == 3);
     assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MIN);
     assert(!RenderCurrent()->settings.modern.bilinear);
     assert(!RenderCurrent()->settings.modern.bloom);
+    assert(!RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     assert(RenderSet(&portSettings.render, "modern_tonemapper", "original") && RenderCommit());
     RenderDefaults(&portSettings.render, RENDER_MODERN);
@@ -142,6 +146,7 @@ static void ModernProfile(void)
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_DEFAULT);
     assert(RenderCurrent()->settings.modern.bloom);
+    assert(RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
 }
 
@@ -244,7 +249,7 @@ static void ResourcePolicyIsolation(void)
         {"pc_bilinear", "0"}, {"n64_three_point", "0"}, {"n64_dither", "0"},
         {"saturn_affine_textures", "0"}, {"saturn_mesh", "0"}, {"saturn_camera_aligned_sky", "1"},
         {"modern_bilinear", "0"}, {"modern_brightness", "50"}, {"modern_bloom", "0"},
-        {"modern_tonemapper", "pbr_neutral_soft_shadows"}
+        {"modern_tonemapper", "pbr_neutral_soft_shadows"}, {"modern_smooth_track_lighting", "0"}
     };
     const RenderMaterial cases[] = {
         {.textured = 1, .bounds = 1},
@@ -260,6 +265,10 @@ static void ResourcePolicyIsolation(void)
         assert(packets.nativeQuads == (id == RENDER_SATURN));
         assert(packets.nativeSky == (id == RENDER_SATURN));
         assert(packets.shadowMask == (id == RENDER_SATURN));
+        assert(packets.smoothTrackLighting == (id == RENDER_MODERN));
+        assert(RenderGeometryFor(&frame).smoothTrackLighting == (id == RENDER_MODERN));
+        RenderMaterial road = {.textured = 1, .perspective = 1, .smoothTrackLighting = 1};
+        assert(!!(RenderPrepare(&frame, &road).shade & SHADE_AFFINE_COLOUR) == (id != RENDER_MODERN));
         assert(resources.hdr == (id == RENDER_MODERN));
         assert(resources.originalTextures == (id == RENDER_MODERN));
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -284,6 +293,10 @@ static void ResourcePolicyIsolation(void)
         RenderStyle style = RenderPrepare(&modern, &cases[0]);
         assert(style.nativeBounds == bilinear);
     }
+    RenderMaterial road = {.textured = 1, .perspective = 1, .smoothTrackLighting = 1};
+    assert(RenderPrepare(&modern, &cases[0]).shade & SHADE_AFFINE_COLOUR);
+    modern.settings.modern.smoothTrackLighting = 0;
+    assert(RenderPrepare(&modern, &road).shade & SHADE_AFFINE_COLOUR);
     modern.settings.modern.bloom = 0;
     assert(!RenderResourcesFor(&modern).hdr && RenderResourcesFor(&modern).originalTextures);
     puts("All five profiles isolate resource requirements and source-bound policy from inactive settings: OK");

@@ -189,6 +189,7 @@ int PortFadeRange(int *nearDistance, int *farDistance);
 
 /* The frame recorder (platform/psx/framecap.h): the packets from start to end were built by `what` (an
    object's name, or NULL) for its item `index`. */
+void PortTagTrackLight(const void *packet, const uint32_t colours[4]);
 void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index);
 /* Tag an object's packets with its model identity, recorder name and placement. */
 void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name,

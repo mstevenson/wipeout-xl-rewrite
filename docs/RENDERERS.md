@@ -89,6 +89,12 @@ texels on projected world textures, including billboards. Uncheck it for
 nearest-neighbour sampling. HUD and 2D menus always use nearest sampling.
 The saved key `modern_bilinear` uses 1 for enabled and 0 for disabled.
 
+**Smooth track lighting** (`modern_smooth_track_lighting`, on by default)
+blends face lighting along connected track surfaces using perspective-correct
+vertex colours. Road and walls keep separate lighting, and weapon grids, boost
+pads, pit lanes and checkpoints keep their original colours. Turn it off in
+**Graphics → Modern** to restore the original per-face tint.
+
 **Brightness** (`modern_brightness`) scales the tint on world textures before
 colour clipping. The default is **85%**. **100%** uses PlayStation modulation.
 **50%** halves the tint, approximating the PC modulation on PlayStation

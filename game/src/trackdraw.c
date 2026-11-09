@@ -9,6 +9,7 @@
    are, because they decide which faces are drawn and how: a corner whose camera-relative coordinate does not
    fit in 16 bits makes the whole face disappear, and the GTE flag bits 0x80460000 (and 0x466 of the
    upper half) reject the face when a corner is off screen or too close. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "functions.h"
@@ -16,6 +17,7 @@
 #include "trackasm.h"
 #include "drawasm.h"
 #include "portfar.h"
+#include "port_platform.h"
 #include "../../platform/n64_material.h"
 #include "../../platform/psx/gte.h" /* Port: precise projections bound to the packets */
 
@@ -59,6 +61,159 @@ static void SetTrackLight(POLY_FT4 *poly, const Face *face)
     if ((poly->tpage & PORT_TPAGE_N64) && face->lightFormat == RENDER_LIGHT_PS1) {
         poly->tpage |= PORT_TPAGE_PS1_LIGHT;
     }
+}
+
+/* Port: each corner joins only through a shared edge on the same kind of
+   surface. This keeps crossings, road/wall creases and special pads separate. */
+typedef struct TrackLightEdge {
+    int low, high;
+    int lowCorner, highCorner;
+} TrackLightEdge;
+
+static int *trackLightNext;
+static int trackLightBuilt;
+
+void PortResetTrackLighting(void)
+{
+    free(trackLightNext);
+    trackLightNext = NULL;
+    trackLightBuilt = 0;
+}
+
+static int CompareLightEdges(const void *a, const void *b)
+{
+    const TrackLightEdge *left = a, *right = b;
+    if (left->low != right->low) return left->low - right->low;
+    return left->high - right->high;
+}
+
+static int LightRoot(int *parent, int corner)
+{
+    while (parent[corner] != corner) {
+        parent[corner] = parent[parent[corner]];
+        corner = parent[corner];
+    }
+    return corner;
+}
+
+static int SmoothSurface(const Face *a, const Face *b)
+{
+    if (((a->flags ^ b->flags) & TRACK_BASE) != 0) return 0;
+    double ax = a->normal.vx, ay = a->normal.vy, az = a->normal.vz;
+    double bx = b->normal.vx, by = b->normal.vy, bz = b->normal.vz;
+    double dot = ax * bx + ay * by + az * bz;
+    /* Preserve sharp creases, allowing up to 60 degrees between neighbours. */
+    return dot > 0 && 4 * dot * dot >= (ax * ax + ay * ay + az * az) * (bx * bx + by * by + bz * bz);
+}
+
+static void BuildTrackLighting(void)
+{
+    trackLightBuilt = 1;
+    if (track->faceCount <= 0) return;
+    int corners = track->faceCount * 4;
+    TrackLightEdge *edges = malloc((size_t)corners * sizeof(*edges));
+    int *parent = malloc((size_t)corners * sizeof(*parent));
+    int *next = malloc((size_t)corners * sizeof(*next));
+    if (edges && parent && next) {
+        static const int perimeter[] = {1, 0, 3, 2, 1};
+        int count = 0;
+        for (int i = 0; i < corners; i++) parent[i] = next[i] = i;
+        for (int i = 0; i < track->faceCount; i++) {
+            const Face *face = &track->faces[i];
+            if (face->flags & (WEAPON_GRID_LEFT | WEAPON_GRID_RIGHT | SPEED_UP | PIT_LANE | CHECKPOINT)) continue;
+            for (int j = 0; j < 4; j++) {
+                int a = perimeter[j], b = perimeter[j + 1];
+                int va = face->vertex[a], vb = face->vertex[b];
+                if (va < 0 || vb < 0 || va >= track->vertexCount || vb >= track->vertexCount || va == vb) continue;
+                edges[count++] = va < vb ? (TrackLightEdge){va, vb, 4 * i + a, 4 * i + b}
+                                        : (TrackLightEdge){vb, va, 4 * i + b, 4 * i + a};
+            }
+        }
+        qsort(edges, (size_t)count, sizeof(*edges), CompareLightEdges);
+        for (int first = 0, end; first < count; first = end) {
+            for (end = first + 1; end < count && !CompareLightEdges(&edges[first], &edges[end]); end++) {}
+            if (end - first != 2) continue; /* Open or ambiguous edge. */
+            const TrackLightEdge *a = &edges[first], *b = &edges[first + 1];
+            if (a->lowCorner / 4 == b->lowCorner / 4 ||
+                !SmoothSurface(&track->faces[a->lowCorner / 4], &track->faces[b->lowCorner / 4])) continue;
+            parent[LightRoot(parent, a->lowCorner)] = LightRoot(parent, b->lowCorner);
+            parent[LightRoot(parent, a->highCorner)] = LightRoot(parent, b->highCorner);
+        }
+        /* Make a ring for each group so all its faces contribute the same mean. */
+        for (int i = 0; i < corners; i++) {
+            int root = LightRoot(parent, i);
+            if (root != i) {
+                next[i] = next[root];
+                next[root] = i;
+            }
+        }
+        trackLightNext = next;
+    } else {
+        free(next);
+    }
+    free(parent);
+    free(edges);
+}
+
+/* Packet order is face vertices 1, 0, 2, 3. Use live RGB, keeping the
+   lighting scale of the receiving face (notably on Wipeout 64 imports). */
+static int TrackCornerLights(const Face *face, uint32_t colours[4])
+{
+    if (!PortRenderGeometry().smoothTrackLighting) return 0;
+    if (!trackLightBuilt) BuildTrackLighting();
+    if (!trackLightNext) return 0;
+    int base = 4 * (int)(face - track->faces);
+    int blended = 0;
+    for (int i = 0; i < 4; i++) {
+        static const int cornerOrder[] = {1, 0, 2, 3};
+        int start = base + cornerOrder[i], corner = start;
+        unsigned r = 0, g = 0, b = 0, count = 0;
+        do {
+            const Face *source = &track->faces[corner / 4];
+            if (source->lightFormat == face->lightFormat) {
+                r += source->red;
+                g += source->green;
+                b += source->blue;
+                count++;
+            }
+            corner = trackLightNext[corner];
+        } while (corner != start);
+        colours[i] = ((r + count / 2) / count) | (((g + count / 2) / count) << 8) |
+                     (((b + count / 2) / count) << 16);
+        blended |= count > 1;
+    }
+    return blended;
+}
+
+/* Sample the two triangles of the low-detail face, including their common
+   diagonal. A shared edge samples the same colours at every grid resolution. */
+enum { TRACK_LIGHT_GRID = 8 };
+static uint32_t SampleTrackLight(const uint32_t colours[4], int x, int y)
+{
+    int weights[4] = {0, 0, 0, 0};
+    int diagonal = TRACK_LIGHT_GRID - x - y;
+    if (diagonal >= 0) {
+        weights[0] = diagonal;
+        weights[1] = x;
+        weights[2] = y;
+    } else {
+        weights[1] = TRACK_LIGHT_GRID - y;
+        weights[2] = TRACK_LIGHT_GRID - x;
+        weights[3] = -diagonal;
+    }
+    uint32_t colour = 0;
+    for (int shift = 0; shift < 24; shift += 8) {
+        unsigned value = TRACK_LIGHT_GRID / 2;
+        for (int i = 0; i < 4; i++) value += ((colours[i] >> shift) & 255) * weights[i];
+        colour |= (value / TRACK_LIGHT_GRID) << shift;
+    }
+    return colour;
+}
+
+static void TagTrackFaceLight(const POLY_FT4 *poly, const Face *face)
+{
+    uint32_t colours[4];
+    if (TrackCornerLights(face, colours)) PortTagTrackLight(poly, colours);
 }
 
 /* Port: frame interpolation (gte.h): a point of the track is known by where it is in the world, so that a point two
@@ -155,6 +310,7 @@ void AsmTrackLo(TrackSection *firstSection, Skeleton *camera, short loCount)
             poly->clut = tileSurfaces[(u_char)face->texture][0].low[0].cba;
             SetTrackLight(poly, face);
             AddPrim((u_long *)((char *)ordering + (depth & 0xFFFC)), poly);
+            TagTrackFaceLight(poly, face);
             PortFarMarkFace(face); /* Port: the far view draws the faces the game did not */
             PortTagPrims(poly, poly + 1, "track lo face", NULL, (int)(face - track->faces)); /* Port: the frame recorder */
             poly++;
@@ -178,7 +334,27 @@ typedef struct GridPoint {
     u_short depth;
     u_short flag;
     uint32_t handle; /* Port: the precise projection (gte.h) */
+    uint32_t light; /* Port: bit 24 marks an interpolated RGB value */
 } GridPoint;
+
+static void ShadeTrackGrid(GridPoint *grid, int size, const uint32_t *colours, int x, int y, int step)
+{
+    for (int row = 0; row < size; row++) {
+        for (int col = 0; col < size; col++) {
+            grid[row * size + col].light = colours
+                ? 0x1000000u | SampleTrackLight(colours, x + col * step, y + row * step) : 0;
+        }
+    }
+}
+
+static void TagTrackGridLight(const POLY_FT4 *poly,
+                             const GridPoint *a, const GridPoint *b, const GridPoint *c, const GridPoint *d)
+{
+    if (a->light) {
+        const uint32_t colours[] = {a->light, b->light, c->light, d->light};
+        PortTagTrackLight(poly, colours);
+    }
+}
 
 /* Projects a grid point through the GTE: fills in its screen position, depth and the flag bits that matter
    (the upper half of the GTE flag word, masked with 0x466).  Returns whether the point is rejected. */
@@ -215,6 +391,7 @@ static POLY_FT4 *DrawGridQuad(POLY_FT4 *poly, u_long *ordering, Face *face, Tile
     GteWriteData(19, p3->depth);
     GteExecute(GTE_AVSZ4);
     AddPrim(ordering + GteReadData(7), poly);
+    TagTrackGridLight(poly, p0, p1, p2, p3);
     PortTagPrims(poly, poly + 1, "track face", NULL, (int)(face - track->faces)); /* Port: the frame recorder */
     return poly + 1;
 }
@@ -275,6 +452,8 @@ void AsmTrackMed(TrackSection *firstSection, Skeleton *camera, short medCount)
             grid[3].z = (short)((cz[1] + cz[2]) >> 1); grid[5].z = (short)((cz[0] + cz[3]) >> 1);
             grid[4].z = (short)((((cz[1] + cz[2]) >> 1) + ((cz[0] + cz[3]) >> 1)) >> 1);
 
+            uint32_t colours[4];
+            ShadeTrackGrid(grid, 3, TrackCornerLights(face, colours) ? colours : NULL, 0, 0, TRACK_LIGHT_GRID / 2);
             for (i = 0; i < 9; i++) {
                 int rejected = ProjectGridPoint(&grid[i]);
 
@@ -359,7 +538,8 @@ static const int gridQuad[4][4] = { { 0, 1, 3, 4 }, { 1, 2, 4, 5 }, { 3, 4, 6, 7
 /* A cell of the high detail grid that is partly off screen: it is cut once more into four quads, each drawn
    only if all its points are on screen.  The quads come from the general primitive buffer (nextPrim), not
    from the track's pool, and are not counted in hiTileCount.  The texture coordinates are averaged along. */
-static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *ordering)
+static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *ordering,
+                            const uint32_t *colours, int row, int col)
 {
     GridPoint sub[9];
     u_short   uv[9];
@@ -378,6 +558,7 @@ static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *
     sub[3].x = (cell[0]->x + cell[2]->x) >> 1;  sub[3].y = (cell[0]->y + cell[2]->y) >> 1;  sub[3].z = (cell[0]->z + cell[2]->z) >> 1;
     sub[5].x = (cell[1]->x + cell[3]->x) >> 1;  sub[5].y = (cell[1]->y + cell[3]->y) >> 1;  sub[5].z = (cell[1]->z + cell[3]->z) >> 1;
     sub[4].x = (sub[3].x + sub[5].x) >> 1;      sub[4].y = (sub[3].y + sub[5].y) >> 1;      sub[4].z = (sub[3].z + sub[5].z) >> 1;
+    ShadeTrackGrid(sub, 3, colours, col * 2, row * 2, 1);
     ProjectGridPoint(&sub[1]);
     ProjectGridPoint(&sub[3]);
     ProjectGridPoint(&sub[4]);
@@ -425,6 +606,7 @@ static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *
         GteExecute(GTE_AVSZ4);
         AddPrim(ordering + GteReadData(7), poly);
         nextPrim.ptr = (char *)(poly + 1);
+        TagTrackGridLight(poly, a, b, c, d);
         PortTagPrims(poly, poly + 1, "track cell", NULL, (int)(face - track->faces)); /* Port: the frame recorder */
     }
 }
@@ -477,6 +659,9 @@ void AsmTrackHi(TrackSection *firstSection, Skeleton *camera, AutoMeshData *auto
             SubdivideHigh(x, gx);
             SubdivideHigh(y, gy);
             SubdivideHigh(z, gz);
+            uint32_t colours[4];
+            const uint32_t *light = TrackCornerLights(face, colours) ? colours : NULL;
+            ShadeTrackGrid(grid, 5, light, 0, 0, TRACK_LIGHT_GRID / 4);
             for (i = 0; i < HI_POINTS; i++) {
                 int rejected;
 
@@ -504,7 +689,7 @@ void AsmTrackHi(TrackSection *firstSection, Skeleton *camera, AutoMeshData *auto
                             poly = DrawGridQuad(poly, ordering, face, tile, cell[0], cell[1], cell[2], cell[3]);
                             count++;
                         } else if (!(cell[0]->flag && cell[1]->flag && cell[2]->flag && cell[3]->flag)) {
-                            DrawPartialCell(cell, tile, face, ordering);
+                            DrawPartialCell(cell, tile, face, ordering, light, row, col);
                         }
                         tile++;
                     }
@@ -573,6 +758,7 @@ static void DrawNearFace(Face *face, const PortView *view, u_short tpage, u_shor
     SetTrackLight(poly, face);
     /* behind whatever the game drew of the face, and nearer things */
     AddPrim(PortFarSlot((int)deepest >> 2, deepest), poly);
+    TagTrackFaceLight(poly, face);
     PortTagPrims(poly, poly + 1, "near fill face", NULL, (int)(face - track->faces));
 }
 
@@ -639,6 +825,7 @@ void PortTrackFar(TrackSection *section, const PortView *view)
         SetTrackLight(poly, face);
         /* AsmTrackLo's slot: the depth of the last corner of RTPT (vertex 2), a quarter per entry */
         AddPrim(PortFarSlot((int)corner[2].z >> 2, corner[2].z), poly);
+        TagTrackFaceLight(poly, face);
         PortTagPrims(poly, poly + 1, "far track face", NULL, (int)(face - track->faces));
     }
     PortFarDepthBias(1.0);
