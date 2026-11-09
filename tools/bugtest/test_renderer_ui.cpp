@@ -145,7 +145,7 @@ int main()
     assert(!RenderCurrent()->settings.modern.bilinear);
     Focus("##Brightness", 4, RENDER_MODERN);
     Key(ImGuiKey_Space); Key(ImGuiKey_LeftArrow); Key(ImGuiKey_Space);
-    assert(RenderCurrent()->settings.modern.brightness < MODERN_BRIGHTNESS_MAX);
+    assert(RenderCurrent()->settings.modern.brightness < MODERN_BRIGHTNESS_DEFAULT);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     Focus("##Tonemapper", 4, RENDER_MODERN);
     Key(ImGuiKey_Enter); Key(ImGuiKey_UpArrow); Key(ImGuiKey_Enter);
@@ -153,7 +153,7 @@ int main()
     Activate("HDR bloom", 4, RENDER_MODERN);
     assert(!RenderCurrent()->settings.modern.bloom);
     Activate("Restore renderer defaults", 4, RENDER_MODERN);
-    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MAX);
+    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_DEFAULT);
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.bloom);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);

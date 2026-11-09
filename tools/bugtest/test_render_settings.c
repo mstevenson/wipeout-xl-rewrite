@@ -105,7 +105,7 @@ static void ModernProfile(void)
     Load("ps1_renderer = modern\nmodern_render_scale = 3\n");
     assert(RenderCurrent()->id == RENDER_MODERN && RenderDepth(RenderCurrent()));
     assert(RenderOriginalFrameRate(0) == 60 && RenderScale(RenderCurrent()) == 3);
-    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MAX);
+    assert(RenderCurrent()->settings.modern.brightness == 85);
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.bloom);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
@@ -140,7 +140,7 @@ static void ModernProfile(void)
     RenderDefaults(&portSettings.render, RENDER_MODERN);
     assert(RenderCommit() && RenderScale(RenderCurrent()) == 0);
     assert(RenderCurrent()->settings.modern.bilinear);
-    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MAX);
+    assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_DEFAULT);
     assert(RenderCurrent()->settings.modern.bloom);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
 }

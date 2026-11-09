@@ -90,7 +90,7 @@ nearest-neighbour sampling. HUD and 2D menus always use nearest sampling.
 The saved key `modern_bilinear` uses 1 for enabled and 0 for disabled.
 
 **Brightness** (`modern_brightness`) scales the tint on world textures before
-colour clipping. **100%** is the default and uses PlayStation modulation.
+colour clipping. The default is **85%**. **100%** uses PlayStation modulation.
 **50%** halves the tint, approximating the PC modulation on PlayStation
 textures. HUD and menu art use their own brightness.
 

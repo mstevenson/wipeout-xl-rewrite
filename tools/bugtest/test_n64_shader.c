@@ -427,7 +427,7 @@ static void ModernBrightness(void)
     words[0] = 0x7fff;
     Upload();
     portSettings.render.selection = RENDER_MODERN;
-    const int levels[] = {100, 75, 50};
+    const int levels[] = {MODERN_BRIGHTNESS_MAX, MODERN_BRIGHTNESS_DEFAULT, MODERN_BRIGHTNESS_MIN};
     for (int i = 0; i < SDL_arraysize(levels); i++) {
         portSettings.render.modern.brightness = levels[i];
         RenderCommit();
@@ -2206,6 +2206,7 @@ static void ModernHdr(void)
     assert(CreateFramebuffer());
     portSettings.render = (RenderSettings)RENDER_DEFAULTS;
     portSettings.render.selection = RENDER_MODERN;
+    portSettings.render.modern.brightness = MODERN_BRIGHTNESS_MAX; /* Keep the HDR fixture's input levels fixed. */
     portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
     PortWideScene();
     RenderCommit();
