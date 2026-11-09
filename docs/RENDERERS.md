@@ -25,7 +25,7 @@ base dimensions; **Auto** follows the window size. Widescreen adds columns while
 presentation preserves the 4:3 base aspect ratio. Switching profiles also switches
 resolution. Modern defaults to Auto and uses the PlayStation base dimensions.
 The four hardware profiles default to 1×.
-Widescreen and HD textures are shared. Each profile saves its **Draw distance**
+Widescreen, the HD textures toggle, and the choice of texture pack are shared. Each profile saves its **Draw distance**
 choice, Full-mode fade toggle and range, and distant engine flare toggle. Modern defaults to
 **Full** with both effects enabled. The four hardware profiles default to
 **Native** with scenery fade off.
@@ -48,7 +48,8 @@ model bounds and its separate ship depth interval. These policies apply when
 **Full** and Modern's **Custom** both use the extended scene pass.
 Original course-specific exceptions
 apply when their source course is loaded. See [native distance verification](port-notes/native-distance.md).
-HD texture replacements apply above 1× in the hardware profiles, including when Auto selects a higher scale.
+With **HD textures** enabled, Modern uses matching replacements from the selected pack at every scale, including 1×.
+The hardware profiles require a scale above 1×, including when Auto selects a higher scale.
 
 Modern's **Track Detail** applies at both draw distances. **Native** (the
 default) preserves the usual road detail at each distance. **Medium** raises

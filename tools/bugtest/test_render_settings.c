@@ -329,7 +329,7 @@ static void ResourcePolicyIsolation(void)
         RenderMaterial road = {.textured = 1, .perspective = 1, .smoothTrackLighting = 1};
         assert(!!(RenderPrepare(&frame, &road).shade & SHADE_AFFINE_COLOUR) == (id != RENDER_MODERN));
         assert(resources.hdr == (id == RENDER_MODERN));
-        assert(resources.originalTextures == (id == RENDER_MODERN));
+        assert(resources.hdTexturesAtNativeScale == (id == RENDER_MODERN));
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
             RenderStyle style = RenderPrepare(&frame, &cases[i]);
             for (size_t key = 0; key < sizeof(changes) / sizeof(changes[0]); key++) {
@@ -359,7 +359,7 @@ static void ResourcePolicyIsolation(void)
     modern.settings.modern.bloom = 0;
     assert(RenderResourcesFor(&modern).hdr);
     modern.settings.modern.weaponLights = 0;
-    assert(!RenderResourcesFor(&modern).hdr && RenderResourcesFor(&modern).originalTextures);
+    assert(!RenderResourcesFor(&modern).hdr && RenderResourcesFor(&modern).hdTexturesAtNativeScale);
     puts("All five profiles isolate resource requirements and source-bound policy from inactive settings: OK");
 }
 

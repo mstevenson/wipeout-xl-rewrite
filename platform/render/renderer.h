@@ -119,7 +119,7 @@ static inline unsigned RenderBaseShade(const RenderMaterial *material)
 }
 /* Optional resources/operations requested by the profile, implemented by shared transport. */
 typedef struct RenderResources {
-    int originalTextures, hdr;
+    int hdTexturesAtNativeScale, hdr;
 } RenderResources;
 typedef struct RenderPacketPolicy {
     int nativeQuads, nativeSky, shadowMask, smoothTrackLighting;

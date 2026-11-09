@@ -4,4 +4,5 @@
 (all the 2D: menus, HUD, fonts, ships' liveries), kept here as published, since its page
 ([github.com/NR74W/WipEout-Mods](https://github.com/NR74W/WipEout-Mods)) is no longer kept up. All its work is NR74W's.
 
-In the game: the debug console's Graphics tab, "Choose the pack's .zip...", then HD textures on.
+In the debug console's Graphics tab, select "Choose the pack's .zip..." and enable "HD textures".
+Modern supports replacements at every render scale. The hardware profiles require a scale above 1×.

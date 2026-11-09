@@ -2157,14 +2157,16 @@ static void ProfileNativeResolution(void)
     initialised = 1;
     ResetRenderSettings();
     portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
-    portSettings.hdTextures = 1;
     for (portPal = 0; portPal <= 1; portPal++) {
         for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
             portSettings.render.selection = (RendererId)id;
             for (int multiplier = 1; multiplier <= 2; multiplier++) {
                 *RenderScaleSetting(&portSettings.render, (RendererId)id) = multiplier;
                 RenderCommit(); GpuUpdateResolution();
-                CheckHdLookup(multiplier > 1 && id != RENDER_MODERN);
+                for (int enabled = 0; enabled <= 1; enabled++) {
+                    portSettings.hdTextures = enabled;
+                    CheckHdLookup(enabled && (id == RENDER_MODERN || multiplier > 1));
+                }
                 int nativeW, nativeH, width, height;
                 RenderNativeSize((RendererId)id, portPal, &nativeW, &nativeH);
                 GpuPixelSize(320, GPU_LINES, &width, &height);

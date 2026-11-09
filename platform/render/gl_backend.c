@@ -866,8 +866,7 @@ static void Flush(void)
     glBindTexture(GL_TEXTURE_2D, glyphTexture);
     glUniform1i(scene->uniformGlyphs, 1);
     glActiveTexture(GL_TEXTURE2);
-    /* Profiles using original art still need a complete texture for the unused sampler. */
-    glBindTexture(GL_TEXTURE_2D, resources.originalTextures ? glyphTexture : hdAtlas);
+    glBindTexture(GL_TEXTURE_2D, hdAtlas);
     glUniform1i(scene->uniformHdAtlas, 2);
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, portPagesTexture);
@@ -1051,7 +1050,7 @@ static void FindHd(const GpuDrawState *state, const GpuVertex *vertices, int cou
         primitiveHdTexels[3] = (int16_t)v1;
         return;
     }
-    if (scale == 1 || RenderResourcesFor(RenderCurrent()).originalTextures || !HdTexActive()) {
+    if ((scale == 1 && !RenderResourcesFor(RenderCurrent()).hdTexturesAtNativeScale) || !HdTexActive()) {
         return;
     }
     if (!HdTexFind(state->pageX, state->pageY, state->depth, state->clutX, state->clutY, u0, v0, u1, v1, &hit) ||

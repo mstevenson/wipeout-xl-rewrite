@@ -31,7 +31,7 @@ static RenderGeometry Geometry(const void *profile)
 static RenderResources Resources(const void *profile)
 {
     const ModernRenderSettings *settings = profile;
-    return (RenderResources){.originalTextures = 1, .hdr = settings->bloom || settings->weaponLights};
+    return (RenderResources){.hdTexturesAtNativeScale = 1, .hdr = settings->bloom || settings->weaponLights};
 }
 
 static RenderPacketPolicy Packets(const void *profile)

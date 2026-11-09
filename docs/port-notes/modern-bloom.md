@@ -28,7 +28,7 @@ active renderer; the recorder only captures it. The packet adapter evaluates the
 source's white-modulation condition and preserves the mask through clipping and
 replay. Modern's shader consumes that mask as a vertex attribute.
 
-`modern_renderer.c` requests original textures, source bounds and HDR targets.
+`modern_renderer.c` requests source bounds and HDR targets.
 The GL pipeline's optional batch-binding callback keeps Modern uniforms in
 `modern_gl.c`. Shared transport allocates, seeds, copies and resizes HDR
 attachments without reading Modern settings. The source/renderer boundary
