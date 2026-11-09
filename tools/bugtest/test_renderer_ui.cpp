@@ -150,12 +150,16 @@ int main()
     Focus("##Tonemapper", 4, RENDER_MODERN);
     Key(ImGuiKey_Enter); Key(ImGuiKey_UpArrow); Key(ImGuiKey_Enter);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_ORIGINAL);
+    assert(RenderCurrent()->settings.modern.weaponLights);
+    Activate("Dynamic lights", 4, RENDER_MODERN);
+    assert(!RenderCurrent()->settings.modern.weaponLights);
     Activate("HDR bloom", 4, RENDER_MODERN);
     assert(!RenderCurrent()->settings.modern.bloom);
     Activate("Restore renderer defaults", 4, RENDER_MODERN);
     assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_DEFAULT);
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.bloom);
+    assert(RenderCurrent()->settings.modern.weaponLights);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     n64Track = 0; RenderCommit(); Frame();
     assert(RenderCurrent()->id == RENDER_PC);

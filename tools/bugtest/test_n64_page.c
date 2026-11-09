@@ -305,6 +305,7 @@ static void ClippedInterpolation(void)
                     for (int i = 0; i < clippedCount; i++) {
                         const GpuVertex *p = &clipped[i];
                         assert(p->n64 == imported && p->world);
+                        assert(p->view[2] == p->w); /* lighting follows the clipped surface */
                         if (p->w == 16) {
                             intersections++;
                             float u = id == RENDER_PS1 && affine ? cases[c].affine : cases[c].perspective;
@@ -380,6 +381,61 @@ static void SaturnSkyAngles(void)
     GteSetBackground(0);
     GteWriteControl(0,4096);GteWriteControl(1,0);GteWriteControl(2,4096);GteWriteControl(3,0);GteWriteControl(4,4096);
     puts("Saturn panorama yaw/pitch follow world motion and match original Saturn camera angles: OK");
+}
+
+static void PointLightSnapshots(void)
+{
+    GteKeepPast(1);
+    GpuLightSource source = {.id = 1, .life = 20,
+        .light = {.position = {0, 0, 1000}, .radius = 2000, .colour = {1, .3f, .1f}, .intensity = 4}};
+    for (int frame = 0; frame < 3; frame++) {
+        GteClearPrecise();
+        for (int i = 0; i < 8; i++) {
+            GteKeyNext(0, 200 + i);
+            uint32_t h = GteRecordProjection(i, 0, 0, 500, 1);
+            GteRecordView(h, (i & 1) * 100 + (frame == 2 ? 1000000 : 0), ((i >> 1) & 1) * 100, 500 + ((i >> 2) & 1) * 100);
+        }
+        GteKeyNext(0, 999);
+        uint32_t vertexHandle = GteRecordProjection(100, 0, 0, 1000, 1);
+        GteRecordView(vertexHandle, frame * 100, 0, 1000);
+        source.light.position[0] = frame * 100;
+        source.life = 20 - frame;
+        PsxCaptureLights(&source, 1);
+        /* Snapshot ownership, and interpolation matching the camera-cut policy. */
+        source.light.position[0] = -10000;
+        DrawLights(.5f);
+        assert(drawnLights.count == 1);
+        assert(drawnLights.lights[0].position[0] == (frame == 1 ? 50 : frame * 100));
+        if (frame == 1) {
+            GtePrecise projection;
+            GpuVertex vertex = {0};
+            assert(GtePreciseOf(vertexHandle, &projection));
+            interpolating = 1; interpolationAlong = .5f;
+            Vertex(&vertex, 100, &projection);
+            interpolating = 0;
+            assert(vertex.view[0] == 50 && vertex.view[2] == 1000);
+            source.light.position[0] = 350; source.life = 30;
+            PsxCaptureLights(&source, 1); DrawLights(.5f);
+            assert(drawnLights.lights[0].position[0] == 350); /* reused slot */
+            source.light.position[0] = 100; source.life = 19;
+            PsxCaptureLights(&source, 1);
+        }
+    }
+    GteClearPrecise(); DrawLights(1); assert(!drawnLights.count); /* menus/stale frame */
+    GpuLightSource many[GPU_LIGHT_SOURCES];
+    for (int i = 0; i < GPU_LIGHT_SOURCES; i++) {
+        many[i] = source; many[i].id = i + 1;
+        many[i].light.position[0] = i * 100;
+    }
+    PsxCaptureLights(many, GPU_LIGHT_SOURCES); DrawLights(1);
+    assert(drawnLights.count == GPU_POINT_LIGHTS);
+    for (int i = 0; i < GPU_POINT_LIGHTS; i++) assert(drawnLights.lights[i].position[0] == i * 100);
+    /* Expired pools and lights wholly behind the view cannot survive a new capture. */
+    many[0].light.position[2] = -3000;
+    PsxCaptureLights(many, 1); DrawLights(1); assert(!drawnLights.count);
+    PsxCaptureLights(NULL, 0); DrawLights(1); assert(!drawnLights.count);
+    GteKeepPast(0); GteClearPrecise();
+    puts("Point lights: immutable frames, interpolation, camera cuts, stale-frame reset, bounded influence selection and offscreen culling: OK");
 }
 
 static void SaturnSkyInterpolation(void)
@@ -678,6 +734,7 @@ int main(void)
     ClippedInterpolation();
     SaturnSkyAngles();
     SaturnSkyInterpolation();
+    PointLightSnapshots();
     SaturnClip();
     SaturnCaptureAtlasUV();
     SaturnFlarePacket();

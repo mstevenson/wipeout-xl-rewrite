@@ -1,4 +1,9 @@
 /* Common vertex transport. Rasterization operations come only from its owner. */
+#ifdef RENDER_LIGHTING
+    "in vec4 viewPositionIn;\n"
+    "out vec3 vViewPosition;\n"
+    "flat out float receivesLight;\n"
+#endif
     "in vec3 position;\n"
     "in vec4 colour;\n"
     "in vec2 texel;\n"
@@ -54,6 +59,10 @@
     "    vColourWeight = (modeIn.y & 16u) != 0u ? w : 1.0;\n"
     "    vColour = vec4(colour.rgb * vColourWeight, colour.a);\n"
     "    vPixel = vec3(pixel * w, w);\n"
+#ifdef RENDER_LIGHTING
+    "    vViewPosition = viewPositionIn.xyz;\n"
+    "    receivesLight = viewPositionIn.w;\n"
+#endif
     "    texturePage = ivec4(textureIn.xy, 0, 0);\n"
     "    clut = ivec4(textureIn.zw, 0, 0);\n"
     "    vWindow = ivec4(window);\n"

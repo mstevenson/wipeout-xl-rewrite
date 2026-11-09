@@ -174,6 +174,9 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
         Tooltip("Controls world texture tint. 100% uses the PlayStation level. "
                 "50% halves the tint and approximates the PC level.");
         changed |= DisplaySettings(&s->modern.resample);
+        changed |= Check("Dynamic lights", &s->modern.weaponLights,
+            "Projectiles, explosions, engines and active shields illuminate nearby surfaces. "
+            "These lights do not cast shadows. Works with bloom off.");
         const char *bloomTooltip = "Adds glow from overbright surfaces and track lights during races.";
         if (s->modernBloomOverride)
             bloomTooltip = RenderModernBloom(s)
@@ -181,11 +184,11 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
                 : "WIPEOUT_MODERN_BLOOM disables bloom for this run. This checkbox sets the saved preference.";
         changed |= Check("HDR bloom", &s->modern.bloom, bloomTooltip);
         const char *tonemappers[] = {"Classic", "Soft Highlights"};
-        ImGui::BeginDisabled(!RenderModernBloom(s));
+        ImGui::BeginDisabled(!RenderModernBloom(s) && !s->modern.weaponLights);
         ImGui::TextUnformatted("Tonemapper");
         ImGui::SetNextItemWidth(-1);
         changed |= ImGui::Combo("##Tonemapper", &s->modern.tonemapper, tonemappers, IM_ARRAYSIZE(tonemappers));
-        Tooltip("Maps the HDR race picture to SDR when HDR bloom is enabled. "
+        Tooltip("Maps the HDR race picture to SDR when bloom or dynamic lights are enabled. "
                 "Soft Highlights preserves Classic's shadows and rolls off bright colours earlier.");
         ImGui::EndDisabled();
         break;

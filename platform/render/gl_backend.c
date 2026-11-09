@@ -111,6 +111,7 @@ typedef struct BatchVertex {
     uint16_t hd[4];     /* HD texture: its part of the atlas, x, y, w, h (w 0: none) */
     int16_t filterBounds[4]; /* full image's left/top/right/bottom texels; prevents sampling adjacent images */
     int16_t hdTexels[4]; /* ... the texels of the page it covers, x, y, w, h */
+    float view[4]; /* xyz and eligibility for surface lighting */
     int16_t emissionUv[4]; /* source emission centre and half-size; width zero means whole face */
 } BatchVertex;
 static BatchVertex batch[BATCH_VERTICES];
@@ -400,6 +401,8 @@ int GpuInit(void)
     glEnableVertexAttribArray(8);
     glVertexAttribIPointer(8, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, filterBounds));
 
+    glEnableVertexAttribArray(10);
+    glVertexAttribPointer(10, 4, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, view));
     glEnableVertexAttribArray(9);
     glVertexAttribIPointer(9, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, emissionUv));
 
@@ -789,7 +792,7 @@ static int Blended(const GpuDrawState *s)
 static int SameState(const GpuDrawState *a, const GpuDrawState *b)
 {
     /* (the console's subtraction is a blend of its own; the opaque are drawn without blending, which is cheaper) */
-    return (a->semi == 2) == (b->semi == 2) && Blended(a) == Blended(b);
+    return (a->semi == 2) == (b->semi == 2) && Blended(a) == Blended(b) && a->pointLights == b->pointLights;
 }
 
 /* The premultiplied blend every fragment says how much of what is behind stays in (the shader's Out), or the
@@ -870,6 +873,7 @@ static void Flush(void)
     glBindTexture(GL_TEXTURE_2D, portPagesTexture);
     glUniform1i(scene->uniformPortPages, 3);
     if (pipeline->bind) pipeline->bind(RenderProfile(render), writeHdr);
+    if (pipeline->lights) pipeline->lights(RenderProfile(render), batchState.pointLights);
     glActiveTexture(GL_TEXTURE0);
     /* The depth buffer: what has a depth is drawn where nothing nearer is, give or take DEPTH_SLACK (the game's own
        order decides among things at about the same depth: a shadow or a pad on the track). The depth of the batch's
@@ -1099,6 +1103,9 @@ static void Add(const GpuVertex *v, unsigned shade)
 
     out->x = v->x;
     out->y = v->y;
+    memcpy(out->view, v->view, sizeof(v->view));
+    out->view[3] = v->w > 0 && v->view[2] != 0 && !v->noDepth &&
+                   primitiveState.semi < 0 && !primitiveState.raw && primitiveState.pointLights != NULL;
     out->w = v->w > 0.0f && v->noDepth ? -v->w : v->w; /* (the vertex shader's position.z) */
     batchDepth |= out->w > 0.0f && v->a == 255 && (primitiveState.textured || primitiveState.semi < 0);
     out->r = v->r / 255.0f;

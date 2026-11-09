@@ -30,6 +30,7 @@ typedef struct Trail Trail;
 #include "trails.h"
 #include "../region.h"
 #include "../render/saturn_native.h"
+#include "../render/point_lights.h"
 #include "../saturn.h"
 
 uint16_t psxVram[VRAM_HEIGHT][VRAM_WIDTH];
@@ -432,6 +433,70 @@ static void ReadPendingTables(void);
 static int interpolating; /* drawing a picture between two of the game's frames (PsxDrawInterpolated) */
 static int recordingBetween; /* ... which the frame recorder keeps (FrameCapBetween) */
 static float interpolationAlong;
+
+static struct {
+    uint32_t frame;
+    int count;
+    GpuLightSource sources[GPU_LIGHT_SOURCES];
+} lightFrame, previousLights;
+static GpuLightSet drawnLights;
+
+void PsxCaptureLights(const GpuLightSource *sources, int count)
+{
+    uint32_t frame = GteFrameRecorded();
+    if (lightFrame.frame != frame) previousLights = lightFrame;
+    lightFrame.frame = frame;
+    lightFrame.count = SDL_clamp(count, 0, GPU_LIGHT_SOURCES);
+    if (lightFrame.count) memcpy(lightFrame.sources, sources, lightFrame.count * sizeof(*sources));
+}
+
+/* A draw pass owns its list until all batches have flushed. Select by influence
+   near the camera, with a stable source-order tie break; offscreen emitters can
+   still illuminate visible surfaces. Each linked game has its own snapshots. */
+static void DrawLights(float along)
+{
+    GpuFlush();
+    drawnLights.count = 0;
+    if (lightFrame.frame != GteFrameRecorded() || !lightFrame.count) return;
+    float scores[GPU_POINT_LIGHTS];
+    along = GtePresentationAlong(along);
+    for (int i = 0; i < lightFrame.count; i++) {
+        const GpuLightSource *source = &lightFrame.sources[i];
+        GpuPointLight light = source->light;
+        if (along < 1 && previousLights.frame + 1 == lightFrame.frame) {
+            for (int j = 0; j < previousLights.count; j++) {
+                const GpuLightSource *past = &previousLights.sources[j];
+                if (past->id != source->id || source->life > past->life) continue;
+                float distance = 0;
+                for (int k = 0; k < 3; k++) {
+                    float d = light.position[k] - past->light.position[k];
+                    distance += d * d;
+                }
+                if (distance < 12000.0f * 12000.0f) {
+                    for (int k = 0; k < 3; k++)
+                        light.position[k] = past->light.position[k] + (light.position[k] - past->light.position[k]) * along;
+                    light.intensity = past->light.intensity + (light.intensity - past->light.intensity) * along;
+                }
+                break;
+            }
+        }
+        if (light.radius <= 0 || light.intensity <= 0 || light.position[2] < -light.radius) continue;
+        float distance = 0;
+        for (int k = 0; k < 3; k++) distance += light.position[k] * light.position[k];
+        float score = light.intensity * light.radius * light.radius / (distance + light.radius * light.radius);
+        int slot = drawnLights.count;
+        if (slot == GPU_POINT_LIGHTS && score <= scores[slot - 1]) continue;
+        if (slot < GPU_POINT_LIGHTS) drawnLights.count++;
+        else slot--;
+        while (slot > 0 && score > scores[slot - 1]) {
+            drawnLights.lights[slot] = drawnLights.lights[slot - 1];
+            scores[slot] = scores[slot - 1];
+            slot--;
+        }
+        drawnLights.lights[slot] = light;
+        scores[slot] = score;
+    }
+}
 
 /* Widescreen: the packets of the menus' backdrops (PortWideBackdrop), which fill the picture's sides. They are
    the same few packets every frame, named again each frame: one not named while the last few tables were drawn is
@@ -1000,6 +1065,10 @@ static void Vertex(GpuVertex *v, uint32_t xy, const GtePrecise *precise)
     GtePrecise moved;
 
     if (precise && interpolating && GteInterpolate(precise, interpolationAlong, &moved)) {
+        double view[3];
+        if (GteViewAt(precise, interpolationAlong, view)) {
+            for (int k = 0; k < 3; k++) moved.view[k] = (float)view[k];
+        }
         precise = &moved; /* between the frame before and this one */
     }
     if (precise) {
@@ -1013,6 +1082,7 @@ static void Vertex(GpuVertex *v, uint32_t xy, const GtePrecise *precise)
         v->exactDepth = precise->exact;
         v->n64 = precise->n64;
         v->world = precise->view[2] != 0.0f;
+        memcpy(v->view, precise->view, sizeof(v->view));
     } else {
         v->x = (float)(x + state.offsetX) + hudShift;
         v->y = (float)(y + state.offsetY);
@@ -1021,6 +1091,7 @@ static void Vertex(GpuVertex *v, uint32_t xy, const GtePrecise *precise)
         v->exactDepth = 0;
         v->n64 = 0;
         v->world = 0;
+        memset(v->view, 0, sizeof(v->view));
     }
 }
 
@@ -1541,6 +1612,7 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back,
         out[i].v.x = x + (float)state.offsetX;
         out[i].v.y = y + (float)state.offsetY;
         out[i].v.w = (float)(out[i].view[2] * out[i].depth);
+        for (k = 0; k < 3; k++) out[i].v.view[k] = (float)out[i].view[k];
     }
     /* seen from behind: the winding on screen (as Vertices judges a whole polygon by its first three corners) */
     turn = (out[1].v.x - out[0].v.x) * (out[2].v.y - out[0].v.y) -
@@ -1703,6 +1775,7 @@ static void Record(int kind, uint32_t code, int count, const int32_t *ix, const 
     }
     if (draw) {
         p->draw = *draw;
+        p->draw.pointLights = NULL; /* Live lighting is captured in the rendered picture. */
         p->draw.saturn = NULL; /* Frame inspection uses the compatibility texture and UVs. */
     }
     p->address = (uint64_t)(uintptr_t)(w - 1);
@@ -1794,6 +1867,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
                 draw.emission.enabled = 0;
         }
     }
+    draw.pointLights = !ShadowPacket(w) ? &drawnLights : NULL;
     RenderPacketPolicy policy = RenderPacketPolicyFor(RenderCurrent());
     if (policy.smoothTrackLighting && quad && textured && !raw && !gouraud &&
         trackLightFrame && trackLightFrame == GteFrameRecorded()) {
@@ -2613,6 +2687,7 @@ static void DrawInterpolated(float along)
 
     interpolating = 1;
     interpolationAlong = along < 0.0f ? 0.0f : along > 1.0f ? 1.0f : along;
+    DrawLights(interpolationAlong);
     GpuInterpolating(1);
     state.areaLeft = upcoming.left;
     state.areaTop = upcoming.top;
@@ -2715,6 +2790,7 @@ void DrawOTag(u_long *p)
     int tracing = PortTracing() && pendingCount < PENDING_TABLES, inHud = p == hudTable;
     int mainTable = p == upcoming.table;
 
+    DrawLights(1.0f);
     WalkTable(p, 1);
     tablesDrawn++;
     if (mainTable) {

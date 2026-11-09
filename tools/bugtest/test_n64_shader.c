@@ -2429,6 +2429,7 @@ static void ModernHdr(void)
     assert(HdrRed(shown, 14, 11) > 8 && HdrRed(shown, 42, 11) == 0);
 
     /* Both an explicit opt-out and an unavailable half-float target use SDR. */
+    portSettings.render.modern.weaponLights = 0;
     for (int enabled = 0; enabled <= 1; enabled++) {
         portSettings.render.modern.bloom = enabled;
         RenderCommit();
@@ -2447,6 +2448,97 @@ static void ModernHdr(void)
     glDeleteRenderbuffers(1, &depthBuffer);
     puts("Modern HDR: overbright nearest and filtered materials, fixture mask, HUD, depth, smooth high-scale bloom, "
          "tonemapper switching, legacy blends, widescreen, SDR fallback and raw VRAM: OK");
+}
+
+/* A surface with known view coordinates: real material, batch and presentation paths. */
+static void LitSurface(GpuDrawState draw, int kind)
+{
+    GpuVertex v[4] = {0};
+    for (int i = 0; i < 4; i++) {
+        v[i] = (GpuVertex){.x = (i & 1) * 64, .y = (i >> 1) * 32, .w = kind == 1 ? 0 : 1000,
+            .r = 64, .g = 64, .b = 64, .a = 255, .u = .5f, .v = .5f,
+            .noDepth = kind == 2, .view = {((i & 1) * 64 - 32) * 20, ((i >> 1) * 32 - 16) * 20, 1000}};
+    }
+    GpuTriangles(&draw, v, 3); GpuTriangles(&draw, v + 1, 3);
+}
+
+static void ModernWeaponLights(void)
+{
+    Flush(); GpuRendererShutdown();
+    wideMargin = areaWide = wideDirty = 0;
+    portPal = 0; scale = 1; rasterX = rasterY = 1;
+    assert(CreateFramebuffer());
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.selection = RENDER_MODERN;
+    portSettings.render.modern.brightness = 100;
+    portSettings.render.modern.bloom = 0;
+    portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
+    PortWideScene(); RenderCommit();
+    GpuSetDrawArea(0, 0, 320, 240, 0, 0);
+    psxVram[0][0] = 0x2108; /* grey material, kept dim by its original tint */
+    GpuVramChanged(0, 0, 1, 1);
+    GpuLightSet lights = {.count = 1, .lights = {{{0, 0, 800}, 700, {1, .03f, .01f}, 3}}};
+    GpuDrawState draw = {.textured = 1, .depth = 2, .semi = -1, .pointLights = &lights};
+    uint8_t reference[64 * 32 * 4];
+    for (int filter = 0; filter <= 1; filter++) {
+        portSettings.render.modern.bilinear = filter;
+        portSettings.render.modern.weaponLights = 0; RenderCommit();
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(draw, 0);
+        memcpy(reference, GpuReadPicture(0, 0, 64, 32, 0, 64, 32), sizeof(reference));
+        portSettings.render.modern.weaponLights = 1; RenderCommit();
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(draw, 0);
+        const uint8_t *pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        int centre = (16 * 64 + 32) * 4, edge = (16 * 64) * 4;
+        assert(pixels[centre] > reference[centre] + 50);
+        assert(pixels[centre] > pixels[centre + 2] + 50);
+        assert(pixels[edge] < pixels[centre] - 40); /* finite radius and smooth falloff */
+        assert(abs(pixels[edge] - reference[edge]) <= 1);
+        /* A light behind the surface contributes nothing, despite being nearby. */
+        lights.lights[0].position[2] = 1200;
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(draw, 0);
+        pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(abs(pixels[centre] - reference[centre]) <= 1);
+        lights.lights[0].position[2] = 800;
+        /* HUD/sky provenance is excluded, as are unlit material and shadow/effect blends. */
+        for (int kind = 1; kind <= 5; kind++) {
+            GpuDrawState excluded = draw;
+            if (kind == 3) excluded.pointLights = NULL;
+            if (kind == 4) excluded.semi = 2;
+            if (kind == 5) excluded.raw = 1;
+            GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(excluded, kind);
+            pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+            assert(abs(pixels[centre] - pixels[centre + 2]) <= 1);
+        }
+    }
+    /* Bloom and lights have independent switches; overbright light enters HDR,
+       and raw VRAM reads remain bounded SDR. */
+    lights.lights[0].intensity = 100;
+    lights.lights[0].radius = 1800;
+    for (int bloom = 0; bloom <= 1; bloom++) {
+        portSettings.render.modern.bloom = bloom; RenderCommit();
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(draw, 0);
+        const uint8_t *pixels = GpuReadPicture(0, 0, 80, 32, 0, 80, 32);
+        int outside = (16 * 80 + 65) * 4;
+        if (!bloom) assert(pixels[outside] == 0);
+        else assert(pixels[outside] > 0);
+        assert(sceneHdr.bands);
+        GpuReadBack(32, 16, 1, 1); assert((psxVram[16][32] & 31) == 31);
+    }
+    /* Falling back to SDR still lights surfaces. */
+    DeleteHdr(&sceneHdr); sceneHdr.unavailable = 1;
+    GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(draw, 0);
+    const uint8_t *pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+    assert(pixels[(16 * 64 + 32) * 4] == 255);
+    /* Other profiles ignore the same source metadata. */
+    portSettings.render.selection = RENDER_PC; RenderCommit();
+    GpuClearArea(0, 0, 320, 240, 0, 0, 0); LitSurface(draw, 0);
+    pixels = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+    int centre = (16 * 64 + 32) * 4;
+    assert(pixels[centre] == pixels[centre + 2]);
+    assert(glGetError() == GL_NO_ERROR);
+    GpuRendererShutdown();
+    glDeleteFramebuffers(1, &framebuffer); glDeleteTextures(1, &colour); glDeleteRenderbuffers(1, &depthBuffer);
+    puts("Modern weapon lights: coloured diffuse surfaces, radius/normals, filtered/nearest, HUD/sky/shadow exclusion, bloom independence, HDR/SDR and profile isolation: OK");
 }
 
 int main(void)
@@ -2482,7 +2574,8 @@ int main(void)
     glVertexAttribIPointer(7, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, hdTexels));
     glVertexAttribIPointer(8, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, filterBounds));
     glVertexAttribIPointer(9, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, emissionUv));
-    for (int i = 0; i < 10; i++) glEnableVertexAttribArray((GLuint)i);
+    glVertexAttribPointer(10, 4, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, view));
+    for (int i = 0; i < 11; i++) glEnableVertexAttribArray((GLuint)i);
 
     glGenTextures(1, &vramTexture); glBindTexture(GL_TEXTURE_2D, vramTexture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, 1024, 1024, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, words);
@@ -2616,6 +2709,7 @@ int main(void)
     PcRgb565();
     ProfileNativeResolution();
     ModernHdr();
+    ModernWeaponLights();
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
     puts("Production GL shaders: N64 three-point, optional bilinear native/HD, bounds/wrapping/windows, coverage/blend passes and default PS1 sampling: OK");
     return 0;

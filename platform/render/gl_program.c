@@ -40,6 +40,7 @@ int RenderGlProgramInit(RenderProgram *s, const char *vertexSource, const char *
     glBindAttribLocation(s->program, 7, "hdTexelsIn");
     glBindAttribLocation(s->program, 8, "filterBoundsIn");
     glBindAttribLocation(s->program, 9, "emissionUvIn");
+    glBindAttribLocation(s->program, 10, "viewPositionIn");
     glLinkProgram(s->program);
     glDeleteShader(vertex);
     glDeleteShader(fragment);

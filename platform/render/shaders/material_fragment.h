@@ -56,6 +56,9 @@
 #else
     "vec3 OutputColour(vec3 c) { return c; }\n"
 #endif
+#ifdef RENDER_LIGHTING
+    RENDER_LIGHTING
+#endif
     /* colour col with coverage cov (premultiplied), blended or opaque, faded with distance (vColour.a) */
     "vec4 BlendMaterial(vec3 col, float cov, bool blended) {\n"
     "    if (!blended) return vec4(col, cov);\n"
@@ -63,7 +66,10 @@
     "    if (semiMode == 3) return vec4(col * 0.25, 0.0);\n"
     "    return vec4(col, 0.0);\n"
     "}\n"
-    "void Out(vec3 col, float cov, bool blended, bool saturate) {\n"
+    "void Out(vec3 col, vec3 albedo, float cov, bool blended, bool saturate) {\n"
+#ifdef RENDER_LIGHTING
+    "    col = LightMaterial(col, albedo, cov);\n"
+#endif
 #ifdef RENDER_AUX_COLOUR
     "    vec3 unclamped = col;\n"
 #endif
@@ -188,12 +194,18 @@
     "    if (mode.z == 1) semi = vec4(0.0);\n"
     "    if (mode.z == 2) opaque = vec4(0.0);\n"
     "    if (opaque.a + semi.a < 0.004) discard;\n"
+#ifdef RENDER_LIGHTING
+    "    vec3 albedo = opaque.rgb;\n"
+#endif
     "    bool tinted = (mode.y & 1) == 0;\n"
     "    if (tinted) {\n"
     "        vec3 tint = TextureTint();\n"
     "        opaque.rgb *= tint;\n"
     "        semi.rgb *= tint;\n"
     "    }\n"
+#ifdef RENDER_LIGHTING
+    "    opaque.rgb = LightMaterial(opaque.rgb, albedo, opaque.a);\n"
+#endif
 #ifdef RENDER_AUX_COLOUR
     "    if (hdrActive) {\n"
     "        vec3 hdrOpaque = HdrMaterial(opaque.rgb, opaque.a);\n"
@@ -232,11 +244,14 @@
     "    return texelFetch(image, ivec2(clamp(floor(at) + 0.5, low, high)), 0);\n"
     "}\n"
     "void main() {\n"
+#ifdef RENDER_LIGHTING
+    "    SurfaceLighting();\n"
+#endif
     "    vec2 t = vTexel.xy / vTexel.z;\n"
     "    vec3 c = VertexColour();\n"
     "    float fade = vColour.a;\n"
     "    if (mode.x == 0) {\n"
-    "        Out(c, 1.0, semiMode >= 0, false);\n"
+    "        Out(c, c, 1.0, semiMode >= 0, false);\n"
     "        return;\n"
     "    }\n"
     "    int portPage = texturePage.x / 64 + 16 * ((texturePage.y / 256) & 1) + (texturePage.y >= 512 ? 32 : 0);\n"
@@ -249,7 +264,7 @@
     "        vec2 page = vec2(float(k % 8), float(k / 8)) * 256.0;\n"
     "        vec4 g = RgbaSample(portPages, page + t, page + low, page + high);\n"
     "        if (g.a < 0.004) discard;\n"
-    "        Out((mode.y & 1) == 0 ? g.rgb * c : g.rgb, g.a, semiMode >= 0, false);\n"
+    "        Out((mode.y & 1) == 0 ? g.rgb * c : g.rgb, g.rgb, g.a, semiMode >= 0, false);\n"
     "        return;\n"
     "    }\n"
     "    if (mode.w == 3) {\n"                 /* the platform's glyphs: premultiplied, with coverage */
@@ -257,7 +272,7 @@
     "        vec4 g = RgbaSample(glyphs, t * size / 256.0, vec2(0.5), size - 0.5);\n"
     "        if (g.a < 0.004) discard;\n"
     "        bool tinted = (mode.y & 1) == 0;\n"
-    "        Out(tinted ? g.rgb * TextureTint() : g.rgb, g.a, semiMode >= 0, tinted);\n"
+    "        Out(tinted ? g.rgb * TextureTint() : g.rgb, g.rgb, g.a, semiMode >= 0, tinted);\n"
     "        return;\n"
     "    }\n"
 #ifdef RENDER_FILTER
@@ -273,7 +288,7 @@
     "            if (h.a < 0.25) discard;\n"
     "            bool hdSemi = (mode.y & 64) != 0 || h.a < 0.75;\n"
     "            bool tinted = (mode.y & 1) == 0;\n"
-    "            Out(tinted ? h.rgb * TextureTint() : h.rgb, 1.0, semiMode >= 0 && hdSemi, tinted);\n"
+    "            Out(tinted ? h.rgb * TextureTint() : h.rgb, h.rgb, 1.0, semiMode >= 0 && hdSemi, tinted);\n"
     "            return;\n"
     "        }\n"
     "    }\n"
@@ -282,7 +297,7 @@
     "        if (c.a == 0.0) discard;\n"
     /* Match filtered/HD modulation: saturation precedes fade and blend weighting. */
     "        bool tinted = (mode.y & 1) == 0;\n"
-    "        Out(tinted ? c.rgb * TextureTint() : c.rgb, c.a, semiMode >= 0, tinted);\n"
+    "        Out(tinted ? c.rgb * TextureTint() : c.rgb, c.rgb, c.a, semiMode >= 0, tinted);\n"
     "        return;\n"
     "    }\n"
     "    uint texel = NativeTexel(uv);\n"
@@ -290,5 +305,5 @@
     "    bool semi = (texel & 0x8000u) != 0u;\n"
     "    vec3 t8 = vec3(float(texel & 31u), float((texel >> 5) & 31u), float((texel >> 10) & 31u)) * 8.0 / 255.0;\n"
     "    bool tinted = (mode.y & 1) == 0;\n"
-    "    Out(tinted ? t8 * TextureTint() : t8, 1.0, semiMode >= 0 && semi, tinted);\n"
+    "    Out(tinted ? t8 * TextureTint() : t8, t8, 1.0, semiMode >= 0 && semi, tinted);\n"
     "}\n"

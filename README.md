@@ -204,7 +204,10 @@ plus [dithered RGB565 and the original PC draw-distance levels](docs/RENDERERS.m
 N64 exposes three-point filtering, RGB5 precision, dithering and VI filters;
 its depth buffering is always enabled.
 Choose **Modern** for Auto resolution, depth testing, and Nearest or Bilinear
-filtering of the original world textures. Bilinear is the default.
+filtering of the original world textures. Bilinear is the default. Its independent
+**Dynamic lights** toggle adds coloured light from projectiles and explosion flashes,
+subtle blue engine lights and stronger blue active shield lights to nearby surfaces,
+with or without HDR bloom.
 Frame rate and draw distance are shared. HD replacements are shared by the
 hardware profiles.
 

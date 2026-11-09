@@ -100,6 +100,17 @@ colour clipping. The default is **85%**. **100%** uses PlayStation modulation.
 **50%** halves the tint, approximating the PC modulation on PlayStation
 textures. HUD and menu art use their own brightness.
 
+**Dynamic lights** (`modern_weapon_lights`, on by default) adds coloured,
+unshadowed point lights to rockets, missiles, plasma shots and electrobolts,
+plus fading explosion flashes. Each live ship emits subtle blue light from its
+engine, with a stronger blue light centred on the ship while its shield is active.
+Holding an unused shield does not emit shield light. Up to sixteen lights per view illuminate
+opaque track, scenery and ships, preserving their original shading. HUD, sky,
+shadow decals and translucent effects do not receive this lighting. Lights
+follow interpolated geometry and are independent for linked players. This
+setting works with HDR bloom off; without half-float targets it uses SDR.
+Lights do not cast shadows and can illuminate through nearby walls.
+
 **HDR bloom** (`modern_bloom`, on by default) uses the light above SDR white to
 add glow to Modern races. It also boosts the animated neon in Phenitia Park
 and a tunnel bulb in Gare d'Europa on PlayStation tracks. The renderer adds
@@ -111,7 +122,7 @@ to enable it for one run. The checkbox controls the saved preference.
 
 While racing, open the debug console with the backtick key and use
 **Graphics → Modern → Tonemapper** to compare the two presets. The control
-requires HDR bloom. **Classic** is saved as `original`.
+requires HDR bloom or dynamic lights. **Classic** is saved as `original`.
 **Soft Highlights** (`pbr_neutral_soft_shadows`) is the default. It uses Classic
 through a linear RGB peak of 0.15 and smoothly blends into full PBR Neutral
 by 0.75, favouring Classic in the midtones. The selection is saved as

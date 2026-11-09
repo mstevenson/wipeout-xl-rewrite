@@ -3,6 +3,7 @@
 #define RENDER_GL_PIPELINE_H
 #include "gl_api.h"
 #include "renderer.h"
+#include "point_lights.h"
 #include "../psx/gpu.h"
 #include <stdint.h>
 
@@ -58,6 +59,7 @@ typedef struct RenderPipeline {
     int (*submitNative)(const void *profile, const RenderNativeTarget *, const GpuDrawState *,
                         const GpuVertex *, int count);
     void (*flushNative)(const RenderNativeTarget *);
+    void (*lights)(const void *profile, const GpuLightSet *);
 } RenderPipeline;
 extern const RenderPipeline ps1Pipeline, pcPipeline, n64Pipeline, saturnPipeline, modernPipeline;
 const RenderPipeline *RenderGlPipeline(RendererId id);

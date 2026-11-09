@@ -119,6 +119,9 @@ static void ModernProfile(void)
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     assert(RenderSet(&portSettings.render, "modern_tonemapper", "unknown") && !RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bloom", "0") && RenderCommit());
+    assert(RenderResourcesFor(RenderCurrent()).hdr); /* lights work without bloom */
+    assert(RenderSet(&portSettings.render, "modern_weapon_lights", "0") && RenderCommit());
+    assert(!RenderResourcesFor(RenderCurrent()).hdr);
     assert(RenderSet(&portSettings.render, "modern_smooth_track_lighting", "0") && RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bilinear", "2") && !RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bilinear", "-1") && !RenderCommit());
@@ -131,6 +134,7 @@ static void ModernProfile(void)
     char *saved = SDL_LoadFile(PortSettingsPath(), NULL);
     assert(saved && strstr(saved, "modern_tonemapper = pbr_neutral_soft_shadows\n"));
     assert(strstr(saved, "modern_bilinear = 0\n"));
+    assert(strstr(saved, "modern_weapon_lights = 0\n"));
     assert(strstr(saved, "modern_smooth_track_lighting = 0\n"));
     SDL_free(saved);
     PortSettingsLoad();
@@ -138,6 +142,7 @@ static void ModernProfile(void)
     assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_MIN);
     assert(!RenderCurrent()->settings.modern.bilinear);
     assert(!RenderCurrent()->settings.modern.bloom);
+    assert(!RenderCurrent()->settings.modern.weaponLights);
     assert(!RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     assert(RenderSet(&portSettings.render, "modern_tonemapper", "original") && RenderCommit());
@@ -249,7 +254,7 @@ static void ResourcePolicyIsolation(void)
         {"pc_bilinear", "0"}, {"n64_three_point", "0"}, {"n64_dither", "0"},
         {"saturn_affine_textures", "0"}, {"saturn_mesh", "0"}, {"saturn_camera_aligned_sky", "1"},
         {"modern_bilinear", "0"}, {"modern_brightness", "50"}, {"modern_bloom", "0"},
-        {"modern_tonemapper", "pbr_neutral_soft_shadows"}, {"modern_smooth_track_lighting", "0"}
+        {"modern_tonemapper", "pbr_neutral_soft_shadows"}, {"modern_smooth_track_lighting", "0"}, {"modern_weapon_lights", "0"}
     };
     const RenderMaterial cases[] = {
         {.textured = 1, .bounds = 1},
@@ -298,6 +303,8 @@ static void ResourcePolicyIsolation(void)
     modern.settings.modern.smoothTrackLighting = 0;
     assert(RenderPrepare(&modern, &road).shade & SHADE_AFFINE_COLOUR);
     modern.settings.modern.bloom = 0;
+    assert(RenderResourcesFor(&modern).hdr);
+    modern.settings.modern.weaponLights = 0;
     assert(!RenderResourcesFor(&modern).hdr && RenderResourcesFor(&modern).originalTextures);
     puts("All five profiles isolate resource requirements and source-bound policy from inactive settings: OK");
 }
@@ -360,8 +367,8 @@ static void EnvironmentOverrides(void)
 
     for (int force = 0; force <= 1; force++) {
         SDL_SetEnvironmentVariable(env, "WIPEOUT_MODERN_BLOOM", force ? "1" : "0", true);
-        Load(force ? "ps1_renderer = modern\nmodern_bloom = 0\n"
-                   : "ps1_renderer = modern\nmodern_bloom = 1\n");
+        Load(force ? "ps1_renderer = modern\nmodern_weapon_lights = 0\nmodern_bloom = 0\n"
+                   : "ps1_renderer = modern\nmodern_weapon_lights = 0\nmodern_bloom = 1\n");
         assert(RenderCurrent()->id == RENDER_MODERN);
         assert(portSettings.render.modern.bloom == !force);
         assert(RenderCurrent()->settings.modern.bloom == force);

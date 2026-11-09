@@ -38,6 +38,7 @@
     X(PFNGLUNIFORM1IPROC, glUniform1i) \
     X(PFNGLUNIFORM1FPROC, glUniform1f) \
     X(PFNGLUNIFORM2FPROC, glUniform2f) \
+    X(PFNGLUNIFORM4FVPROC, glUniform4fv) \
     X(PFNGLUNIFORM4IPROC, glUniform4i) \
     X(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers) \
     X(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer) \
@@ -111,6 +112,7 @@ ASYNC_GL_FUNCTIONS(DECLARE_GL)
 #define glUniform1i p_glUniform1i
 #define glUniform1f p_glUniform1f
 #define glUniform2f p_glUniform2f
+#define glUniform4fv p_glUniform4fv
 #define glUniform4i p_glUniform4i
 #define glGenFramebuffers p_glGenFramebuffers
 #define glBindFramebuffer p_glBindFramebuffer

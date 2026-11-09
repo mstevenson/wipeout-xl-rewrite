@@ -216,6 +216,7 @@ static const struct {
     OPTION("modern_bilinear", modern.bilinear),
     OPTION("modern_resample", modern.resample),
     OPTION("modern_bloom", modern.bloom),
+    OPTION("modern_weapon_lights", modern.weaponLights),
     OPTION("modern_smooth_track_lighting", modern.smoothTrackLighting),
     OPTION("saturn_quantize_vertices", saturn.quantizeVertices), OPTION("saturn_affine_textures", saturn.affineTextures),
     OPTION("saturn_colour_precision", saturn.colourPrecision), OPTION("saturn_mesh", saturn.mesh),

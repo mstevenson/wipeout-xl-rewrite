@@ -801,6 +801,11 @@ void GteInterpolateSky(const GtePrecise *p, float along, GtePrecise *out)
     out->skyRoll += remainderf(pastSky.skyRoll-p->skyRoll,6.28318530718f)*(1-along);
 }
 
+float GtePresentationAlong(float along)
+{
+    return along >= 1.0f || !keepPast || pastFrame != preciseFrame - 1 || CameraCut() ? 1.0f : along;
+}
+
 int GteViewAt(const GtePrecise *p, float along, double view[3])
 {
     PastEntry *entry;

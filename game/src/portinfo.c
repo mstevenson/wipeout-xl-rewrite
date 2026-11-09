@@ -16,6 +16,7 @@ static uint64_t raceFrame; /* the game frame the race was last drawn in, + 1 (0:
 void PortInfoRaceDrawn(void)
 {
     raceFrame = PortGameFrames() + 1;
+    PortCaptureWeaponLights(); /* Port: snapshot weapons before presentation can interpolate. */
 }
 
 /* Port: the renderer selects fixture metadata by course number. */

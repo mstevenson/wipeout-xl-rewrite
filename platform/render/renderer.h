@@ -24,7 +24,7 @@ typedef struct SaturnRenderSettings {
 enum { MODERN_BRIGHTNESS_MIN = 50, MODERN_BRIGHTNESS_DEFAULT = 85, MODERN_BRIGHTNESS_MAX = 100 };
 enum { MODERN_TONEMAP_ORIGINAL, MODERN_TONEMAP_SOFT_SHADOWS };
 typedef struct ModernRenderSettings {
-    int resample, scale, brightness, bilinear, bloom, tonemapper, smoothTrackLighting;
+    int resample, scale, brightness, bilinear, bloom, tonemapper, smoothTrackLighting, weaponLights;
 } ModernRenderSettings;
 typedef struct RenderSettings {
     RendererId selection; /* runtime override; AUTO follows the loaded platform */
@@ -37,7 +37,7 @@ typedef struct RenderSettings {
     ModernRenderSettings modern;
     int modernBloomOverride; /* 0 follows the setting, -1 forces off, 1 forces on */
 } RenderSettings;
-#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0,1}, {1,1,1,1,1,1,1,0}, {1,1,1,1,1,1,1}, {1,1,1,1,0,0,0,1}, {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1}, 0 }
+#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0,1}, {1,1,1,1,1,1,1,0}, {1,1,1,1,1,1,1}, {1,1,1,1,0,0,0,1}, {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1,1}, 0 }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef union RenderProfileSettings {

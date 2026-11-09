@@ -14,6 +14,40 @@
     "vec3 LinearColour(vec3 c) {\n" \
     "    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), c));\n" \
     "}\n"
+/* Flat geometric normals keep the original faceted models. Evaluate derivatives
+   before texture coverage branches; add light in linear space, then return to
+   the encoded colour used by the console's blend operations and HDR transport. */
+#define RENDER_LIGHTING \
+    LINEAR_COLOUR \
+    "in vec3 vViewPosition;\n" \
+    "flat in float receivesLight;\n" \
+    "uniform int lightCount;\n" \
+    "uniform vec4 lightPosition[16], lightColour[16];\n" \
+    "vec3 illumination;\n" \
+    "void SurfaceLighting() {\n" \
+    "    vec3 normal = cross(dFdx(vViewPosition), dFdy(vViewPosition));\n" \
+    "    float length2 = dot(normal, normal);\n" \
+    "    illumination = vec3(0.0);\n" \
+    "    if (receivesLight < 0.5 || lightCount == 0 || length2 < 0.00000001 || mode.z == 3) return;\n" \
+    "    normal *= inversesqrt(length2);\n" \
+    "    if (dot(normal, vViewPosition) > 0.0) normal = -normal;\n" \
+    "    for (int i = 0; i < 16; i++) {\n" \
+    "        if (i >= lightCount) break;\n" \
+    "        vec3 delta = lightPosition[i].xyz - vViewPosition;\n" \
+    "        float distance2 = dot(delta, delta);\n" \
+    "        float radius2 = lightPosition[i].w * lightPosition[i].w;\n" \
+    "        float falloff = max(1.0 - distance2 / radius2, 0.0);\n" \
+    "        float diffuse = max(dot(normal, delta) * inversesqrt(max(distance2, 1.0)), 0.0);\n" \
+    "        illumination += lightColour[i].rgb * lightColour[i].w * diffuse * falloff * falloff;\n" \
+    "    }\n" \
+    "}\n" \
+    "vec3 LightMaterial(vec3 colour, vec3 albedo, float coverage) {\n" \
+    "    if (coverage <= 0.0 || all(equal(illumination, vec3(0.0)))) return colour;\n" \
+    "    vec3 lit = LinearColour(max(colour / coverage, 0.0)) +\n" \
+    "               LinearColour(max(albedo / coverage, 0.0)) * illumination;\n" \
+    "    return mix(lit * 12.92, 1.055 * pow(lit, vec3(1.0 / 2.4)) - 0.055,\n" \
+    "               step(vec3(0.0031308), lit)) * coverage;\n" \
+    "}\n"
 #define RENDER_AUX_FLAGS
 #define RENDER_AUX_COLOUR \
     "uniform bool hdrActive;\n" \
@@ -43,6 +77,28 @@ static const char *modernFragmentSource =
 ;
 static RenderProgram modernProgram;
 static GLint uniformWorldBrightness, uniformHdrActive;
+static GLint uniformLightCount, uniformLightPosition, uniformLightColour;
+
+static void Lights(const void *profile, const GpuLightSet *lights)
+{
+    const ModernRenderSettings *settings = profile;
+    int count = settings->weaponLights && lights ? SDL_clamp(lights->count, 0, GPU_POINT_LIGHTS) : 0;
+    float position[GPU_POINT_LIGHTS][4], colour[GPU_POINT_LIGHTS][4];
+    for (int i = 0; i < count; i++) {
+        const GpuPointLight *light = &lights->lights[i];
+        for (int k = 0; k < 3; k++) {
+            position[i][k] = light->position[k];
+            colour[i][k] = light->colour[k];
+        }
+        position[i][3] = SDL_max(light->radius, 1.0f);
+        colour[i][3] = light->intensity;
+    }
+    glUniform1i(uniformLightCount, count);
+    if (count) {
+        glUniform4fv(uniformLightPosition, count, &position[0][0]);
+        glUniform4fv(uniformLightColour, count, &colour[0][0]);
+    }
+}
 
 static void Bind(const void *profile, int hdrActive)
 {
@@ -58,6 +114,9 @@ static RenderProgram *ModernScene(void)
         GLuint program = modernProgram.program;
         uniformWorldBrightness = glGetUniformLocation(program, "worldBrightness");
         uniformHdrActive = glGetUniformLocation(program, "hdrActive");
+        uniformLightCount = glGetUniformLocation(program, "lightCount");
+        uniformLightPosition = glGetUniformLocation(program, "lightPosition");
+        uniformLightColour = glGetUniformLocation(program, "lightColour");
         glUniform1f(uniformWorldBrightness, 1.0f);
     }
     return &modernProgram;
@@ -80,7 +139,7 @@ static const char *bloomFragmentSource =
     "uniform ivec4 crop;\n"
     "uniform vec2 stepSize;\n"
     "uniform int pass, downsample;\n"
-    "uniform bool softShadows;\n"
+    "uniform bool softShadows, bloomEnabled;\n"
     "in vec2 uv;\n"
     "layout(location = 0) out vec4 colour;\n"
     "layout(location = 1) out vec4 coverage;\n"
@@ -144,7 +203,7 @@ static const char *bloomFragmentSource =
     "        vec3 scene = LinearColour(max(texelFetch(source, p, 0).rgb, original.rgb));\n"
     "        vec2 glowSize = float(downsample) * vec2(textureSize(blurred, 0));\n"
     "        vec3 glow = texture(blurred, (vec2(rel) + 0.5) / glowSize).rgb;\n"
-    "        vec3 hdr = scene + glow * 0.25;\n"
+    "        vec3 hdr = scene + (bloomEnabled ? glow * 0.25 : vec3(0.0));\n"
     "        vec3 mapped = ToneMap(hdr);\n"
     /* Keep more of the original midtone colour as the blend approaches the highlights. */
     "        if (softShadows) {\n"
@@ -159,11 +218,11 @@ enum { BLOOM_EXTRACT = 1, BLOOM_BLUR, BLOOM_RESOLVE };
 enum { BLOOM_COMPOSITE = 2, BLOOM_TARGETS = 3 };
 static RenderProgram bloomProgram;
 static GLuint bloomArray, bloomTextures[BLOOM_TARGETS], bloomTargets[BLOOM_TARGETS];
-static GLint bloomCrop, bloomStep, bloomDownsample, bloomSoftShadows;
+static GLint bloomCrop, bloomStep, bloomDownsample, bloomSoftShadows, bloomEnabled;
 static int bloomWidth, bloomHeight, bloomDivisor, bloomReady;
 static struct {
     RenderPictureKey picture;
-    int tonemapper;
+    int tonemapper, enabled;
 } bloomCache;
 
 static void BloomInit(void)
@@ -179,6 +238,7 @@ static void BloomInit(void)
     bloomStep = glGetUniformLocation(program, "stepSize");
     bloomDownsample = glGetUniformLocation(program, "downsample");
     bloomSoftShadows = glGetUniformLocation(program, "softShadows");
+    bloomEnabled = glGetUniformLocation(program, "bloomEnabled");
     glGenVertexArrays(1, &bloomArray);
 }
 
@@ -210,10 +270,10 @@ static int BloomResize(int w, int h, int divisor)
     return bloomReady = 1;
 }
 
-static void BloomPicture(const RenderPresent *p, int tonemapper)
+static void BloomPicture(const RenderPresent *p, int tonemapper, int enabled)
 {
     if (RenderGlPictureMatches(&bloomCache.picture, p, p->hdrTexture) &&
-        bloomCache.tonemapper == tonemapper) return;
+        bloomCache.tonemapper == tonemapper && bloomCache.enabled == enabled) return;
 
     glActiveTexture(GL_TEXTURE3);
     glBindTexture(GL_TEXTURE_2D, p->texture);
@@ -227,23 +287,24 @@ static void BloomPicture(const RenderPresent *p, int tonemapper)
 
     int w = (bloomWidth + bloomDivisor - 1) / bloomDivisor;
     int h = (bloomHeight + bloomDivisor - 1) / bloomDivisor;
-    glViewport(0, 0, w, h);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, bloomTargets[0]);
-    glBindTexture(GL_TEXTURE_2D, p->hdrTexture);
-    glUniform1i(bloomProgram.uniformPass, BLOOM_EXTRACT);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    if (enabled) {
+        glViewport(0, 0, w, h);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, bloomTargets[0]);
+        glBindTexture(GL_TEXTURE_2D, p->hdrTexture);
+        glUniform1i(bloomProgram.uniformPass, BLOOM_EXTRACT);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    /* The bilinear tap pairs reconstruct a contiguous nine-texel kernel. */
-    glUniform1i(bloomProgram.uniformPass, BLOOM_BLUR);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, bloomTargets[1]);
-    glBindTexture(GL_TEXTURE_2D, bloomTextures[0]);
-    glUniform2f(bloomStep, 1.0f / w, 0.0f);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, bloomTargets[0]);
-    glBindTexture(GL_TEXTURE_2D, bloomTextures[1]);
-    glUniform2f(bloomStep, 0.0f, 1.0f / h);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-
+        /* The bilinear tap pairs reconstruct a contiguous nine-texel kernel. */
+        glUniform1i(bloomProgram.uniformPass, BLOOM_BLUR);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, bloomTargets[1]);
+        glBindTexture(GL_TEXTURE_2D, bloomTextures[0]);
+        glUniform2f(bloomStep, 1.0f / w, 0.0f);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, bloomTargets[0]);
+        glBindTexture(GL_TEXTURE_2D, bloomTextures[1]);
+        glUniform2f(bloomStep, 0.0f, 1.0f / h);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+    }
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, bloomTargets[BLOOM_COMPOSITE]);
     glViewport(0, 0, bloomWidth + 2, bloomHeight + 2);
     glActiveTexture(GL_TEXTURE2);
@@ -252,9 +313,11 @@ static void BloomPicture(const RenderPresent *p, int tonemapper)
     glBindTexture(GL_TEXTURE_2D, p->hdrTexture);
     glUniform1i(bloomProgram.uniformPass, BLOOM_RESOLVE);
     glUniform1i(bloomSoftShadows, tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
+    glUniform1i(bloomEnabled, enabled);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     bloomCache.picture = RenderGlPictureKey(p, p->hdrTexture);
     bloomCache.tonemapper = tonemapper;
+    bloomCache.enabled = enabled;
 }
 
 static void ModernPresent(const void *profile, const RenderPresent *p)
@@ -262,7 +325,7 @@ static void ModernPresent(const void *profile, const RenderPresent *p)
     const ModernRenderSettings *settings = profile;
     GLenum filter = settings->resample ? GL_LINEAR : GL_NEAREST;
     int h = p->bottom - p->top;
-    if (!settings->bloom || !p->race || !p->hdrTexture || p->right <= p->left || h <= 0 ||
+    if ((!settings->bloom && !settings->weaponLights) || !p->race || !p->hdrTexture || p->right <= p->left || h <= 0 ||
         p->x1 <= p->x0 || p->y0 == p->y1) {
         RenderGlPresentDirect(p, filter);
         return;
@@ -283,7 +346,7 @@ static void ModernPresent(const void *profile, const RenderPresent *p)
     /* Size the bloom buffer in game pixels so the blur taps stay adjacent. */
     int divisor = SDL_max(2, (3 * p->scale + 1) / 2);
     if (BloomResize(crop.right - crop.left, h, divisor)) {
-        BloomPicture(&crop, settings->tonemapper);
+        BloomPicture(&crop, settings->tonemapper, settings->bloom);
         shown.framebuffer = bloomTargets[BLOOM_COMPOSITE];
         shown.left = p->left - crop.left + 1;
         shown.right = p->right - crop.left + 1;
@@ -309,4 +372,5 @@ static void ModernDestroy(void)
     bloomWidth = bloomHeight = bloomDivisor = bloomReady = 0;
 }
 
-const RenderPipeline modernPipeline = {ModernScene, ModernPresent, ModernDestroy, Bind};
+const RenderPipeline modernPipeline = {.scene = ModernScene, .present = ModernPresent,
+    .destroy = ModernDestroy, .bind = Bind, .lights = Lights};
