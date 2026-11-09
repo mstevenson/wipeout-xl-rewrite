@@ -1745,6 +1745,7 @@ void InitShield(ShipData *ships, WeaponShape *slots, WeaponData *w, WeaponData *
             SetSkeletonDirectionHPR(slots[w->shapeNo].shapePtr->skeleton, ships[w->owner].hdg, ships[w->owner].pitch, ships[w->owner].roll);
             w->update = UpdateShield;
             ships[w->owner].attr |= SHIELDED;
+            PortSetShieldFlash(w->owner, 0, 0); /* Port: start the shield light at its idle tint. */
             return;
         }
     }
@@ -1823,6 +1824,8 @@ void UpdateShield(ShipData *ships, WeaponShape *shapes, WeaponData *weapon, Weap
             SetVolume(ambientVoice1, 0);
         }
     }
+    /* Port: later weapon slots can register a hit after this shield has drawn. */
+    PortSetShieldFlash(weapon->owner, shieldRed[weapon->owner], shieldGreen[weapon->owner]);
     if (!(ships[weapon->owner].attr & VIEW_IN) || weapon->owner != ownShip) {
         SetSkeletonPosition(shapes[weapon->shapeNo].shapePtr->skeleton, weapon->pos.vx, weapon->pos.vy, weapon->pos.vz);
         SetSkeletonDirectionHPR(shapes[weapon->shapeNo].shapePtr->skeleton, ships[weapon->owner].hdg, ships[weapon->owner].pitch, ships[weapon->owner].roll);

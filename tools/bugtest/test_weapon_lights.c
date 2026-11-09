@@ -94,12 +94,30 @@ int main(void)
     assert(captured[2].light.radius > captured[1].light.radius);
     for (int i = 0; i < 3; i++) assert(captured[i].light.colour[2] > captured[i].light.colour[1]);
     unsigned engine0 = captured[0].id, engine1 = captured[1].id, shield1 = captured[2].id;
+    GpuPointLight idleShield = captured[2].light;
+    PortSetShieldFlash(1, 245, 0); /* Wall hit. */
+    PortCaptureWeaponLights();
+    GpuPointLight wallFlash = captured[2].light;
+    assert(wallFlash.colour[0] > wallFlash.colour[2] && wallFlash.colour[1] < idleShield.colour[1]);
+    PortSetShieldFlash(1, 245, 245); /* Weapon hit, with both channels flashing. */
+    PortCaptureWeaponLights();
+    GpuPointLight weaponFlash = captured[2].light;
+    assert(weaponFlash.colour[0] == wallFlash.colour[0] && weaponFlash.colour[1] > weaponFlash.colour[2]);
+    PortSetShieldFlash(1, 125, 125);
+    PortCaptureWeaponLights();
+    assert(captured[2].light.colour[0] < weaponFlash.colour[0]);
+    assert(captured[2].light.colour[1] < weaponFlash.colour[1]);
+    assert(captured[2].light.colour[2] > weaponFlash.colour[2]);
+    assert(captured[2].light.radius == idleShield.radius && captured[2].light.intensity == idleShield.intensity);
+    assert(captured[2].id == shield1 && captured[1].id == engine1 && captured[1].light.colour[2] == 1);
     ships[1].attr &= ~SHIELDED;
     weaponIndex = NULL;
     PortCaptureWeaponLights(); assert(capturedCount == 2);
     assert(captured[0].id == engine0 && captured[1].id == engine1);
     ships[1].attr |= SHIELDED;
+    PortSetShieldFlash(1, 0, 0);
     PortCaptureWeaponLights(); assert(capturedCount == 3 && captured[2].id == shield1);
+    for (int i = 0; i < 3; i++) assert(captured[2].light.colour[i] == idleShield.colour[i]);
     shipIndex = NULL;
     PortCaptureWeaponLights(); assert(!capturedCount);
     shipIndex = ships; weaponIndex = weapons;

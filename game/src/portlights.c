@@ -8,6 +8,16 @@ extern ShipData *shipIndex;
 extern int ownShip;
 extern Explosion explosions[];
 
+static struct {
+    int red, green;
+} shieldFlash[15];
+
+void PortSetShieldFlash(int ship, int red, int green)
+{
+    shieldFlash[ship].red = red;
+    shieldFlash[ship].green = green;
+}
+
 /* Apply the skeleton chain without GetSkeletonMatrix's cache writes or GTE side effects. */
 static void LightView(const Skeleton *skeleton, double p[3])
 {
@@ -87,10 +97,16 @@ void PortCaptureWeaponLights(void)
         sources[count++] = Light(2048u + (unsigned)i, 1, x, y, z,
                                   1000, 0.05f, 0.25f, 1, 0.35f);
         /* The inventory weapon is not an active shield. Read its live flag. */
-        if (ship->attr & SHIELDED)
+        if (ship->attr & SHIELDED) {
+            float red = shieldFlash[i].red / 255.0f;
+            float green = shieldFlash[i].green / 255.0f;
+            /* Hits raise red alone or both channels. The shell's blue varies per vertex. */
+            float idle = 1.0f - red;
             sources[count++] = Light(4096u + (unsigned)i, 1,
                                       ship->ppivot.vx, ship->ppivot.vy, ship->ppivot.vz,
-                                      1600, 0.08f, 0.32f, 1, 1.8f);
+                                      1600, idle * 0.08f + red, idle * 0.32f + green,
+                                      idle + red * 0.12f, 1.8f);
+        }
     }
     PsxCaptureLights(sources, count);
 }

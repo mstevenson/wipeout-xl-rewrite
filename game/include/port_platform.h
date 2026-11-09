@@ -59,6 +59,7 @@ void PortExactDepth(int on);
 int PortGameInfo(char *out, int size);
 void PortInfoRaceDrawn(void);
 void PortCaptureWeaponLights(void); /* read-only presentation snapshot */
+void PortSetShieldFlash(int ship, int red, int green); /* shield tint at draw time */
 int PortLogoFields(int fields); /* how long a start-up logo is shown: the console's, or none (platform/main.c) */
 /* Widescreen (the settings): how far the picture reaches beyond each side of the console's 320 columns, in
    console pixels; 0 for the console's 4:3. A race's scene is shown wide (the game says so every frame it

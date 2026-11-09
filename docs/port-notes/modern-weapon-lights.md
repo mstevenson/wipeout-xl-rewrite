@@ -5,8 +5,9 @@ saved as `modern_weapon_lights` (retained for settings compatibility after the U
 electrobolts blue and plasma violet. Additive explosions emit short, fading
 flashes using their source tint. Smoke, subtractive effects, delayed launches
 and the local player's plasma charge bar do not emit light. Each live ship also
-emits subtle blue engine light, with a stronger blue light while `SHIELDED` is
-set. These ship lights use the same toggle and remain independent of bloom.
+emits subtle blue engine light, with a stronger light while `SHIELDED` is set.
+The shield light is blue at idle and follows the shield's hit flash as it fades.
+These ship lights use the same toggle and remain independent of bloom.
 
 ## Implementation
 
@@ -20,6 +21,11 @@ nose vector, with the same -15 vertical offset. Engine radius/intensity are
 1000/0.35; shield radius/intensity are 1600/1.8. Shield light is centred on the
 ship and checks the active flag, not the inventory slot. Destroyed and
 uninitialised ships are excluded; cockpit and off-screen ships remain eligible.
+`InitShield` clears the saved tint on activation. `UpdateShield` copies the
+decayed red and green channels immediately before drawing the shell or cockpit
+overlay. A hit in a later weapon slot appears on both the shield and its light
+on the next update. The light blends the idle blue toward the red or yellow hit
+tint, using a single blue value for the shell's varying vertex blues.
 Stable, distinct source IDs preserve interpolation when shields activate or
 expire. The source pool holds 96 records; the shader budget remains sixteen.
 
@@ -106,6 +112,18 @@ new textures, normal maps, shadow maps or simulation changes.
 - Renamed the checkbox and related help/documentation to **Dynamic lights**;
   retained the saved key and internal field for compatibility. The updated
   renderer UI navigation/toggle regression passed.
+- Shield flash tint: `weapon.c` adds presentation calls in `InitShield` and
+  `UpdateShield`. `port_platform.h` declares `PortSetShieldFlash`, and
+  `portlights.c` stores the per-ship tint and applies it in
+  `PortCaptureWeaponLights`. The hooks write to port-owned metadata and use
+  existing ship indices and channels. The macOS build, CPU and GPU bugtests,
+  and compiler diagnostics for both game source files passed. The B0 oracle
+  comparison remains blocked by the missing snapshot.
+- A fixed-step US PlayStation race in Modern confirmed that a scripted wall
+  collision produces a red light and fades back to idle blue. Injecting the two
+  weapon flash channels after the shield draw left the light blue for that
+  frame. The next update applied both channels, and subsequent updates faded
+  back to the original idle RGB.
 
 No performance guarantee or new console lockstep result is claimed. Split-screen
 state separation is covered by the second-game build and existing CPU suite;
