@@ -46,6 +46,7 @@ typedef struct FrameCapPrim {
 
 typedef struct FrameCapFrame {
     RenderFrame render;  /* policy used when this frame was drawn */
+    RenderSettings rendererIni; /* full configuration for the diagnostic export */
     uint64_t gameFrame;   /* the game's Swap count (a picture between frames: the frame it moves on from) */
     uint32_t number;      /* the recorded frames' running count (each its own) */
     float between;        /* a picture drawn between two of the game's frames: how far along (0 < between < 1), its

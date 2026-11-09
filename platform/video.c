@@ -10,6 +10,7 @@
 #include "link.h"
 #include "platform.h"
 #include "psx/gpu.h"
+#include "render/saturn_native.h"
 #include "psx/psx_io.h"
 #include "settings.h"
 #include "region.h"
@@ -153,6 +154,7 @@ void PortSwapInterval(int vsync)
 void PortVideoShutdown(void)
 {
     GpuRendererShutdown();
+    SaturnNativeShutdown();
     DebugUiShutdown();
 #ifdef PORT_SECOND_GAME
     if (portConfig.secondPlayer) {

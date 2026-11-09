@@ -48,11 +48,7 @@ static const char *pcDisplayFragment =
 
 static GLuint displayProgram, displayArray, displayTexture, displayFramebuffer;
 static GLint displayOrigin;
-static struct {
-    GLuint source;
-    uint64_t revision;
-    int x, y, w, h;
-} displayCache;
+static RenderPictureKey displayCache;
 
 static void PcDisplayInit(void)
 {
@@ -70,47 +66,34 @@ static void PcDisplayInit(void)
     if (!linked) { SDL_Log("PC RGB565 program failed to link"); abort(); }
     displayOrigin = glGetUniformLocation(displayProgram, "origin");
     glGenVertexArrays(1, &displayArray);
-    glGenFramebuffers(1, &displayFramebuffer);
-    glGenTextures(1, &displayTexture);
 }
 
 static void PcQuantizePicture(const RenderPresent *p, int w, int h)
 {
-    if (displayCache.source == p->texture && displayCache.revision == p->revision &&
-        displayCache.x == p->left && displayCache.y == p->top && displayCache.w == w && displayCache.h == h) return;
+    if (RenderGlPictureMatches(&displayCache, p, p->texture)) return;
 
     GLint destination, previousProgram;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &destination);
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     PcDisplayInit();
     glActiveTexture(GL_TEXTURE0);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, displayFramebuffer);
-    if (displayCache.w != w || displayCache.h != h) {
-        glBindTexture(GL_TEXTURE_2D, displayTexture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, displayTexture, 0);
-        if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    if (displayCache.right - displayCache.left != w || displayCache.bottom - displayCache.top != h) {
+        if (!RenderGlResizeTarget(&displayTexture, &displayFramebuffer, w, h,
+                                  GL_RGBA8, GL_UNSIGNED_BYTE, GL_NEAREST)) {
             SDL_Log("PC RGB565 framebuffer incomplete");
             abort();
         }
     }
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, displayFramebuffer);
     glBindTexture(GL_TEXTURE_2D, p->texture);
-    glUseProgram(displayProgram);
+    RenderGlBeginFullscreen(displayProgram, displayArray);
     glUniform2f(displayOrigin, (float)p->left, (float)p->top);
-    glBindVertexArray(displayArray);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
     glDisable(GL_DITHER);
     glViewport(0, 0, w, h);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glUseProgram((GLuint)previousProgram);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)destination);
-    displayCache.source = p->texture;
-    displayCache.revision = p->revision;
-    displayCache.x = p->left; displayCache.y = p->top;
-    displayCache.w = w; displayCache.h = h;
+    displayCache = RenderGlPictureKey(p, p->texture);
 }
 
 static void PcPresent(const void *profile, const RenderPresent *p)
@@ -135,8 +118,7 @@ static void PcDestroy(void)
     if (displayFramebuffer) glDeleteFramebuffers(1, &displayFramebuffer);
     if (displayTexture) glDeleteTextures(1, &displayTexture);
     displayProgram = displayArray = displayFramebuffer = displayTexture = 0;
-    displayCache.source = 0;
-    displayCache.w = displayCache.h = 0;
+    displayCache = (RenderPictureKey){0};
 }
 
 const RenderPipeline pcPipeline = {PcScene, PcPresent, PcDestroy};

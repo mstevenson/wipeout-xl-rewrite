@@ -15,7 +15,7 @@ static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
         s.shade |= SHADE_PS1_COLOUR;
     }
     if (!m->ui) {
-        s.filter = p->mesh ? RENDER_SAMPLE_MESH : RENDER_SAMPLE_SATURN_ALPHA;
+        s.coverage = p->mesh ? RENDER_COVERAGE_MESH : RENDER_COVERAGE_HALF;
     }
     return s;
 }
@@ -32,11 +32,12 @@ static RenderGeometry Geometry(const void *profile)
     return (RenderGeometry){0, 1, 1, RENDER_LIGHT_PS1};
 }
 
-static RenderResources Resources(const void *profile)
+static RenderPacketPolicy Packets(const void *profile)
 {
     const SaturnRenderSettings *settings = profile;
-    return (RenderResources){.nativeQuads = settings->affineTextures,
-                             .alphaMesh = !settings->mesh, .cameraAlignedSky = settings->cameraAlignedSky};
+    return (RenderPacketPolicy){.nativeQuads = settings->affineTextures, .nativeSky = 1, .shadowMask = 1};
 }
 
-const Renderer saturnRenderer = {"Sega Saturn", Prepare, Depth, Geometry, Resources};
+const Renderer saturnRenderer = {
+    .name = "Sega Saturn", .prepare = Prepare, .depth = Depth, .geometry = Geometry, .packets = Packets,
+};

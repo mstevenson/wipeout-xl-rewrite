@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #define RENDER_MAX_SCALE 12
+#define MAX_WIDE_MARGIN 400
 
 typedef struct RenderProgram {
     GLuint program;
@@ -21,12 +22,42 @@ typedef struct RenderPresent {
     GLuint hdrTexture, hdrMask;
     int hdrWidth; /* Full wide picture, shared by the window crop and recorder. */
 } RenderPresent;
+/* Source pixels only. Each effect adds its own settings to this cache key. */
+typedef struct RenderPictureKey {
+    GLuint texture;
+    uint64_t revision;
+    int left, top, right, bottom;
+} RenderPictureKey;
+RenderPictureKey RenderGlPictureKey(const RenderPresent *picture, GLuint texture);
+int RenderGlPictureMatches(const RenderPictureKey *key, const RenderPresent *picture, GLuint texture);
+void RenderGlBeginFullscreen(GLuint program, GLuint array);
+int RenderGlResizeTarget(GLuint *texture, GLuint *framebuffer, int width, int height,
+                         GLenum format, GLenum type, GLenum filter);
+
+/* Current draw area and shared operations available to a native draw path.
+   Coordinates are logical unless explicitly marked as framebuffer pixels. */
+typedef struct RenderNativeTarget {
+    int left, top, right, bottom, x, width, scale;
+    int pixelWidth, pixelHeight;
+    float targetWidth, targetHeight, origin, scaleX, scaleY, rasterX, rasterY;
+    GLuint vram;
+    const uint16_t (*vramLow)[VRAM_WIDTH], (*vramHigh)[VRAM_WIDTH];
+    uint64_t pass; /* advances at each draw-area clear, independent of picture revision */
+    void (*begin)(int flushAll);
+    void (*bind)(int uploadVram);
+    void (*changed)(float x, float y, float width, float height);
+    void (*markDrawn)(float left, float top, float right, float bottom);
+    void (*point)(const GpuDrawState *, const GpuVertex *, unsigned shade);
+} RenderNativeTarget;
 typedef struct RenderPipeline {
     RenderProgram *(*scene)(void);
     void (*present)(const void *profile, const RenderPresent *);
     void (*destroy)(void);
     /* Bind private uniforms/resources after the common scene bindings. */
     void (*bind)(const void *profile, int hdrActive);
+    int (*submitNative)(const void *profile, const RenderNativeTarget *, const GpuDrawState *,
+                        const GpuVertex *, int count);
+    void (*flushNative)(const RenderNativeTarget *);
 } RenderPipeline;
 extern const RenderPipeline ps1Pipeline, pcPipeline, n64Pipeline, saturnPipeline, modernPipeline;
 const RenderPipeline *RenderGlPipeline(RendererId id);
@@ -37,17 +68,4 @@ void RenderGlPresentDirect(const RenderPresent *p, GLenum filter);
 /* Seed auxiliary colour from SDR and clear coverage, without changing its owner. */
 void RenderGlSeedHdr(GLuint source, GLuint target, int x, int y, int w, int h);
 void RenderGlSeedShutdown(void);
-void RenderSaturnPixels(const uint8_t *rgba, int width, int height, int margin,
-    int left, int top, int right, int bottom, float targetW, float targetH, float originX, float scaleX, float scaleY);
-struct GpuDrawState;
-struct GpuVertex;
-struct SaturnNativePoly;
-int RenderSaturnQuadsPending(void);
-int RenderSaturnQuad(const struct SaturnNativePoly *p,const struct GpuVertex *v,
-    const struct GpuDrawState *state,uint64_t revision,int depth,float scaleX,float scaleY,int left,int top,int right,int bottom);
-void RenderSaturnFlushQuads(GLuint vram,int targetW,int targetH,float originX,float scaleX,float scaleY,int scale,
-    int left,int top,int right,int bottom);
-void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int width, int height,
-    uint64_t revision, const struct GpuDrawState *state, int originalScroll, int left, int top, int right, int bottom,
-    float cx, float cy, float targetW, float targetH, float originX, float scaleX, float scaleY, int scale);
 #endif

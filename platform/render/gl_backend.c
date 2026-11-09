@@ -39,7 +39,6 @@
 #include "../settings.h"
 
 #include "gl_pipeline.h"
-#include "saturn_native.h"
 #include <math.h>
 
 /* ---- state ---- */
@@ -68,7 +67,7 @@ static GLuint hdAtlas;               /* HD textures: the images in use (HdPlaced
 static GLuint vertexArray, vertexBuffer;
 static RenderProgram *scene;
 static const RenderPipeline *pipeline, *presentPipeline;
-static uint64_t pictureRevision[2], nextPictureRevision;
+static uint64_t pictureRevision[2], nextPictureRevision, drawPass;
 static int vramDirty = 1;
 static GLuint windowFramebuffer;     /* the window's own: 0, but on iOS SDL's view has one of its own */
 static int dirtyLeft, dirtyTop, dirtyRight, dirtyBottom;
@@ -76,7 +75,6 @@ static int areaX, areaY, areaW = VRAM_WIDTH, areaH = VRAM_HEIGHT;
 static int initialised;
 
 #define SCREEN_COLUMNS 320
-#define MAX_WIDE_MARGIN 400
 static int wideMargin;                         /* console pixels beyond each side; 0: no wide framebuffer */
 static GLuint wideFramebuffer, wideColour, wideDepth;
 /* The HDR draw FBO shares SDR colour and depth, keeping the draw buffer
@@ -118,12 +116,6 @@ typedef struct BatchVertex {
 static BatchVertex batch[BATCH_VERTICES];
 static int primitiveFilterBounds[4];
 static int batchCount, batchPoints;
-#define SATURN_MARGIN (MAX_WIDE_MARGIN * 11 / 10)
-#define SATURN_WIDTH (352 + 2*SATURN_MARGIN)
-static uint8_t saturnPixels[VRAM_HEIGHT][SATURN_WIDTH][4];
-static int saturnLeft=SATURN_WIDTH, saturnTop=VRAM_HEIGHT, saturnRight, saturnBottom;
-static void SaturnFlushPixels(void);
-static void SaturnFlushGpu(void);
 /* The console's two screen buffers occupy rows 0..255 and 256..511.
    Drawing the next buffer must not change presentation of the previous one. */
 typedef struct PictureOwner {
@@ -360,9 +352,6 @@ void GpuRendererShutdown(void)
     DeleteHdr(&wideHdr);
     RenderGlSeedShutdown();
     wideHdrDirty = 0;
-    SaturnNativeShutdown();
-    memset(saturnPixels, 0, sizeof(saturnPixels));
-    saturnLeft=SATURN_WIDTH;saturnTop=VRAM_HEIGHT;saturnRight=saturnBottom=0;
 }
 
 static void CreateGlyphTexture(void)
@@ -523,6 +512,7 @@ void GpuVramChanged(int x, int y, int w, int h)
 }
 
 static void Flush(void);
+static void FlushNative(void);
 
 void GpuSetPortPage(int page, const uint32_t *rgba)
 {
@@ -831,8 +821,7 @@ static void Flush(void)
     const GpuDrawState *s = &batchState;
 
     /* Only the profile-controlled shaders may dither; GL enables driver dithering by default. */
-    SaturnFlushGpu();
-    SaturnFlushPixels();
+    FlushNative();
     glDisable(GL_DITHER);
     if (!batchCount) {
         return;
@@ -1079,8 +1068,7 @@ static void FindHd(const GpuDrawState *state, const GpuVertex *vertices, int cou
 
 static void BeginMode(const GpuDrawState *state, int vertices, int points)
 {
-    SaturnFlushGpu();
-    SaturnFlushPixels();
+    FlushNative();
     if (batchCount && (batchPoints != points || !SameState(state, &batchState) || batchCount + vertices > BATCH_VERTICES ||
                        (state->textured && state->semi == 2))) {
         Flush();
@@ -1177,133 +1165,58 @@ static void ClearDrawn(int x, int y, int w, int h)
     }
 }
 
-static int saturnSkyDrawn;
-typedef struct SaturnDraw {
-    GpuDrawState source;
-    int noDepth;
-} SaturnDraw;
-
-static int SaturnSampleIndex(void *user, float u, float v)
+static void NativePoint(const GpuDrawState *state, const GpuVertex *vertex, unsigned shade)
 {
-    SaturnDraw *d = user;
-    /* Stabilize exact texel boundaries across CPU division and shader arithmetic. */
-    int x = (int)floorf(u+0.00001f) & 255, y = (int)floorf(v+0.00001f) & 255;
-    x = (x & ~(d->source.windowMaskX*8)) | ((d->source.windowOffsetX & d->source.windowMaskX)*8);
-    y = (y & ~(d->source.windowMaskY*8)) | ((d->source.windowOffsetY & d->source.windowMaskY)*8);
-    int py = (d->source.pageY + y) & 1023;
-    const uint16_t *row = py >= 512 ? psxVramHigh[py-512] : psxVram[py];
-    return (row[(d->source.pageX + x/4) & 1023] >> ((x&3)*4)) & 15;
+    BeginMode(state, 1, 1);
+    Add(vertex, shade);
 }
 
-static void SaturnEmit(void *user, int x, int y, uint16_t rgb, int blend, float depth, uint8_t alpha)
+static void BindNativeTarget(int upload)
 {
-    SaturnDraw *d = user;
-    GpuDrawState state = {0};
-    state.semi = blend == -2 ? 0 : blend; state.fade = alpha < 255;
-    if (blend == -2) rgb = 0; /* RGB destination shadow: half the destination. */
-    GpuVertex pixel = {0};
-    pixel.x = x / rasterX; pixel.y = y / rasterY; pixel.w = depth;
-    pixel.noDepth = d->noDepth; pixel.world = 1;
-    pixel.r = (uint8_t)((rgb & 31)*8); pixel.g = (uint8_t)(((rgb>>5)&31)*8);
-    pixel.b = (uint8_t)(((rgb>>10)&31)*8); pixel.a = alpha;
-    unsigned shade = SHADE_AFFINE_COLOUR | SHADE_PS1_COLOUR;
-    BeginMode(&state, 1, 1);
-    Add(&pixel, shade);
-}
-
-/* Aggregate ordered native writes as premultiplied colour/coverage. The final
-   overlay blends over prior compatibility draws; flush before the next such draw.
-   Optional depth uses the point path so it still shares the host depth buffer. */
-static void SaturnComposite(void *user, int x, int y, uint16_t rgb, int blend, float depth, uint8_t alpha)
-{
-    (void)user; (void)depth;
-    int px=x+SATURN_MARGIN;
-    if (px<0 || px>=SATURN_WIDTH || y<0 || y>=VRAM_HEIGHT) return;
-    uint8_t *out=saturnPixels[y][px];
-    unsigned a=blend >= 0 || blend == -2 ? (alpha+1)/2 : alpha;
-    if (a==255) {
-        /* Most road/scenery writes are opaque: avoid reading and blending the
-           previous pixel (including repeated writes along a distorted edge). */
-        out[0]=(uint8_t)((rgb&31)*8);
-        out[1]=(uint8_t)(((rgb>>5)&31)*8);
-        out[2]=(uint8_t)(((rgb>>10)&31)*8);
-        out[3]=255;
-    } else {
-        for(int c=0;c<3;c++) {
-            unsigned src=blend == -2 ? 0 : ((rgb>>(5*c))&31)*8;
-            out[c]=(uint8_t)((src*a+out[c]*(255-a)+127)/255);
-        }
-        out[3]=(uint8_t)(a+(out[3]*(255-a)+127)/255);
+    if (upload) {
+        glActiveTexture(GL_TEXTURE0);
+        UploadVram();
     }
-    if(px<saturnLeft) saturnLeft=px;
-    if(px>=saturnRight) saturnRight=px+1;
-    if(y<saturnTop) saturnTop=y;
-    if(y>=saturnBottom) saturnBottom=y+1;
-}
-
-static void SaturnFlushPixels(void)
-{
-    if(saturnRight<=saturnLeft || saturnBottom<=saturnTop) return;
-    UsePipeline(RENDER_SATURN);
-    glUseProgram(scene->program); BindTarget(0);
-    int left=saturnLeft-SATURN_MARGIN, right=saturnRight-SATURN_MARGIN;
-    RenderSaturnPixels(&saturnPixels[0][0][0], SATURN_WIDTH, VRAM_HEIGHT, SATURN_MARGIN,
-        left,saturnTop,right,saturnBottom,(areaWide ? TargetWidth(WideWidth()) : TargetWidth(VRAM_WIDTH))*rasterX,
-        TargetHeight(VRAM_HEIGHT)*rasterY,areaWide ? WideOrigin(wideMargin)*rasterX : 0,(float)scale,(float)scale);
-    glUseProgram(scene->program);
-    (areaWide ? &wideHdr : &sceneHdr)->bands &= ~HdrBands(saturnTop / rasterY, saturnBottom / rasterY);
-    PictureChanged(saturnTop/rasterY,(saturnBottom-saturnTop)/rasterY);
-    RememberPicture(left/rasterX,saturnTop/rasterY,(right-left)/rasterX,(saturnBottom-saturnTop)/rasterY);
-    for(int y=saturnTop;y<saturnBottom;y++)
-        memset(saturnPixels[y][saturnLeft],0,(size_t)(saturnRight-saturnLeft)*4);
-    saturnLeft=SATURN_WIDTH;saturnTop=VRAM_HEIGHT;saturnRight=saturnBottom=0;
-}
-
-static void SaturnFlushGpu(void)
-{
-    if(!RenderSaturnQuadsPending()) return;
-    UsePipeline(RENDER_SATURN);
-    glActiveTexture(GL_TEXTURE0);UploadVram();
-    glUseProgram(scene->program);BindTarget(0);
-    int left=areaWide ? -wideMargin : areaX;
-    int right=areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW;
-    RenderSaturnFlushQuads(vramTexture,PixelX(areaWide ? WideWidth() : VRAM_WIDTH),PixelY(VRAM_HEIGHT),
-        areaWide ? WideOrigin(wideMargin) : 0,ScaleX(),ScaleY(),scale,left,areaY,right,areaY+areaH);
-    glUseProgram(scene->program);
-    (areaWide ? &wideHdr : &sceneHdr)->bands &= ~HdrBands(areaY, areaY + areaH);
-    PictureChanged(areaY,areaH);RememberPicture(left,areaY,right-left,areaH);
-}
-
-/* Explicit reference mode for tests and visual comparisons; GPU is the default. */
-static int SaturnReference(void)
-{
-    const char *value=SDL_getenv("WIPEOUT_SATURN_REFERENCE");
-    return value && SDL_atoi(value)!=0;
-}
-
-static void SaturnBackground(const GpuDrawState *state)
-{
-    if (saturnSkyDrawn) return;
-    const uint16_t *palette; int width, height;
-    const uint8_t *picture = SaturnNativeSkyData(&palette, &width, &height);
-    if (!picture) return;
-    saturnSkyDrawn = 1;
-    Flush();
-    UsePipeline(RENDER_SATURN);
     glUseProgram(scene->program);
     BindTarget(0);
-    int left = areaWide ? -wideMargin : areaX;
-    int right = areaWide ? SCREEN_COLUMNS + wideMargin : areaX + areaW;
-    RenderSaturnBackground(picture, palette, width, height, SaturnNativeSkyRevision(),
-        state, !RenderResourcesFor(RenderCurrent()).cameraAlignedSky, left, areaY, right, areaY + areaH,
-        areaX + areaW*.5f, areaY + areaH*.5f,
-        areaWide ? TargetWidth(WideWidth()) : TargetWidth(VRAM_WIDTH), TargetHeight(VRAM_HEIGHT),
-        areaWide ? WideOrigin(wideMargin) : 0, ScaleX(), ScaleY(), scale);
-    glUseProgram(scene->program);
-    (areaWide ? &wideHdr : &sceneHdr)->bands &= ~HdrBands(areaY, areaY + areaH);
-    PictureChanged(areaY, areaH);
-    RememberPicture(left, areaY, right-left, areaH);
-    MarkDrawn(areaX,areaY,areaX+areaW,areaY+areaH);
+}
+
+static void NativePictureChanged(float x, float y, float width, float height)
+{
+    (areaWide ? &wideHdr : &sceneHdr)->bands &= ~HdrBands(y, y + height);
+    PictureChanged(y, height);
+    RememberPicture(x, y, width, height);
+}
+
+static void BeginNative(int flushAll)
+{
+    if (flushAll || batchCount) Flush();
+    UsePipeline(RenderCurrent()->id);
+}
+
+static RenderNativeTarget NativeTarget(void)
+{
+    int width = areaWide ? WideWidth() : VRAM_WIDTH;
+    return (RenderNativeTarget){
+        .left = areaWide ? -wideMargin : areaX, .top = areaY,
+        .right = areaWide ? SCREEN_COLUMNS + wideMargin : areaX + areaW,
+        .bottom = areaY + areaH, .x = areaX, .width = areaW, .scale = scale,
+        .pixelWidth = PixelX(width), .pixelHeight = PixelY(VRAM_HEIGHT),
+        .targetWidth = TargetWidth(width), .targetHeight = TargetHeight(VRAM_HEIGHT),
+        .origin = areaWide ? WideOrigin(wideMargin) : 0,
+        .scaleX = ScaleX(), .scaleY = ScaleY(), .rasterX = rasterX, .rasterY = rasterY,
+        .vram = vramTexture, .vramLow = psxVram, .vramHigh = psxVramHigh,
+        .pass = drawPass, .begin = BeginNative, .bind = BindNativeTarget, .changed = NativePictureChanged,
+        .markDrawn = MarkDrawn, .point = NativePoint,
+    };
+}
+
+static void FlushNative(void)
+{
+    if (pipeline && pipeline->flushNative) {
+        RenderNativeTarget target = NativeTarget();
+        pipeline->flushNative(&target);
+    }
 }
 
 /* Match the whole primitive to an uploaded image. Texture windows still
@@ -1330,57 +1243,28 @@ static int NativeFilterBounds(const GpuDrawState *state, const GpuVertex *v, int
     return 1;
 }
 
+/* Keep the existing shader ABI: coverage modes use nearest sampling and
+   occupy values 2 and 3 in the packed sampling bits. */
+static int PackedSampling(RenderStyle style)
+{
+    if (style.coverage == RENDER_COVERAGE_MESH) return 3;
+    if (style.coverage == RENDER_COVERAGE_HALF) return 2;
+    return style.filter;
+}
+
 void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int count)
 {
-    if (RenderCurrent()->id == RENDER_SATURN) {
-        if (given->saturnSky) { SaturnBackground(given); return; }
-        if (given->saturn && RenderResourcesFor(RenderCurrent()).nativeQuads) {
-            if (batchCount) Flush();
-            SaturnDraw d = {.source = *given, .noDepth = vertices[0].noDepth};
-            SaturnNativePoly poly = *given->saturn;
-            poly.alphaMesh = (poly.mode & 0x100) && RenderResourcesFor(RenderCurrent()).alphaMesh;
-            if (poly.dynamicLight) {
-                SaturnShipLight(SaturnTrackLight(vertices[0].r, vertices[0].g, vertices[0].b), poly.gouraud);
-            }
-            if(SaturnReference()) {
-                GpuVertex native[4];
-                for (int k = 0; k < 4; k++) {
-                    native[k] = vertices[k < count ? k : 0];
-                    native[k].x *= rasterX; native[k].y *= rasterY;
-                }
-                SaturnVdp1Draw(&poly, native, (int)SDL_lroundf((areaWide ? -wideMargin : areaX)*rasterX),
-                              (int)SDL_lroundf(areaY*rasterY),
-                              (int)SDL_lroundf((areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW)*rasterX),
-                              (int)SDL_lroundf((areaY+areaH)*rasterY),
-                              RenderDepth(RenderCurrent()) ? SaturnEmit : SaturnComposite, SaturnSampleIndex, &d);
-            } else {
-                /* Pipeline creation precedes submission: switching away destroys
-                   its pending commands only after the normal flush boundary. */
-                UsePipeline(RENDER_SATURN);
-                int clipLeft=areaWide ? -wideMargin : areaX;
-                int clipRight=areaWide ? SCREEN_COLUMNS+wideMargin : areaX+areaW;
-                if(!RenderSaturnQuad(&poly,vertices,given,SaturnNativeMaterialRevision(),RenderDepth(RenderCurrent()),
-                                    ScaleX(),ScaleY(),clipLeft,areaY,clipRight,areaY+areaH)) {
-                    SaturnFlushGpu();
-                    if(!RenderSaturnQuad(&poly,vertices,given,SaturnNativeMaterialRevision(),RenderDepth(RenderCurrent()),
-                                        ScaleX(),ScaleY(),clipLeft,areaY,clipRight,areaY+areaH)) abort();
-                }
-            }
-            float left=vertices[0].x,right=left,top=vertices[0].y,bottom=top;
-            for(int k=1;k<count;k++) {
-                left=fminf(left,vertices[k].x);right=fmaxf(right,vertices[k].x);
-                top=fminf(top,vertices[k].y);bottom=fmaxf(bottom,vertices[k].y);
-            }
-            if(isfinite(left) && isfinite(right) && isfinite(top) && isfinite(bottom))
-                MarkDrawn(SDL_clamp(floorf(left),areaX,areaX+areaW),SDL_clamp(floorf(top),areaY,areaY+areaH),
-                          SDL_clamp(ceilf(right),areaX,areaX+areaW),SDL_clamp(ceilf(bottom),areaY,areaY+areaH));
-            return;
-        }
+    const RenderFrame *render = RenderCurrent();
+    const RenderPipeline *next = RenderGlPipeline(render->id);
+    if (next->submitNative) {
+        RenderNativeTarget target = NativeTarget();
+        if (next->submitNative(RenderProfile(render), &target, given, vertices, count)) return;
     }
     GpuDrawState faded = *given;
     const GpuDrawState *state = &faded;
     int i;
-    int perspective = 1, world = 0, stretch, backdrop;
+    RenderMaterial material = GpuMaterialFor(given, vertices, count);
+    int stretch, backdrop;
     float minX = vertices[0].x, minY = vertices[0].y, maxX = minX, maxY = minY;
 
     for (i = 1; i < count; i++) {
@@ -1390,23 +1274,14 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
         maxY = SDL_max(maxY, vertices[i].y);
     }
     MarkDrawn(minX, minY, maxX, maxY);
-    for (i = 0; i < count; i++) {
-        faded.fade |= vertices[i].a < 255;
-        faded.n64 |= vertices[i].n64;
-        world |= vertices[i].world || vertices[i].w > 0.0f;
-    }
-
-    for (i = 0; i < count; i++) {
-        if (vertices[i].w <= 0.0f) {
-            perspective = 0;
-        }
-    }
+    for (i = 0; i < count; i++) faded.fade |= vertices[i].a < 255;
+    faded.n64 = material.n64;
     /* widescreen: an untextured primitive in 2D across the whole screen (a clear, a fade, a flash) covers
        the sides as well */
-    stretch = areaWide && areaX == 0 && areaW == SCREEN_COLUMNS && !given->textured && !perspective && minX <= 0.0f &&
+    stretch = areaWide && areaX == 0 && areaW == SCREEN_COLUMNS && !given->textured && !material.perspective && minX <= 0.0f &&
               maxX >= (float)SCREEN_COLUMNS;
     /* ... and a menu's backdrop is enlarged about the middle of the draw area to fill them, keeping its shape */
-    backdrop = backdropNext && areaWide && areaX == 0 && areaW == SCREEN_COLUMNS && !perspective && !GpuRaceWide();
+    backdrop = backdropNext && areaWide && areaX == 0 && areaW == SCREEN_COLUMNS && !material.perspective && !GpuRaceWide();
     /* Decode material metadata independently of the selected rasterizer. */
     primitiveFilterBounds[0] = primitiveFilterBounds[1] = 0;
     primitiveFilterBounds[2] = primitiveFilterBounds[3] = -1;
@@ -1414,20 +1289,18 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
         PortN64TextureInfo(faded.pageX, faded.pageY, faded.depth, faded.clutX, faded.clutY,
                            vertices[0].u, vertices[0].v, primitiveFilterBounds, &faded.textureFlags);
     int nativeBounds[4] = {0, 0, -1, -1};
-    int native = world && faded.textured && !faded.n64 &&
+    int native = !material.ui && faded.textured && !faded.n64 &&
                  NativeFilterBounds(state, vertices, count, nativeBounds);
-    const RenderFrame *render = RenderCurrent();
-    RenderMaterial material = {faded.n64, faded.depth == 3, faded.textured, faded.raw, faded.dither,
-                               bounds || native, !world};
+    material.bounds = bounds || native;
     RenderStyle style = RenderPrepare(render, &material);
     if (style.nativeBounds) memcpy(primitiveFilterBounds, nativeBounds, sizeof(nativeBounds));
-    faded.filtered = style.filter;
-    faded.screenOverlay = !world;
+    faded.filtered = PackedSampling(style);
+    faded.screenOverlay = material.ui;
     FindHd(state, vertices, count);
     Begin(state, count);
     for (i = 0; i < count; i++) {
         GpuVertex v = vertices[i];
-        if (!perspective) {
+        if (!material.perspective) {
             v.w = 0.0f;
         }
         if (stretch) {
@@ -1499,7 +1372,7 @@ static void Clear(int x, int y, int w, int h, GLbitfield buffers, int seedHdr, u
     Flush();
     /* Every cleared render pass needs its own sky, including interpolated
        pictures, which call GpuClearArea rather than GpuClearDepth. */
-    saturnSkyDrawn = 0;
+    drawPass++;
     if (buffers & GL_COLOR_BUFFER_BIT) {
         if (w > 0) PictureChanged(y, h);
         RememberPicture(x, y, SDL_min(x + w, SCREEN_COLUMNS) - x, h);

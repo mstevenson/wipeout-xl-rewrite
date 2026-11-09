@@ -66,7 +66,6 @@ void PortFarDraw(TrackCamera *camera, ShipData *ships, Object **shipShapes);
 void PortFarObject(Object *object);
 void PortBuildNativeScene(Object *objects);
 int PortDrawNativeLandscape(TrackCamera *camera);
-int PortDrawSaturnNativeLandscape(TrackCamera *camera);
 
 /* The engine flares of the ships the far view drew (after DrawShipTrails, which draws the near ones'): DrawFlare
    says which it drew (PortFarFlared) and links them where PortFlareSlot says. */

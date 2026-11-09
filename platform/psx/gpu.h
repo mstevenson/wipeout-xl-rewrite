@@ -78,7 +78,7 @@ typedef struct GpuDrawState {
     int dither;
     int fade;          /* the port's distance fade: the vertices' alpha (GpuVertex.a) blends it out */
     /* Append new fields here so the frame recorder's first 14 saved fields keep their layout. */
-    int filtered;      /* backend-selected sampling rule */
+    int filtered;      /* packed shader sampling/coverage bits */
     int n64;           /* source encoding, independent of the selected sampler */
     int textureFlags;  /* N64 source flags 0x10/20 mirror S/T, 0x40 wrap */
     int ps1Light;      /* imported road texture with gameplay-authored 128-neutral tint */
@@ -91,6 +91,21 @@ typedef struct GpuDrawState {
     MaterialEmission emission;
 
 } GpuDrawState;
+
+/* Derive material and geometry facts before a profile chooses rasterization.
+   An affine billboard may belong to the world even when it has no reciprocal depth. */
+static inline RenderMaterial GpuMaterialFor(const GpuDrawState *draw, const GpuVertex *vertices, int count)
+{
+    RenderMaterial material = {.n64 = draw->n64, .fullColour = draw->depth == 3,
+        .textured = draw->textured, .raw = draw->raw, .dither = draw->dither, .ui = 1, .perspective = 1};
+    for (int i = 0; i < count; i++) {
+        int projected = vertices[i].w > 0.0f;
+        material.perspective &= projected;
+        material.ui &= !vertices[i].world && !projected;
+        material.n64 |= vertices[i].n64;
+    }
+    return material;
+}
 
 void GpuTagEmission(const void *start, const void *end, const MaterialEmission *emission);
 

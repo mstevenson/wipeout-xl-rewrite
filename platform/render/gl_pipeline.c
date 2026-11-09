@@ -1,12 +1,12 @@
 #include "gl_pipeline.h"
 
+static const RenderPipeline *const pipelines[RENDER_COUNT] = {
+#define RENDER_PROFILE(id, field, w, h, palH, rate, palRate, interpolate) [id] = &field##Pipeline,
+#include "profiles.def"
+#undef RENDER_PROFILE
+};
+
 const RenderPipeline *RenderGlPipeline(RendererId id)
 {
-    switch (id) {
-    case RENDER_MODERN: return &modernPipeline;
-    case RENDER_N64: return &n64Pipeline;
-    case RENDER_SATURN: return &saturnPipeline;
-    case RENDER_PC: return &pcPipeline;
-    default: return &ps1Pipeline;
-    }
+    return pipelines[id >= RENDER_PS1 && id < RENDER_COUNT ? id : RENDER_PS1];
 }

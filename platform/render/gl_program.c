@@ -92,6 +92,44 @@ void RenderGlPresentDirect(const RenderPresent *p, GLenum filter)
                       p->x0, p->y0, p->x1, p->y1, GL_COLOR_BUFFER_BIT, filter);
 }
 
+RenderPictureKey RenderGlPictureKey(const RenderPresent *p, GLuint texture)
+{
+    return (RenderPictureKey){texture, p->revision, p->left, p->top, p->right, p->bottom};
+}
+
+int RenderGlPictureMatches(const RenderPictureKey *key, const RenderPresent *p, GLuint texture)
+{
+    return key->texture == texture && key->revision == p->revision &&
+           key->left == p->left && key->top == p->top && key->right == p->right && key->bottom == p->bottom;
+}
+
+void RenderGlBeginFullscreen(GLuint program, GLuint array)
+{
+    glUseProgram(program);
+    glBindVertexArray(array);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+}
+
+int RenderGlResizeTarget(GLuint *texture, GLuint *framebuffer, int width, int height,
+                         GLenum format, GLenum type, GLenum filter)
+{
+    if (!*texture) {
+        glGenTextures(1, texture);
+        glGenFramebuffers(1, framebuffer);
+    }
+    glBindTexture(GL_TEXTURE_2D, *texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, GL_RGBA, type, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, *framebuffer);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, *texture, 0);
+    return glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+}
+
 /* Generic framebuffer transport: preserve display-encoded RGB and reset coverage. */
 static RenderProgram seedProgram;
 static GLuint seedArray;
@@ -120,11 +158,7 @@ void RenderGlSeedHdr(GLuint source, GLuint target, int x, int y, int w, int h)
         glUniform1i(glGetUniformLocation(seedProgram.program, "source"), 0);
         glGenVertexArrays(1, &seedArray);
     }
-    glUseProgram(seedProgram.program);
-    glBindVertexArray(seedArray);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
+    RenderGlBeginFullscreen(seedProgram.program, seedArray);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target);
     glViewport(x, y, w, h);
     glActiveTexture(GL_TEXTURE0);

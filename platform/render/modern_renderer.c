@@ -7,7 +7,7 @@ static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
     if (m->textured && !m->ui) {
         if (!m->raw) style.shade |= SHADE_WORLD_TINT;
         if (settings->bilinear) {
-            style.filter = 2;
+            style.filter = RENDER_BILINEAR;
             style.nativeBounds = !m->n64 && m->bounds;
         }
     }

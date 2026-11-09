@@ -63,9 +63,21 @@ static void SaturnPresent(const void *profile, const RenderPresent *p)
 
 static void QuadDestroy(void);
 
+#define SATURN_MARGIN (MAX_WIDE_MARGIN * 11 / 10)
+#define SATURN_WIDTH (352 + 2*SATURN_MARGIN)
+static uint8_t saturnPixels[VRAM_HEIGHT][SATURN_WIDTH][4];
+static int saturnLeft=SATURN_WIDTH, saturnTop=VRAM_HEIGHT, saturnRight, saturnBottom;
+static int saturnSkyDrawn;
+static uint64_t saturnSkyPass;
+
+
 static void SaturnDestroy(void)
 {
     QuadDestroy();
+    saturnSkyDrawn = 0;
+    memset(saturnPixels, 0, sizeof(saturnPixels));
+    saturnLeft = SATURN_WIDTH; saturnTop = VRAM_HEIGHT;
+    saturnRight = saturnBottom = 0;
     RenderGlProgramDestroy(&saturnProgram);
     RenderGlProgramDestroy(&backgroundProgram);
     RenderGlProgramDestroy(&pixelsProgram);
@@ -77,11 +89,9 @@ static void SaturnDestroy(void)
     backgroundTexture = backgroundArray = 0; backgroundRevision = 0;
 }
 
-const RenderPipeline saturnPipeline = {SaturnScene, SaturnPresent, SaturnDestroy};
-
 /* A VDP2 plane is a single screen rectangle, sampled at the framebuffer's
    resolution. The literal RBG0 reference keeps the native dot grid. */
-void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int width, int height,
+static void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int width, int height,
     uint64_t revision, const GpuDrawState *state, int originalScroll, int left, int top, int right, int bottom,
     float cx, float cy, float targetW, float targetH, float originX, float scaleX, float scaleY, int scale)
 {
@@ -161,7 +171,7 @@ void RenderSaturnBackground(const uint8_t *pixels, const uint16_t *palette, int 
     glDrawArrays(GL_TRIANGLES,0,6);
 }
 
-void RenderSaturnPixels(const uint8_t *rgba, int width, int height, int margin,
+static void RenderSaturnPixels(const uint8_t *rgba, int width, int height, int margin,
     int left, int top, int right, int bottom, float targetW, float targetH, float originX, float scaleX, float scaleY)
 {
     static const char *vertex=
@@ -256,10 +266,10 @@ static void QuadDestroy(void)
     memset(quadImages,0,sizeof(quadImages));
 }
 
-int RenderSaturnQuadsPending(void) { return rowCount!=0; }
+static int RenderSaturnQuadsPending(void) { return rowCount!=0; }
 
 /* 0 requests a flush before retrying, including atlas reuse and depth-state changes. */
-int RenderSaturnQuad(const SaturnNativePoly *p,const GpuVertex *v,const GpuDrawState *state,
+static int RenderSaturnQuad(const SaturnNativePoly *p,const GpuVertex *v,const GpuDrawState *state,
                      uint64_t revision,int depth,float scaleX,float scaleY,int left,int top,int right,int bottom)
 {
     GpuVertex q[4];
@@ -365,7 +375,7 @@ int RenderSaturnQuad(const SaturnNativePoly *p,const GpuVertex *v,const GpuDrawS
     return 1;
 }
 
-void RenderSaturnFlushQuads(GLuint vram,int targetW,int targetH,float originX,float scaleX,float scaleY,int scale,
+static void RenderSaturnFlushQuads(GLuint vram,int targetW,int targetH,float originX,float scaleX,float scaleY,int scale,
                             int left,int top,int right,int bottom)
 {
     if(!rowCount) return;
@@ -391,3 +401,166 @@ void RenderSaturnFlushQuads(GLuint vram,int targetW,int targetH,float originX,fl
     glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);
     rowCount=commandCount=0;
 }
+
+typedef struct SaturnDraw {
+    GpuDrawState source;
+    int noDepth;
+    const RenderNativeTarget *target;
+} SaturnDraw;
+
+static int SaturnSampleIndex(void *user, float u, float v)
+{
+    SaturnDraw *d = user;
+    /* Stabilize exact texel boundaries across CPU division and shader arithmetic. */
+    int x = (int)floorf(u+0.00001f) & 255, y = (int)floorf(v+0.00001f) & 255;
+    x = (x & ~(d->source.windowMaskX*8)) | ((d->source.windowOffsetX & d->source.windowMaskX)*8);
+    y = (y & ~(d->source.windowMaskY*8)) | ((d->source.windowOffsetY & d->source.windowMaskY)*8);
+    int py = (d->source.pageY + y) & 1023;
+    const uint16_t *row = py >= 512 ? d->target->vramHigh[py-512] : d->target->vramLow[py];
+    return (row[(d->source.pageX + x/4) & 1023] >> ((x&3)*4)) & 15;
+}
+
+static void SaturnEmit(void *user, int x, int y, uint16_t rgb, int blend, float depth, uint8_t alpha)
+{
+    SaturnDraw *d = user;
+    GpuDrawState state = {0};
+    state.semi = blend == -2 ? 0 : blend; state.fade = alpha < 255;
+    if (blend == -2) rgb = 0; /* RGB destination shadow: half the destination. */
+    GpuVertex pixel = {0};
+    pixel.x = x / d->target->rasterX; pixel.y = y / d->target->rasterY; pixel.w = depth;
+    pixel.noDepth = d->noDepth; pixel.world = 1;
+    pixel.r = (uint8_t)((rgb & 31)*8); pixel.g = (uint8_t)(((rgb>>5)&31)*8);
+    pixel.b = (uint8_t)(((rgb>>10)&31)*8); pixel.a = alpha;
+    unsigned shade = SHADE_AFFINE_COLOUR | SHADE_PS1_COLOUR;
+    d->target->point(&state, &pixel, shade);
+}
+
+/* Aggregate ordered native writes as premultiplied colour/coverage. The final
+   overlay blends over prior compatibility draws; flush before the next such draw.
+   Optional depth uses the point path so it still shares the host depth buffer. */
+static void SaturnComposite(void *user, int x, int y, uint16_t rgb, int blend, float depth, uint8_t alpha)
+{
+    (void)user; (void)depth;
+    int px=x+SATURN_MARGIN;
+    if (px<0 || px>=SATURN_WIDTH || y<0 || y>=VRAM_HEIGHT) return;
+    uint8_t *out=saturnPixels[y][px];
+    unsigned a=blend >= 0 || blend == -2 ? (alpha+1)/2 : alpha;
+    if (a==255) {
+        /* Most road/scenery writes are opaque: avoid reading and blending the
+           previous pixel (including repeated writes along a distorted edge). */
+        out[0]=(uint8_t)((rgb&31)*8);
+        out[1]=(uint8_t)(((rgb>>5)&31)*8);
+        out[2]=(uint8_t)(((rgb>>10)&31)*8);
+        out[3]=255;
+    } else {
+        for(int c=0;c<3;c++) {
+            unsigned src=blend == -2 ? 0 : ((rgb>>(5*c))&31)*8;
+            out[c]=(uint8_t)((src*a+out[c]*(255-a)+127)/255);
+        }
+        out[3]=(uint8_t)(a+(out[3]*(255-a)+127)/255);
+    }
+    if(px<saturnLeft) saturnLeft=px;
+    if(px>=saturnRight) saturnRight=px+1;
+    if(y<saturnTop) saturnTop=y;
+    if(y>=saturnBottom) saturnBottom=y+1;
+}
+
+static void SaturnFlushNative(const RenderNativeTarget *t)
+{
+    if (RenderSaturnQuadsPending()) {
+        t->bind(1);
+        RenderSaturnFlushQuads(t->vram, t->pixelWidth, t->pixelHeight, t->origin, t->scaleX, t->scaleY,
+                               t->scale, t->left, t->top, t->right, t->bottom);
+        glUseProgram(saturnProgram.program);
+        t->changed(t->left, t->top, t->right - t->left, t->bottom - t->top);
+    }
+    if (saturnRight <= saturnLeft || saturnBottom <= saturnTop) return;
+    t->bind(0);
+    int left = saturnLeft - SATURN_MARGIN, right = saturnRight - SATURN_MARGIN;
+    RenderSaturnPixels(&saturnPixels[0][0][0], SATURN_WIDTH, VRAM_HEIGHT, SATURN_MARGIN,
+        left, saturnTop, right, saturnBottom, t->targetWidth * t->rasterX, t->targetHeight * t->rasterY,
+        t->origin * t->rasterX, (float)t->scale, (float)t->scale);
+    glUseProgram(saturnProgram.program);
+    t->changed(left / t->rasterX, saturnTop / t->rasterY,
+               (right - left) / t->rasterX, (saturnBottom - saturnTop) / t->rasterY);
+    for (int y = saturnTop; y < saturnBottom; y++)
+        memset(saturnPixels[y][saturnLeft], 0, (size_t)(saturnRight - saturnLeft) * 4);
+    saturnLeft = SATURN_WIDTH; saturnTop = VRAM_HEIGHT;
+    saturnRight = saturnBottom = 0;
+}
+
+static void SaturnBackground(const SaturnRenderSettings *settings, const RenderNativeTarget *t,
+                             const GpuDrawState *state)
+{
+    if (saturnSkyDrawn && saturnSkyPass == t->pass) return;
+    const uint16_t *palette;
+    int width, height;
+    const uint8_t *picture = SaturnNativeSkyData(&palette, &width, &height);
+    if (!picture) return;
+    saturnSkyDrawn = 1;
+    saturnSkyPass = t->pass;
+    t->begin(1);
+    t->bind(0);
+    RenderSaturnBackground(picture, palette, width, height, SaturnNativeSkyRevision(), state,
+        !settings->cameraAlignedSky, t->left, t->top, t->right, t->bottom,
+        t->x + t->width * .5f, (t->top + t->bottom) * .5f, t->targetWidth, t->targetHeight,
+        t->origin, t->scaleX, t->scaleY, t->scale);
+    glUseProgram(saturnProgram.program);
+    t->changed(t->left, t->top, t->right - t->left, t->bottom - t->top);
+    t->markDrawn(t->x, t->top, t->x + t->width, t->bottom);
+}
+
+static int SaturnSubmitNative(const void *profile, const RenderNativeTarget *t, const GpuDrawState *state,
+                              const GpuVertex *vertices, int count)
+{
+    const SaturnRenderSettings *settings = profile;
+    if (state->saturnSky) {
+        SaturnBackground(settings, t, state);
+        return 1;
+    }
+    if (!state->saturn || !settings->affineTextures) return 0;
+
+    t->begin(0);
+    SaturnNativePoly poly = *state->saturn;
+    poly.alphaMesh = (poly.mode & 0x100) && !settings->mesh;
+    if (poly.dynamicLight)
+        SaturnShipLight(SaturnTrackLight(vertices[0].r, vertices[0].g, vertices[0].b), poly.gouraud);
+    const char *reference = SDL_getenv("WIPEOUT_SATURN_REFERENCE");
+    if (reference && SDL_atoi(reference) != 0) {
+        SaturnDraw draw = {.source = *state, .noDepth = vertices[0].noDepth, .target = t};
+        GpuVertex native[4];
+        for (int k = 0; k < 4; k++) {
+            native[k] = vertices[k < count ? k : 0];
+            native[k].x *= t->rasterX;
+            native[k].y *= t->rasterY;
+        }
+        SaturnVdp1Draw(&poly, native, (int)lroundf(t->left * t->rasterX), (int)lroundf(t->top * t->rasterY),
+            (int)lroundf(t->right * t->rasterX), (int)lroundf(t->bottom * t->rasterY),
+            settings->depth ? SaturnEmit : SaturnComposite, SaturnSampleIndex, &draw);
+    } else {
+        uint64_t revision = SaturnNativeMaterialRevision();
+        if (!RenderSaturnQuad(&poly, vertices, state, revision, settings->depth, t->scaleX, t->scaleY,
+                              t->left, t->top, t->right, t->bottom)) {
+            SaturnFlushNative(t);
+            if (!RenderSaturnQuad(&poly, vertices, state, revision, settings->depth, t->scaleX, t->scaleY,
+                                  t->left, t->top, t->right, t->bottom)) abort();
+        }
+    }
+    float left = vertices[0].x, right = left, top = vertices[0].y, bottom = top;
+    for (int k = 1; k < count; k++) {
+        left = fminf(left, vertices[k].x); right = fmaxf(right, vertices[k].x);
+        top = fminf(top, vertices[k].y); bottom = fmaxf(bottom, vertices[k].y);
+    }
+    if (isfinite(left) && isfinite(right) && isfinite(top) && isfinite(bottom)) {
+        t->markDrawn(SDL_clamp(floorf(left), t->x, t->x + t->width),
+                     SDL_clamp(floorf(top), t->top, t->bottom),
+                     SDL_clamp(ceilf(right), t->x, t->x + t->width),
+                     SDL_clamp(ceilf(bottom), t->top, t->bottom));
+    }
+    return 1;
+}
+
+const RenderPipeline saturnPipeline = {
+    .scene = SaturnScene, .present = SaturnPresent, .destroy = SaturnDestroy,
+    .submitNative = SaturnSubmitNative, .flushNative = SaturnFlushNative,
+};

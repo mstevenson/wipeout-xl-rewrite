@@ -18,10 +18,10 @@ int main(int argc, char **argv)
     for (int mode = 0; mode < 4; mode++) {
         FrameCapPrim *p = &prims[mode];
         FrameCapFrame *f = &frames[mode];
-        f->render = (RenderFrame){.settings = RENDER_DEFAULTS,
-                                 .id = mode < 2 ? RENDER_PS1 : mode == 2 ? RENDER_PC : RENDER_N64};
-        f->render.settings.ps1.affineTextures = mode == 0;
-        f->render.settings.ps1.colourPrecision = 0;
+        RenderSettings settings = RENDER_DEFAULTS;
+        settings.ps1.affineTextures = mode == 0;
+        settings.ps1.colourPrecision = 0;
+        f->render = RenderSnapshot(mode < 2 ? RENDER_PS1 : mode == 2 ? RENDER_PC : RENDER_N64, &settings);
         f->prims = p; f->count = 1; f->vram = -1;
         p->count = 3; p->kind = FRAMECAP_POLYGON;
         p->v[0] = (GpuVertex){.x=.9f, .y=.9f, .w=1, .a=0};

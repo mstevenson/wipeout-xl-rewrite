@@ -14,13 +14,14 @@ def excludes(path, pattern):
     assert not re.search(pattern, source(path)), f"{path}: forbidden renderer dependency: {pattern}"
 
 
-# Shared transport must not interpret private settings or call Modern entry points.
+# Shared transport can use pipeline callbacks and generic resources only.
 for path in ("platform/render/gl_backend.c", "platform/render/gl_program.c"):
     excludes(path, r"settings\s*\.\s*(ps1|pc|n64|saturn|modern)\b")
-    excludes(path, r"\b(?:RenderModern\w*|RENDER_MODERN|MODERN_\w*)\b|modern_gl\.h")
+    excludes(path, r"\b(?:Render(?:Modern|Saturn)\w*|SaturnNative\w*|RENDER_(?:MODERN|SATURN)|MODERN_\w*|SATURN_\w*)\b"
+                   r"|(?:modern_gl|saturn_gl|saturn_native)\.h")
 
 # Packet/source adapters publish facts even when their consumer is inactive.
-excludes("platform/psx/libgpu.c", r"\bRENDER_MODERN\b|settings\s*\.\s*modern\b")
+excludes("platform/psx/libgpu.c", r"\bRENDER_(?:MODERN|SATURN)\b|settings\s*\.\s*(?:modern|saturn)\b")
 excludes("platform/material_source.c", r"\bRenderCurrent\b|\bRenderSettings\b|\bRENDER_\w+\b")
 
 # Capturing a primitive must not classify source assets or bind their native art.

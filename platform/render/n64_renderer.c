@@ -7,7 +7,7 @@ static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
 
     /* Screen-space HUD, menus and glyphs stay point sampled; projected world sprites still filter. */
     if (!m->ui && m->textured && settings->threePoint && (m->fullColour || !m->n64 || m->bounds)) {
-        s.filter = 1;
+        s.filter = RENDER_THREE_POINT;
     }
     return s;
 }

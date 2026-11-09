@@ -86,7 +86,7 @@ void DrawLandscape(ShipData *playerShip, TrackCamera *camera)
 
     section = camera->section;
     /* Port: each profile uses its original scenery candidates. */
-    if (PortDrawNativeLandscape(camera) || PortDrawSaturnNativeLandscape(camera)) {
+    if (PortDrawNativeLandscape(camera)) {
         waveIndex++;
         return;
     }

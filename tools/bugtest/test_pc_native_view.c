@@ -17,9 +17,9 @@ int main(void)
     const short sizes[] = {2, 2, 2};
     unsigned char details[4] = {0};
 
-    PcViewRuns(spans, sizes, 2, details);
+    ViewRuns(spans, sizes, 2, details, 1);
     assert(details[0] == 3 && details[1] == 0 && details[2] == 0 && details[3] == 2);
-    PcViewRuns(spans, sizes, 65535, details);
+    ViewRuns(spans, sizes, 65535, details, 1);
     assert(details[0] == 3 && details[1] == 1 && details[2] == 1 && details[3] == 2);
     puts("Native PC view runs cap distant sections, follow section links and keep the highest detail: OK");
     return 0;

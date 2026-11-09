@@ -5,6 +5,16 @@
 
 TrackData *track;
 ConfigData *gameData;
+Object **trackObjects;
+static int authored;
+const unsigned short *PortSaturnNativeSceneObjects(int course, int section, int *count)
+{
+    static const unsigned short list[] = {0x1001, 0x2000};
+    (void)course;
+    if (!authored || section != 0) return NULL;
+    *count = 2;
+    return list;
+}
 ShipData *shipIndex;
 int ownShip;
 short CurrentScreen, loTileCount, medTileCount, hiTileCount;
@@ -12,6 +22,7 @@ u_short clipLevel=1;
 u_long *OT[2];
 CameraUpdateFunc CameraUpdate;
 static int renderer, cap=2, hulls, nearPackets;
+static Object *firstHull;
 static unsigned char drawn[120];
 int PortNativeRenderer(void) { return renderer; }
 int PortPcNativeView(int *sections, int *scenery) { *sections=cap; *scenery=32767; return renderer==RENDER_PC; }
@@ -28,7 +39,12 @@ void PortTrackFar(TrackSection *s, const PortView *v) { (void)v; drawn[s-track->
 void AsmTrackHi(TrackSection *s, Skeleton *c, AutoMeshData *a, short n) { (void)s; (void)c; (void)a; (void)n; nearPackets++; }
 void AsmTrackMed(TrackSection *s, Skeleton *c, short n) { (void)s; (void)c; (void)n; nearPackets++; }
 void AsmTrackLo(TrackSection *s, Skeleton *c, short n) { (void)s; (void)c; (void)n; nearPackets++; }
-void PortDrawObjectFar(Object *o, const PortView *v, const CVECTOR *c) { (void)o; (void)v; (void)c; hulls++; }
+void PortDrawObjectFar(Object *o, const PortView *v, const CVECTOR *c)
+{
+    (void)v; (void)c;
+    if (!hulls) firstHull = o;
+    hulls++;
+}
 
 int main(void)
 {
@@ -65,6 +81,10 @@ int main(void)
     memset(drawn,0,sizeof(drawn));
     assert(PortDrawNativeTrack(&camera,NULL,1));
     for(int i=0;i<120;i++) assert(drawn[i]);
+    renderer=RENDER_MODERN; memset(drawn,0,sizeof(drawn)); nearPackets=0;
+    assert(PortDrawNativeTrack(&camera,NULL,0));
+    assert(!nearPackets);
+    for(int i=0;i<120;i++) assert(drawn[i]==(i==0||i==3||i==5||i==12||i==19||i==26||i==33));
     renderer=RENDER_SATURN; memset(drawn,0,sizeof(drawn));
     assert(PortDrawNativeTrack(&camera,NULL,0));
     for(int i=0;i<120;i++) assert(drawn[i]==(i==0||i==3||(i>=5&&i<=9)));
@@ -77,6 +97,10 @@ int main(void)
     Skeleton objectPosition={.super=&rotation};
     Object object={.skeleton=&objectPosition,.extent=0};
     for(int i=0;i<3;i++) objectPosition.relative.m[i][i]=4096;
+    renderer=RENDER_MODERN; hulls=0;
+    objectPosition.relative.t[2]=2048;
+    assert(PortDrawNativeScenery(&object) && hulls==1);
+    assert(!PortDrawNativeLandscape(&camera));
     renderer=RENDER_PC; hulls=0;
     objectPosition.relative.t[2]=2048; assert(PortDrawNativeScenery(&object) && hulls==0);
     objectPosition.relative.t[2]=2049; assert(PortDrawNativeScenery(&object) && hulls==1);
@@ -144,6 +168,14 @@ int main(void)
     assert(!PortDrawNativeLandscape(&camera));
     renderer=RENDER_PC; hulls=0; assert(PortDrawNativeLandscape(&camera) && hulls==1);
     renderer=RENDER_N64; hulls=0; assert(PortDrawNativeLandscape(&camera) && hulls==2);
+    ConfigData config = {0};
+    Object *objects[] = {&object};
+    gameData = &config;
+    trackObjects = objects;
+    renderer=RENDER_SATURN; hulls=0;
+    assert(!PortDrawNativeLandscape(&camera));
+    authored = 1;
+    assert(PortDrawNativeLandscape(&camera) && hulls==2 && firstHull==&second);
     objectPosition.relative.t[0]=0;
     renderer=RENDER_PC; hulls=0; assert(PortDrawNativeLandscape(&camera) && hulls==1);
     PortBuildNativeScene(&object); hulls=0;
@@ -151,5 +183,5 @@ int main(void)
     nativeScene=0; assert(!PortDrawNativeLandscape(&camera));
     track=NULL; PortBuildNativeScene(NULL);
     assert(!nativeSceneSections[0] && !nativeSceneSections[1]);
-    puts("Native track/scenery dispatch: PS1/inactive bypass, PC cap/allview, N64 topology and Saturn contiguous/depth rules: OK");
+    puts("Native track/scenery dispatch: PS1/inactive bypass, PC cap/allview, N64 topology, Saturn authored order/depth and Modern routing: OK");
 }

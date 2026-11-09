@@ -162,9 +162,8 @@ static GLuint bloomArray, bloomTextures[BLOOM_TARGETS], bloomTargets[BLOOM_TARGE
 static GLint bloomCrop, bloomStep, bloomDownsample, bloomSoftShadows;
 static int bloomWidth, bloomHeight, bloomDivisor, bloomReady;
 static struct {
-    GLuint source;
-    uint64_t revision;
-    int left, top, tonemapper;
+    RenderPictureKey picture;
+    int tonemapper;
 } bloomCache;
 
 static void BloomInit(void)
@@ -183,16 +182,6 @@ static void BloomInit(void)
     glGenVertexArrays(1, &bloomArray);
 }
 
-static void BeginFullscreen(void)
-{
-    BloomInit();
-    glUseProgram(bloomProgram.program);
-    glBindVertexArray(bloomArray);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-}
-
 static int BloomResize(int w, int h, int divisor)
 {
     if (w == bloomWidth && h == bloomHeight && divisor == bloomDivisor) return bloomReady;
@@ -203,24 +192,13 @@ static int BloomResize(int w, int h, int divisor)
     GLint maxSize;
     glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxSize);
     if (w > maxSize - 2 || h > maxSize - 2) return bloomReady = 0;
-    if (!bloomTargets[0]) {
-        glGenTextures(BLOOM_TARGETS, bloomTextures);
-        glGenFramebuffers(BLOOM_TARGETS, bloomTargets);
-    }
     for (int i = 0; i < BLOOM_TARGETS; i++) {
         int composite = i == BLOOM_COMPOSITE;
         int width = composite ? w + 2 : (w + divisor - 1) / divisor;
         int height = composite ? h + 2 : (h + divisor - 1) / divisor;
-        glBindTexture(GL_TEXTURE_2D, bloomTextures[i]);
-        glTexImage2D(GL_TEXTURE_2D, 0, composite ? GL_RGBA8 : GL_RGBA16F, width, height, 0, GL_RGBA,
-                     composite ? GL_UNSIGNED_BYTE : GL_HALF_FLOAT, NULL);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, bloomTargets[i]);
-        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, bloomTextures[i], 0);
-        if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        if (!RenderGlResizeTarget(&bloomTextures[i], &bloomTargets[i], width, height,
+                                  composite ? GL_RGBA8 : GL_RGBA16F,
+                                  composite ? GL_UNSIGNED_BYTE : GL_HALF_FLOAT, GL_LINEAR)) {
             glDeleteTextures(BLOOM_TARGETS, bloomTextures);
             glDeleteFramebuffers(BLOOM_TARGETS, bloomTargets);
             memset(bloomTextures, 0, sizeof(bloomTextures));
@@ -234,8 +212,7 @@ static int BloomResize(int w, int h, int divisor)
 
 static void BloomPicture(const RenderPresent *p, int tonemapper)
 {
-    if (bloomCache.source == p->hdrTexture && bloomCache.revision == p->revision &&
-        bloomCache.left == p->left && bloomCache.top == p->top &&
+    if (RenderGlPictureMatches(&bloomCache.picture, p, p->hdrTexture) &&
         bloomCache.tonemapper == tonemapper) return;
 
     glActiveTexture(GL_TEXTURE3);
@@ -276,10 +253,7 @@ static void BloomPicture(const RenderPresent *p, int tonemapper)
     glUniform1i(bloomProgram.uniformPass, BLOOM_RESOLVE);
     glUniform1i(bloomSoftShadows, tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
     glDrawArrays(GL_TRIANGLES, 0, 3);
-    bloomCache.source = p->hdrTexture;
-    bloomCache.revision = p->revision;
-    bloomCache.left = p->left;
-    bloomCache.top = p->top;
+    bloomCache.picture = RenderGlPictureKey(p, p->hdrTexture);
     bloomCache.tonemapper = tonemapper;
 }
 
@@ -297,7 +271,8 @@ static void ModernPresent(const void *profile, const RenderPresent *p)
     GLint destination, previousProgram;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &destination);
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
-    BeginFullscreen();
+    BloomInit();
+    RenderGlBeginFullscreen(bloomProgram.program, bloomArray);
     glActiveTexture(GL_TEXTURE0);
     RenderPresent crop = *p;
     if (p->hdrWidth) {

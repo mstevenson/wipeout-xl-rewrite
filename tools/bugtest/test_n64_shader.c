@@ -12,6 +12,7 @@ static void CountDrawArrays(GLenum mode, GLint first, GLsizei count)
 #include "../../platform/render/gl_backend.c"
 #include "../../platform/render/n64_gl.c"
 #undef glDrawArrays
+#include "../../platform/render/saturn_gl.c"
 #include <assert.h>
 #include <math.h>
 
@@ -224,10 +225,11 @@ static void HdFiltering(void)
     words[0] = words[1] = 31;
     Upload();
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
-        RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+        RenderSettings settings = RENDER_DEFAULTS;
+        settings.pc.bilinear = 0;
+        settings.n64.threePoint = 0;
+        RenderFrame frame = RenderSnapshot((RendererId)id, &settings);
         RenderMaterial material = {.n64 = 1, .textured = 1, .bounds = 1};
-        frame.settings.pc.bilinear = 0;
-        frame.settings.n64.threePoint = 0;
         RenderStyle style = RenderPrepare(&frame, &material);
         assert(style.filter == 0);
         testShade = (uint8_t)style.shade;
@@ -316,14 +318,15 @@ static void FullColourProfiles(void)
         for (int id = RENDER_PS1; id <= RENDER_N64; id++) for (int enabled = 0; enabled < 2; enabled++)
         for (int spatial = 0; spatial < 2; spatial++) {
             for (int other = 0; other < 2; other++) {
-                RenderFrame f = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+                RenderSettings settings = RENDER_DEFAULTS;
                 RenderMaterial m = {.fullColour = 1, .textured = 1, .dither = 1, .ui = !spatial};
-                f.settings.ps1 = (Ps1RenderSettings){other, other, other, other, other};
-                f.settings.pc = (PcRenderSettings){other, other, other};
-                f.settings.n64 = (N64RenderSettings){other, other, other, other, other, other};
-                if (id == RENDER_PS1) f.settings.ps1 = (Ps1RenderSettings){enabled, enabled, enabled, enabled, enabled};
-                if (id == RENDER_PC) f.settings.pc = (PcRenderSettings){enabled, enabled, enabled};
-                if (id == RENDER_N64) f.settings.n64.threePoint = enabled;
+                settings.ps1 = (Ps1RenderSettings){other, other, other, other, other};
+                settings.pc = (PcRenderSettings){other, other, other};
+                settings.n64 = (N64RenderSettings){other, other, other, other, other, other};
+                if (id == RENDER_PS1) settings.ps1 = (Ps1RenderSettings){enabled, enabled, enabled, enabled, enabled};
+                if (id == RENDER_PC) settings.pc = (PcRenderSettings){enabled, enabled, enabled};
+                if (id == RENDER_N64) settings.n64.threePoint = enabled;
+                RenderFrame f = RenderSnapshot((RendererId)id, &settings);
                 RenderStyle style = RenderPrepare(&f, &m);
                 testShade = style.shade;
                 glActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D, rgba);
@@ -706,7 +709,8 @@ static void NativeSaturn(void)
                             .gouraud={0x4215,0x4215,0x4215,0x4215}};
     GpuVertex v[4] = {{.x=0,.y=100,.a=255},{.x=7,.y=100,.a=255},
                      {.x=7,.y=107,.a=255},{.x=0,.y=107,.a=255}};
-    SaturnDraw draw = {.noDepth=1};
+    RenderNativeTarget target = NativeTarget();
+    SaturnDraw draw = {.noDepth=1, .target=&target};
     SaturnVdp1Draw(&poly,v,0,100,8,108,SaturnEmit,NULL,&draw);Flush();
     float pixels[8*8*4];
     glReadPixels(0,100,8,8,GL_RGBA,GL_FLOAT,pixels);
@@ -742,7 +746,8 @@ static void NativeSaturn(void)
         /* Interpolated pictures clear colour/depth without calling GpuClearDepth.
            Replay several into each screen buffer: each needs a fresh sky. */
         GpuClearArea(0,areaY,8,8,0,0,0);
-        SaturnBackground(&sky);Flush();
+        sky.saturnSky = 1;
+        GpuTriangles(&sky, NULL, 0);Flush();
         glReadPixels(0,areaY,8,8,GL_RGBA,GL_FLOAT,pixels);
         for(int y=0;y<8;y++) for(int x=0;x<8;x++) {
             float dx=(x-4)*(352.0f/320),dy=(float)y-4;
@@ -936,7 +941,8 @@ static void SaturnGpuReference(void)
                 saturnExpected[y][x][c]=(c+1)*24/255.0f;
             GpuDrawState state={.saturn=&poly,.pageX=128,.pageY=256,.windowMaskX=1,.windowMaskY=2,
                 .windowOffsetX=1,.windowOffsetY=2};
-            SaturnDraw oracle={.source=state};
+            RenderNativeTarget target = NativeTarget();
+            SaturnDraw oracle={.source=state, .target=&target};
             SaturnNativePoly scaledPoly=poly;
             /* Rasterize on the finer grid, then apply the original dot mask in the callback. */
             if(scale>1) scaledPoly.mode &= ~0x100;
@@ -1058,7 +1064,8 @@ static void SaturnGpuReference(void)
         if(reference) setenv("WIPEOUT_SATURN_VDP2_REFERENCE","1",1);
         GpuDrawState sky={.saturnSky=1,.skyFocal=160};
         GpuClearArea(0,100,64,64,0,0,0);
-        SaturnBackground(&sky);
+        sky.saturnSky = 1;
+        GpuTriangles(&sky, NULL, 0);
         float samples[8];glReadPixels(64,264,2,1,GL_RGBA,GL_FLOAT,samples);
         assert(fabsf(samples[0]-16.0f*(8.0f/255))<.002f);
         assert(fabsf(samples[4]-(reference ? 16.0f : 17.0f)*(8.0f/255))<.002f);
@@ -1357,7 +1364,7 @@ static void N64GameplayLight(void)
     words[0] = words[1] = words[1024] = words[1025] = 15;
     Upload();
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
-        RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+        RenderFrame frame = RenderSnapshot((RendererId)id, &(RenderSettings)RENDER_DEFAULTS);
         RenderMaterial material = {.n64 = 1, .textured = 1, .bounds = 1};
         RenderStyle style = RenderPrepare(&frame, &material);
         testShade = (uint8_t)style.shade;
@@ -1399,7 +1406,7 @@ static void N64SaturatedLight(void)
     Upload();
     testPs1Light = 1;
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
-        RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+        RenderFrame frame = RenderSnapshot((RendererId)id, &(RenderSettings)RENDER_DEFAULTS);
         RenderMaterial material = {.n64 = 1, .textured = 1, .bounds = 1};
         RenderStyle style = RenderPrepare(&frame, &material);
         testShade = (uint8_t)style.shade;
@@ -2503,10 +2510,10 @@ int main(void)
     Render(RENDER_SATURN, 3, 0, 1, 0, 128, 3, 0, 0, 0, 0, 0); /* quarter-additive mesh gap */
     Render(RENDER_SATURN, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0); /* ship shadow mesh gap */
     testPixelX = 0;
-    Render(RENDER_SATURN, RENDER_SAMPLE_SATURN_ALPHA, 0, 1, 0, 128, 0, 0, 0, half, 0, .5f);
-    Render(RENDER_SATURN, RENDER_SAMPLE_SATURN_ALPHA, 0, 1, 0, 128, 3, 0, 0, full / 8, 0, 0);
-    Render(RENDER_SATURN, RENDER_SAMPLE_SATURN_ALPHA, 0, 1, 0, 0, 0, 0, 0, 0, 0, .5f); /* ship shadow alpha */
-    Render(RENDER_SATURN, RENDER_SAMPLE_SATURN_ALPHA, 0, 0, 0, 128, 1, 0, full, 0, 0, 1); /* opaque texel */
+    Render(RENDER_SATURN, PackedSampling((RenderStyle){.coverage = RENDER_COVERAGE_HALF}), 0, 1, 0, 128, 0, 0, 0, half, 0, .5f);
+    Render(RENDER_SATURN, PackedSampling((RenderStyle){.coverage = RENDER_COVERAGE_HALF}), 0, 1, 0, 128, 3, 0, 0, full / 8, 0, 0);
+    Render(RENDER_SATURN, PackedSampling((RenderStyle){.coverage = RENDER_COVERAGE_HALF}), 0, 1, 0, 0, 0, 0, 0, 0, 0, .5f); /* ship shadow alpha */
+    Render(RENDER_SATURN, PackedSampling((RenderStyle){.coverage = RENDER_COVERAGE_HALF}), 0, 0, 0, 128, 1, 0, full, 0, 0, 1); /* opaque texel */
     Render(RENDER_SATURN, 3, 0, 1, 0, 128, 1, 0, 0, full, 0, 0); /* additive mesh dot */
     Render(RENDER_SATURN, 3, 0, 1, 0, 128, 3, 0, 0, full / 4, 0, 0); /* quarter-additive mesh dot */
     Render(RENDER_SATURN, 3, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0); /* black additive sample contributes nothing */

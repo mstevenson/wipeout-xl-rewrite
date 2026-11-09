@@ -9,25 +9,22 @@
 #include <stdlib.h>
 
 static RenderFrame current;
+static RenderSettings committedSettings;
 static int valid;
 
-typedef struct Profile {
+typedef struct RenderProfileInfo {
     const Renderer *renderer;
     const char *key, *scaleKey;
     size_t offset, size, scaleOffset;
-    int width, height, palHeight, fps, palFps;
+    int width, height, palHeight, fps, palFps, interpolate;
 } Profile;
 
 static const Profile profiles[RENDER_COUNT] = {
-#define PROFILE(field, w, h, palH, rate, palRate) \
-    { &field##Renderer, #field, #field "_render_scale", offsetof(RenderSettings, field), \
-      sizeof(((RenderSettings *)0)->field), offsetof(RenderSettings, field.scale), w, h, palH, rate, palRate }
-    [RENDER_PS1] = PROFILE(ps1, 320, 240, 256, 30, 25),
-    [RENDER_PC] = PROFILE(pc, 640, 480, 480, 60, 60),
-    [RENDER_N64] = PROFILE(n64, 320, 240, 240, 30, 30),
-    [RENDER_SATURN] = PROFILE(saturn, 352, 240, 240, 20, 20),
-    [RENDER_MODERN] = PROFILE(modern, 320, 240, 256, 60, 60),
-#undef PROFILE
+#define RENDER_PROFILE(id, field, w, h, palH, rate, palRate, interpolate) \
+    [id] = { &field##Renderer, #field, #field "_render_scale", offsetof(RenderSettings, field), \
+             sizeof(((RenderSettings *)0)->field), offsetof(RenderSettings, field.scale), w, h, palH, rate, palRate, interpolate },
+#include "profiles.def"
+#undef RENDER_PROFILE
 };
 
 static const Profile *ProfileFor(RendererId id)
@@ -37,8 +34,13 @@ static const Profile *ProfileFor(RendererId id)
 
 int RenderOriginalFrameRate(int pal)
 {
-    const Profile *profile = ProfileFor(RenderCurrent()->id);
+    const Profile *profile = RenderCurrent()->profile;
     return pal ? profile->palFps : profile->fps;
+}
+
+int RenderOriginalInterpolates(void)
+{
+    return RenderCurrent()->profile->interpolate;
 }
 
 int RenderPcViewLimits(const RenderFrame *frame, int *sections, int *scenery)
@@ -74,12 +76,12 @@ int RenderModernBloom(const RenderSettings *s)
 
 const void *RenderProfile(const RenderFrame *f)
 {
-    return (const char *)&f->settings + ProfileFor(f->id)->offset;
+    return &f->settings;
 }
 
 int RenderDepth(const RenderFrame *f)
 {
-    return RenderGet(f->id)->depth(RenderProfile(f));
+    return f->profile->renderer->depth(RenderProfile(f));
 }
 
 const char *RenderScaleKey(RendererId id)
@@ -94,7 +96,7 @@ int *RenderScaleSetting(RenderSettings *s, RendererId id)
 
 int RenderScale(const RenderFrame *f)
 {
-    return *(const int *)((const char *)&f->settings + ProfileFor(f->id)->scaleOffset);
+    return *(const int *)((const char *)&f->settings + (f->profile->scaleOffset - f->profile->offset));
 }
 
 void RenderNativeSize(RendererId id, int pal, int *width, int *height)
@@ -106,13 +108,19 @@ void RenderNativeSize(RendererId id, int pal, int *width, int *height)
 
 RenderStyle RenderPrepare(const RenderFrame *f, const RenderMaterial *m)
 {
-    return RenderGet(f->id)->prepare(RenderProfile(f), m);
+    return f->profile->renderer->prepare(RenderProfile(f), m);
 }
 
 RenderResources RenderResourcesFor(const RenderFrame *frame)
 {
-    const Renderer *renderer = RenderGet(frame->id);
+    const Renderer *renderer = frame->profile->renderer;
     return renderer->resources ? renderer->resources(RenderProfile(frame)) : (RenderResources){0};
+}
+
+RenderPacketPolicy RenderPacketPolicyFor(const RenderFrame *frame)
+{
+    const Renderer *renderer = frame->profile->renderer;
+    return renderer->packets ? renderer->packets(RenderProfile(frame)) : (RenderPacketPolicy){0};
 }
 
 void RenderDefaults(RenderSettings *s, RendererId id)
@@ -127,33 +135,36 @@ void RenderDefaults(RenderSettings *s, RendererId id)
     }
 }
 
+RenderFrame RenderSnapshot(RendererId id, const RenderSettings *settings)
+{
+    RenderFrame frame = {.id = id, .profile = ProfileFor(id)};
+    memcpy(&frame.settings, (const char *)settings + frame.profile->offset, frame.profile->size);
+    if (id == RENDER_MODERN) frame.settings.modern.bloom = RenderModernBloom(settings);
+    return frame;
+}
+
 int RenderCommit(void)
 {
-    RenderFrame next = {0};
-    int changed;
-
-    next.settings = portSettings.render;
-    next.settings.modern.bloom = RenderModernBloom(&next.settings);
-    next.id = next.settings.selection;
-    if (next.id == RENDER_AUTO) {
+    committedSettings = portSettings.render;
+    committedSettings.modern.bloom = RenderModernBloom(&committedSettings);
+    RendererId id = committedSettings.selection;
+    if (id == RENDER_AUTO) {
         if (PortOriginalTrackIs64()) {
-            next.id = next.settings.n64Selection;
+            id = committedSettings.n64Selection;
         } else if (PortOriginalTrack() >= 0) {
-            next.id = next.settings.ps1Selection;
+            id = committedSettings.ps1Selection;
         } else if (PsxIoDisc() && PortSaturnDisc()) {
-            next.id = next.settings.saturnSelection;
+            id = committedSettings.saturnSelection;
         } else if (PsxIoDisc() && PortPcData()) {
-            next.id = next.settings.pcSelection;
+            id = committedSettings.pcSelection;
         } else {
-            next.id = next.settings.ps1Selection;
+            id = committedSettings.ps1Selection;
         }
     }
-    changed = !valid || current.id != next.id;
-    if (!changed) {
-        /* Preferences for an inactive renderer must not disturb the displayed frame,
-           interpolation or the frame recorder. */
-        changed = memcmp(RenderProfile(&current), RenderProfile(&next), ProfileFor(next.id)->size) != 0;
-    }
+    RenderFrame next = RenderSnapshot(id, &committedSettings);
+    /* Inactive preferences must not disturb interpolation or recording. */
+    int changed = !valid || current.id != next.id ||
+        memcmp(RenderProfile(&current), RenderProfile(&next), next.profile->size) != 0;
     current = next;
     valid = 1;
     return changed;
@@ -172,9 +183,15 @@ const RenderFrame *RenderCurrent(void)
     return &current;
 }
 
+const RenderSettings *RenderCommittedSettings(void)
+{
+    RenderCurrent();
+    return &committedSettings;
+}
+
 RenderGeometry RenderGeometryFor(const RenderFrame *frame)
 {
-    return RenderGet(frame->id)->geometry(RenderProfile(frame));
+    return frame->profile->renderer->geometry(RenderProfile(frame));
 }
 
 RenderGeometry PortRenderGeometry(void)

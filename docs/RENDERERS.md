@@ -28,7 +28,9 @@ camera-direction/junction road walker, original scenery bounds and remembered
 ship visibility. Saturn uses contiguous authored road spans, course depth buckets,
 model bounds and its separate ship depth interval. These policies apply when
 **Native** is selected, including renderer overrides on another platform's assets;
-**Full** keeps the extended-distance pass. Original course-specific exceptions
+**Full** keeps the extended-distance pass. Modern's Native mode follows linked
+road spans without the PC F3 cap, draws scenery without a profile-specific cull,
+and uses the Saturn ship depth interval. Original course-specific exceptions
 apply when their source course is loaded. See [native distance verification](port-notes/native-distance.md).
 HD texture replacements apply above 1× in the hardware profiles, including when Auto selects a higher scale.
 
@@ -252,28 +254,29 @@ reading and saving player settings.
 
 ## Implementation
 
-- `platform/render/renderer.[ch]`: registry, defaults, persistence and immutable
-  frame snapshots. `*_renderer.c` owns each profile's material, depth and
-  `RenderGeometry` policy, source bounds and resource requirements.
-  `renderer_ui.cpp` owns the panels.
-- `{ps1,pc,saturn,n64,modern}_gl.c`: independently linkable scene programs and presentation
-  callbacks, each receiving only its own profile. An optional batch-binding callback
-  keeps scene uniforms private.
-  N64 alone owns VI processing; Modern owns bloom and tonemapping.
-- `gl_backend.c`: texture uploads, batching and framebuffers. `gl_pipeline.c`
-  dispatches; `gl_api.[ch]` and `gl_program.c` load GL and construct programs.
-  Shared transport acts on profile requirements without reading named profile settings.
-  HDR allocation, seeding, copies and resizing are shared framebuffer operations.
-  Shared shaders decode assets and handle transport/blending without selecting
-  a renderer. HD replacements preserve source addressing.
+- `platform/render/profiles.def` registers CPU policies, GL pipelines, native
+  sizes and Original cadence in one place. `renderer.[ch]` owns defaults,
+  persistence and the committed frame. A frame owns a copy of just its active
+  profile, and the debug panels edit the requested settings separately.
+- `{ps1,pc,saturn,n64,modern}_gl.c` own their scene programs and presentation
+  passes. Saturn also owns its native quad queue, software reference rasterizer
+  and VDP2 sky. It submits through the same pipeline interface and uses the
+  backend's draw area, framebuffer and picture tracking.
+- `gl_backend.c` handles texture uploads, batching and framebuffers.
+  `gl_program.c` shares fullscreen state setup, scratch-target allocation and
+  picture cache keys. PC RGB565, N64 VI and Modern bloom keep their own passes
+  and caches. Shared shaders decode assets and blend, and HD replacements
+  preserve source addressing.
 - `platform/material_source.[ch]`: source fixture identities, emission conditions and
   UV masks, and the packet-builder hooks that attach native material/recorder metadata.
   These facts do not depend on which profile is active or whether bloom is enabled.
-- `platform/psx/libgpu.c`: packet adapter. Game packet builders consume neutral
-  geometry/light policy without selecting a named renderer or rewriting assets.
-  Track provenance and emission metadata survive packet decoding and replay under
-  every profile. `framecap.c` keeps this metadata in its in-memory primitive records
-  without classifying source assets; the saved diagnostic format is unchanged.
+- `platform/psx/libgpu.c` decodes packets and uses the active profile's packet
+  policy for native art. Clipping, batching and frame inspection share material
+  classification. Profiles choose texture sampling and coverage independently
+  before the backend packs them for the shaders.
+- `game/src/portfar.c` selects explicit road, scenery and ship visibility
+  policies. They share traversal and packet emission where possible, preserving
+  each source's rounding, visibility history and authored draw order.
 
 `PsxRendererBoundary` flushes work and commits settings at the completed game-loop
 boundary. Only effective active-policy changes clear interpolation and inspection
@@ -289,7 +292,8 @@ released when neither uses them. Presenting an old screen needs no scene program
 Glyph textures contain only level zero.
 
 Display, screenshot/video readback and linked bands share presentation. Frame
-recordings save `renderer.ini`; binary format 5 stores logical picture extents
+recordings retain a separate settings snapshot for `renderer.ini`. Binary format
+5 stores logical picture extents
 separately from captured pixel dimensions, so Saturn and PC images can be inspected
 in game coordinates. Format 4 added per-primitive shading flags for
 affine/perspective interpolation and snapped coverage, with perspective fade.
@@ -313,10 +317,11 @@ material lookup and linked players. The GPU suite covers independent renderer
 linking, production shaders, switches, resource ownership, HD addressing and all
 64 N64 settings combinations against reference RGBA output across crops, scales,
 flips and readbacks. Recorded results and blocked checks are in the
-[consolidated change record](port-notes/renderer-changes.md).
+[consolidated change record](port-notes/renderer-changes.md) and
+[architecture refactor notes](port-notes/renderer-consolidation.md).
 
-Boundary checks reject named profile-setting access in shared GL transport and
-Modern selection checks in the packet adapter. Source-material tests exercise
+Boundary checks reject private profile settings and direct Saturn or Modern
+dispatch in shared GL transport and the packet adapter. Source-material tests exercise
 all five profiles, bloom toggles, animation, capture, replay and packet reuse.
 Standalone profile tests link both CPU policy and GL code without the registry,
 backend or other profiles, exercising private batch bindings, HDR presentation

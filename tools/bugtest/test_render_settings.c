@@ -28,7 +28,8 @@ static void Load(const char *contents)
 }
 static void Policies(void)
 {
-    RenderFrame f = {.settings = RENDER_DEFAULTS, .id = RENDER_PS1};
+    RenderSettings settings = RENDER_DEFAULTS;
+    RenderFrame f = RenderSnapshot(RENDER_PS1, &settings);
     RenderMaterial m = {.textured = 1, .dither = 1};
     RenderStyle a = RenderPrepare(&f, &m);
     assert(a.filter == 0 && (a.shade & (SHADE_SNAP | SHADE_DITHER | SHADE_AFFINE_UV)) ==
@@ -41,26 +42,28 @@ static void Policies(void)
     assert((a.shade & SHADE_SNAP) && !(a.shade & (SHADE_PS1_COLOUR | SHADE_DITHER)));
     f.settings.ps1.affineTextures = 0;
     assert(!(RenderPrepare(&f, &m).shade & SHADE_AFFINE_UV));
-    f.id = RENDER_PC;
+    f = RenderSnapshot(RENDER_PC, &settings);
     assert(RenderPrepare(&f, &m).filter == 2);
     f.settings.pc.bilinear = 0;
     assert(RenderPrepare(&f, &m).filter == 0);
-    f.id = RENDER_N64;
+    f = RenderSnapshot(RENDER_N64, &settings);
     assert(RenderPrepare(&f, &m).filter == 1); /* explicit N64 over PS1 assets */
     f.settings.n64.threePoint = 0;
     assert(RenderPrepare(&f, &m).filter == 0);
     m.n64 = 1;
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
-        f.id = (RendererId)id;
+        f = RenderSnapshot((RendererId)id, &settings);
         assert(RenderPrepare(&f, &m).shade & SHADE_N64); /* encoding survives every renderer */
     }
-    f.id = RENDER_N64; m.n64 = 0;
+    m.n64 = 0;
     a = RenderPrepare(&f, &m);
     assert(!(a.shade & (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR | SHADE_DITHER | SHADE_WORLD_TINT)));
-    assert(!RenderGet(RENDER_PS1)->depth(&f.settings.ps1) && RenderGet(RENDER_PC)->depth(&f.settings.pc) && RenderGet(RENDER_N64)->depth(&f.settings.n64));
-    f.settings.ps1.depth = 1; f.settings.pc.depth = 0;
-    assert(RenderGet(RENDER_PS1)->depth(&f.settings.ps1) && !RenderGet(RENDER_PC)->depth(&f.settings.pc) && RenderGet(RENDER_N64)->depth(&f.settings.n64));
-    f.settings = (RenderSettings){0};
+    assert(!RenderGet(RENDER_PS1)->depth(&settings.ps1) && RenderGet(RENDER_PC)->depth(&settings.pc) &&
+           RenderGet(RENDER_N64)->depth(&settings.n64));
+    settings.ps1.depth = 1; settings.pc.depth = 0;
+    assert(RenderGet(RENDER_PS1)->depth(&settings.ps1) && !RenderGet(RENDER_PC)->depth(&settings.pc) &&
+           RenderGet(RENDER_N64)->depth(&settings.n64));
+    f = RenderSnapshot(RENDER_N64, &(RenderSettings){0});
     assert(RenderDepth(&f)); /* N64 depth is always enabled. */
 }
 
@@ -71,7 +74,7 @@ static void SaturnProfile(void)
     assert(!RenderCurrent()->settings.saturn.cameraAlignedSky);
     RenderMaterial m = {.textured = 1, .dither = 1};
     RenderStyle style = RenderPrepare(RenderCurrent(), &m);
-    assert(style.filter == RENDER_SAMPLE_SATURN_ALPHA && !(style.shade & SHADE_DITHER));
+    assert(style.filter == RENDER_NEAREST && style.coverage == RENDER_COVERAGE_HALF && !(style.shade & SHADE_DITHER));
     assert((style.shade & (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR)) ==
            (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR));
     assert(RenderSet(&portSettings.render, "saturn_camera_aligned_sky", "1"));
@@ -87,9 +90,9 @@ static void SaturnProfile(void)
     assert(!portSettings.render.ps1.dither && RenderCommit());
     assert(!RenderDepth(RenderCurrent()));
     assert(!RenderCurrent()->settings.saturn.cameraAlignedSky);
-    assert(RenderPrepare(RenderCurrent(), &m).filter == RENDER_SAMPLE_MESH);
+    assert(RenderPrepare(RenderCurrent(), &m).coverage == RENDER_COVERAGE_MESH);
     m.ui = 1;
-    assert(RenderPrepare(RenderCurrent(), &m).filter == 0);
+    assert(RenderPrepare(RenderCurrent(), &m).coverage == RENDER_COVERAGE_DEFAULT);
     m.n64 = 1;
     assert(RenderPrepare(RenderCurrent(), &m).shade & SHADE_N64);
     Load("ps1_renderer = saturn\n");
@@ -186,9 +189,10 @@ static void ProfileIsolation(void)
     };
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) {
         for (int enabled = 0; enabled < 2; enabled++) {
-            RenderFrame f = {.settings = RENDER_DEFAULTS, .id = (RendererId)id};
+            RenderSettings settings = RENDER_DEFAULTS;
             for (size_t key = 0; key < sizeof(keys) / sizeof(keys[0]); key++)
-                assert(RenderSet(&f.settings, keys[key], enabled ? "1" : "0"));
+                assert(RenderSet(&settings, keys[key], enabled ? "1" : "0"));
+            RenderFrame f = RenderSnapshot((RendererId)id, &settings);
             int depth = RenderDepth(&f);
             assert(depth == (id == RENDER_N64 || enabled));
             for (size_t i = 0; i < sizeof(materials) / sizeof(materials[0]); i++) {
@@ -205,14 +209,15 @@ static void ProfileIsolation(void)
                            (SHADE_SNAP | SHADE_AFFINE_UV | SHADE_PS1_COLOUR));
                 for (size_t key = 0; key < sizeof(keys) / sizeof(keys[0]); key++) {
                     if (!strncmp(keys[key], prefixes[id], strlen(prefixes[id]))) continue;
-                    RenderFrame changed = f;
-                    assert(RenderSet(&changed.settings, keys[key], enabled ? "0" : "1"));
+                    RenderSettings options = settings;
+                    assert(RenderSet(&options, keys[key], enabled ? "0" : "1"));
+                    RenderFrame changed = RenderSnapshot((RendererId)id, &options);
                     RenderStyle actual = RenderPrepare(&changed, m);
                     assert(actual.shade == baseline.shade && actual.filter == baseline.filter);
                     assert(RenderDepth(&changed) == depth);
                 }
             }
-            portSettings.render = f.settings;
+            portSettings.render = settings;
             portSettings.render.selection = (RendererId)id;
             for (n64 = 0; n64 <= 1; n64++) {
                 RenderCommit();
@@ -249,24 +254,31 @@ static void ResourcePolicyIsolation(void)
         {.textured = 1}
     };
     for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
-        RenderFrame frame = {.id = (RendererId)id, .settings = RENDER_DEFAULTS};
+        RenderFrame frame = RenderSnapshot((RendererId)id, &(RenderSettings)RENDER_DEFAULTS);
         RenderResources resources = RenderResourcesFor(&frame);
+        RenderPacketPolicy packets = RenderPacketPolicyFor(&frame);
+        assert(packets.nativeQuads == (id == RENDER_SATURN));
+        assert(packets.nativeSky == (id == RENDER_SATURN));
+        assert(packets.shadowMask == (id == RENDER_SATURN));
         assert(resources.hdr == (id == RENDER_MODERN));
         assert(resources.originalTextures == (id == RENDER_MODERN));
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
             RenderStyle style = RenderPrepare(&frame, &cases[i]);
             for (size_t key = 0; key < sizeof(changes) / sizeof(changes[0]); key++) {
                 if (!strncmp(changes[key].key, prefixes[id], strlen(prefixes[id]))) continue;
-                RenderFrame changed = frame;
-                assert(RenderSet(&changed.settings, changes[key].key, changes[key].value));
+                RenderSettings options = RENDER_DEFAULTS;
+                assert(RenderSet(&options, changes[key].key, changes[key].value));
+                RenderFrame changed = RenderSnapshot((RendererId)id, &options);
                 RenderStyle actual = RenderPrepare(&changed, &cases[i]);
                 RenderResources actualResources = RenderResourcesFor(&changed);
+                RenderPacketPolicy actualPackets = RenderPacketPolicyFor(&changed);
+                assert(!memcmp(&packets, &actualPackets, sizeof(packets)));
                 assert(!memcmp(&style, &actual, sizeof(style)));
                 assert(!memcmp(&resources, &actualResources, sizeof(resources)));
             }
         }
     }
-    RenderFrame modern = {.id = RENDER_MODERN, .settings = RENDER_DEFAULTS};
+    RenderFrame modern = RenderSnapshot(RENDER_MODERN, &(RenderSettings)RENDER_DEFAULTS);
     for (int bilinear = 0; bilinear <= 1; bilinear++) {
         modern.settings.modern.bilinear = bilinear;
         RenderStyle style = RenderPrepare(&modern, &cases[0]);
@@ -417,7 +429,7 @@ static void NativeViewLimits(void)
 {
     const int road[] = {50, 45, 40, 36, 32, 28, 24, 20};
     const int scenery[] = {36000, 29000, 23000, 17000, 12000, 8000, 5000, 3000};
-    RenderFrame frame = {.settings = RENDER_DEFAULTS, .id = RENDER_PC};
+    RenderFrame frame = RenderSnapshot(RENDER_PC, &(RenderSettings)RENDER_DEFAULTS);
     int sections, distance;
     for (int i = 0; i < PC_DRAW_DISTANCE_LEVELS; i++) {
         frame.settings.pc.drawDistance = i + 1;
@@ -426,7 +438,7 @@ static void NativeViewLimits(void)
     }
     for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
         if (id == RENDER_PC) continue;
-        frame.id = (RendererId)id;
+        frame = RenderSnapshot((RendererId)id, &(RenderSettings)RENDER_DEFAULTS);
         assert(!RenderPcViewLimits(&frame, &sections, &distance));
     }
     puts("PC native road and scenery limits follow F3 and the active profile: OK");

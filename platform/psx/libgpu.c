@@ -1146,8 +1146,7 @@ static int TrailPacketOwner(const uint32_t *w)
 static void OrderSaturnExhaust(TrackPackets *table)
 {
     const uint32_t *seenFlare[SDL_arraysize(flare)] = {0};
-    if (RenderCurrent()->id != RENDER_SATURN || !RenderCurrent()->settings.saturn.affineTextures ||
-        !PortSaturnDisc()) return;
+    if (!RenderPacketPolicyFor(RenderCurrent()).nativeQuads || !PortSaturnDisc()) return;
 
     for (u_long *node = PacketFrom(table->table); node; node = PacketFrom(NodeAfter(node))) {
         const uint32_t *w = node + 1;
@@ -1541,10 +1540,7 @@ static int AlternateQuad(const GpuDrawState *draw, const GpuVertex *v, int count
 static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count, int alternateQuad)
 {
     CutCorner in[4];
-    /* Clipped geometry is projected world geometry. Ask the renderer for operations,
-       just as the GPU backend does; the adapter never selects a renderer/profile. */
-    RenderMaterial material = {.n64 = draw->n64, .fullColour = draw->depth == 3,
-        .textured = draw->textured, .raw = draw->raw, .dither = draw->dither};
+    int sourceCount = count;
     double near = GteNearPlane();
     float along = interpolating ? interpolationAlong : 1.0f;
     int i, behind = 0;
@@ -1570,13 +1566,16 @@ static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count, int 
             in[i].v.v=corner>=2 ? draw->saturn->height-0.001f : 0;
             for(int c=0;c<3;c++) in[i].v.saturnShade[c]=(draw->saturn->gouraud[corner]>>(5*c))&31;
         }
-        material.n64 |= v[j].n64;
         /* (what GteInterpolate cannot place: behind the camera in this frame, or nearer than it projects) */
         behind += resolved[j].view[2] < near || in[i].view[2] < near;
     }
     if (!behind) {
         return 0;
     }
+    /* Resolved view-space corners remain world geometry through clipping. */
+    RenderMaterial material = GpuMaterialFor(draw, v, sourceCount);
+    material.ui = 0;
+    material.perspective = 1;
     RenderStyle style = RenderPrepare(RenderCurrent(), &material);
     if (alternateQuad) {
         CutCorner a[3] = {in[0], in[1], in[3]}, b[3] = {in[0], in[3], in[2]};
@@ -1755,7 +1754,8 @@ static void Polygon(const uint32_t *w, uint32_t code)
                 draw.emission.enabled = 0;
         }
     }
-    if (draw.semi == 2 && RenderCurrent()->id == RENDER_SATURN && ShadowPacket(w)) {
+    RenderPacketPolicy policy = RenderPacketPolicyFor(RenderCurrent());
+    if (draw.semi == 2 && policy.shadowMask && ShadowPacket(w)) {
         /* Use the shadow texture as a mask over the packet's black vertex colour.
            Half blending lets the Saturn shader apply its usual mesh or alpha coverage. */
         draw.raw = 0;
@@ -1778,8 +1778,8 @@ static void Polygon(const uint32_t *w, uint32_t code)
             v[i].b = v[0].b;
         }
     }
-    if (RenderCurrent()->id == RENDER_SATURN && PortSaturnDisc()) {
-        if (quad && gouraud && !textured && RenderCurrent()->settings.saturn.affineTextures &&
+    if ((policy.nativeQuads || policy.nativeSky) && PortSaturnDisc()) {
+        if (quad && gouraud && !textured && policy.nativeQuads &&
             SaturnFlare(w, &draw, v, ix, iy)) {
             if (draw.saturn) {
                 Record(FRAMECAP_POLYGON, code, count, ix, iy, v, &draw, flags, w, page, clut);
@@ -1787,7 +1787,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
             }
             return;
         }
-        draw.saturn = SaturnNativeLookup(w);
+        if (policy.nativeQuads) draw.saturn = SaturnNativeLookup(w);
         if (draw.saturn) {
             for (int corner = 0; corner < 4; corner++) {
                 if (draw.saturn->corners[corner] >= count) { draw.saturn = NULL; break; }
@@ -1795,7 +1795,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
         }
         if (draw.saturn && draw.saturn->corners[0] == draw.saturn->corners[1] &&
             draw.saturn->corners[0] == draw.saturn->corners[2]) draw.saturn = NULL;
-        if (resolvedMask == (1u << count)-1 && resolved[0].background && PortOriginalTrack() < 0) {
+        if (policy.nativeSky && resolvedMask == (1u << count)-1 && resolved[0].background && PortOriginalTrack() < 0) {
             const uint16_t *palette; int width, height;
             if (SaturnNativeSkyData(&palette, &width, &height)) {
                 GtePrecise sky=resolved[0];
@@ -1810,7 +1810,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
             }
         }
     }
-    if (draw.saturn && RenderCurrent()->settings.saturn.affineTextures) {
+    if (draw.saturn) {
         native=*draw.saturn;
         if (native.animation) SaturnNativeAnimatePalette(&native);
         if(native.dynamicLight) {
@@ -1821,18 +1821,17 @@ static void Polygon(const uint32_t *w, uint32_t code)
            the packet's atlas UVs available to the frame inspector. */
         if (!native.pixels) SaturnNativeAttributes(&native, v);
         draw.saturn=&native;
-    } else draw.saturn=NULL;
+    }
     alternateQuad = AlternateQuad(&draw, v, count, w);
     if (NearCut(&draw, v, count, alternateQuad)) {
         Record(FRAMECAP_POLYGON, code, count, ix, iy, v, &draw, flags, w, page, clut);
         return;
     }
-    if (draw.saturn && RenderCurrent()->settings.saturn.affineTextures) {
+    if (draw.saturn) {
         Record(FRAMECAP_POLYGON, code, count, ix, iy, v, &draw, flags, w, page, clut);
         GpuTriangles(&draw, v, count);
         return;
     }
-    draw.saturn = NULL;
     if (alternateQuad) {
         GpuVertex a[3] = {v[0], v[1], v[3]}, b[3] = {v[0], v[3], v[2]};
         int32_t ax[3] = {ix[0], ix[1], ix[3]}, ay[3] = {iy[0], iy[1], iy[3]};
@@ -2509,7 +2508,7 @@ int PsxInterpolationOn(void)
         on = PortLinkSplit() && PortLinkInterpolate(); /* as the first player's game (whose window it is) does */
     } else {
         on = PsxInterpolationTest() > 0 ||
-             ((portSettings.frameRate != FRAME_RATE_CONSOLE || RenderCurrent()->id != RENDER_PS1) &&
+             ((portSettings.frameRate != FRAME_RATE_CONSOLE || RenderOriginalInterpolates()) &&
               !portConfig.fixedStep && !portConfig.hidden);
         if (role == LINK_MASTER) {
             PortLinkSetInterpolate(on);

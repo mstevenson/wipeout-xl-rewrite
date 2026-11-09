@@ -59,7 +59,7 @@ static int DrawAt(int profile, int z)
 
 int main(void)
 {
-    for (renderer=0; renderer<=4; renderer++) {
+    for (renderer=0; renderer<RENDER_COUNT; renderer++) {
         nativeScene=0; assert(!PortNativeShipsEnabled());
         nativeScene=1; assert(PortNativeShipsEnabled()==(renderer>=2));
     }
@@ -92,5 +92,9 @@ int main(void)
     assert(DrawAt(RENDER_SATURN,161)==1);
     assert(DrawAt(RENDER_SATURN,31999)==1);
     assert(DrawAt(RENDER_SATURN,32000)==0);
-    puts("Native ship dispatch: PC, N64 and Saturn hull/shadow boundaries, history, and PS1 bypass: OK");
+    assert(DrawAt(RENDER_MODERN,160)==0);
+    assert(DrawAt(RENDER_MODERN,161)==1);
+    assert(DrawAt(RENDER_MODERN,31999)==1);
+    assert(DrawAt(RENDER_MODERN,32000)==0);
+    puts("Native ship dispatch: PC, N64, Saturn and Modern hull/shadow boundaries, history, and PS1 bypass: OK");
 }

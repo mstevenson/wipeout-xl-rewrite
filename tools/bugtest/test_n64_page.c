@@ -511,7 +511,7 @@ static void RendererBoundaries(void)
         PsxRendererBoundary();
         assert(flushes == 1 && frameClears == 0 && drawnFrame.pending);
         assert(upcoming.table == table && shownTables.table == table);
-        assert(!memcmp(&RenderCurrent()->settings, &portSettings.render, sizeof(RenderSettings)));
+        assert(!memcmp(RenderCommittedSettings(), &portSettings.render, sizeof(RenderSettings)));
         if (id == RENDER_PS1) portSettings.render.ps1.dither ^= 1;
         if (id == RENDER_PC) portSettings.render.pc.depth ^= 1;
         if (id == RENDER_N64) portSettings.render.n64.divot ^= 1;

@@ -16,6 +16,7 @@ static const char *n64VertexSource =
 static const char *n64FragmentSource =
 #include "shaders/material_fragment.h"
 ;
+#undef RENDER_FILTER
 static RenderProgram n64Program;
 
 static RenderProgram *N64Scene(void)
@@ -94,28 +95,15 @@ static GLuint N64Picture(GLuint source, int x, int y, int width, int height, con
     glActiveTexture(GL_TEXTURE0);
     for (int i = 0; i < targets; i++) {
         if (!n64ViTexture[i] || n64ViWidth != width || n64ViHeight != height) {
-            if (!n64ViTexture[i]) {
-                glGenTextures(1, &n64ViTexture[i]);
-                glGenFramebuffers(1, &n64ViFramebuffer[i]);
-            }
-            glBindTexture(GL_TEXTURE_2D, n64ViTexture[i]);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-            glBindFramebuffer(GL_FRAMEBUFFER, n64ViFramebuffer[i]);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, n64ViTexture[i], 0);
-            if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            if (!RenderGlResizeTarget(&n64ViTexture[i], &n64ViFramebuffer[i], width, height,
+                                      GL_RGBA8, GL_UNSIGNED_BYTE, GL_NEAREST)) {
                 SDL_Log("N64 VI framebuffer incomplete"); abort();
             }
         }
     }
     n64ViWidth = width;
     n64ViHeight = height;
-    glUseProgram(n64ViProgram);
-    glBindVertexArray(n64ViArray);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
+    RenderGlBeginFullscreen(n64ViProgram, n64ViArray);
     glViewport(0, 0, width, height);
     glUniform1i(viUniform.source, 0);
     glUniform1i(viUniform.pixelScale, pixelScale);
@@ -143,11 +131,7 @@ static void N64Resample(GLuint source, int x, int y, int width, int height, int 
     GLint previousProgram;
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     N64ViInit();
-    glUseProgram(n64ViProgram);
-    glBindVertexArray(n64ViArray);
-    glDisable(GL_SCISSOR_TEST);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
+    RenderGlBeginFullscreen(n64ViProgram, n64ViArray);
     glViewport(SDL_min(x0, x1), SDL_min(y0, y1), SDL_abs(x1 - x0), SDL_abs(y1 - y0));
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, source);
@@ -164,9 +148,9 @@ static void N64Resample(GLuint source, int x, int y, int width, int height, int 
    The backend's source revision covers draws, clears, uploads, copies and reallocations. */
 static struct {
     int valid;
-    GLuint texture, result;
-    uint64_t revision;
-    int left, top, width, height, scale;
+    RenderPictureKey picture;
+    GLuint result;
+    int scale;
     N64RenderSettings settings;
 } viCache;
 
@@ -186,17 +170,14 @@ static void N64Present(const void *profile, const RenderPresent *p)
             GLint destination;
             int width = p->right - p->left, height = p->bottom - p->top;
             glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &destination);
-            if (!viCache.valid || viCache.texture != p->texture || viCache.revision != p->revision ||
-                viCache.left != p->left || viCache.top != p->top || viCache.width != width ||
-                viCache.height != height || viCache.scale != p->scale ||
+            if (!viCache.valid || !RenderGlPictureMatches(&viCache.picture, p, p->texture) ||
+                viCache.scale != p->scale ||
                 viCache.settings.colourPrecision != settings->colourPrecision ||
                 viCache.settings.dither != settings->dither || viCache.settings.dedither != settings->dedither ||
                 viCache.settings.divot != settings->divot) {
                 viCache.result = N64Picture(p->texture, p->left, p->top, width, height, settings, p->scale, &passes);
-                viCache.texture = p->texture;
-                viCache.revision = p->revision;
-                viCache.left = p->left; viCache.top = p->top;
-                viCache.width = width; viCache.height = height; viCache.scale = p->scale;
+                viCache.picture = RenderGlPictureKey(p, p->texture);
+                viCache.scale = p->scale;
                 viCache.settings = *settings;
                 viCache.valid = 1;
             }

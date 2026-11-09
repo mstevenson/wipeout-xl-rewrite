@@ -399,6 +399,7 @@ static FrameCapFrame *NewFrame(void)
     count++;
     f->number = ++nextNumber;
     f->render = *RenderCurrent();
+    f->rendererIni = *RenderCommittedSettings();
     return f;
 }
 
@@ -487,13 +488,7 @@ FrameCapPrim *FrameCapAdd(void)
 /* Derive operations from the captured policy, never the current UI settings. */
 static unsigned PrimitiveShade(const RenderFrame *render, const FrameCapPrim *p)
 {
-    int world = 0, n64 = p->draw.n64;
-    for (int i = 0; i < p->count; i++) {
-        world |= p->v[i].world || p->v[i].w > 0;
-        n64 |= p->v[i].n64;
-    }
-    RenderMaterial material = {n64, p->draw.depth == 3, p->draw.textured,
-                               p->draw.raw, p->draw.dither, 0, !world};
+    RenderMaterial material = GpuMaterialFor(&p->draw, p->v, p->count);
     return RenderPrepare(render, &material).shade;
 }
 
@@ -913,9 +908,10 @@ static void Save(void)
     }
     SDL_snprintf(path, sizeof(path), "%s/renderer.ini", savedDir);
     if ((file = fopen(path, "w"))) {
-        const RenderFrame *render = count ? &FrameCapFrameAt(count - 1)->render : RenderCurrent();
-        fprintf(file, "# Active renderer: %s\n", RenderGet(render->id)->name);
-        RenderSave(file, &render->settings);
+        const FrameCapFrame *frame = count ? FrameCapFrameAt(count - 1) : NULL;
+        RendererId id = frame ? frame->render.id : RenderCurrent()->id;
+        fprintf(file, "# Active renderer: %s\n", RenderGet(id)->name);
+        RenderSave(file, frame ? &frame->rendererIni : RenderCommittedSettings());
         fclose(file);
     }
     PortLog("frame recorder: %d frames saved to %s\n", count, savedDir);

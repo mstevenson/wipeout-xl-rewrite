@@ -40,19 +40,36 @@ typedef struct RenderSettings {
 #define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0,1}, {1,1,1,1,1,1,1,0}, {1,1,1,1,1,1,1}, {1,1,1,1,0,0,0,1}, {1,0,MODERN_BRIGHTNESS_MAX,1,1,MODERN_TONEMAP_SOFT_SHADOWS}, 0 }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
-typedef struct RenderFrame { RenderSettings settings; RendererId id; } RenderFrame;
+typedef union RenderProfileSettings {
+    Ps1RenderSettings ps1;
+    PcRenderSettings pc;
+    N64RenderSettings n64;
+    SaturnRenderSettings saturn;
+    ModernRenderSettings modern;
+} RenderProfileSettings;
+struct RenderProfileInfo;
+typedef struct RenderFrame {
+    RenderProfileSettings settings; /* only the selected profile, owned by value */
+    RendererId id;
+    const struct RenderProfileInfo *profile;
+} RenderFrame;
 /* Operation/material flags shared by CPU clipping and shaders, not renderer selection. */
 enum { SHADE_RAW = 1, SHADE_WORLD_TINT = 2, SHADE_PS1_COLOUR = 4, SHADE_DITHER = 8,
        SHADE_AFFINE_COLOUR = 16, SHADE_AFFINE_UV = 32, SHADE_N64 = 64, SHADE_SNAP = 128 };
 /* UI is independent of perspective/depth: affine world billboards are not screen-space UI. */
 typedef struct RenderMaterial {
-    int n64, fullColour, textured, raw, dither, bounds, ui;
+    int n64, fullColour, textured, raw, dither, bounds, ui, perspective;
 } RenderMaterial;
-/* The two sampling bits are profile-specific. Saturn uses nearest sampling in both modes. */
-enum { RENDER_SAMPLE_SATURN_ALPHA = 2, RENDER_SAMPLE_MESH = 3 };
+typedef enum RenderFilter {
+    RENDER_NEAREST, RENDER_THREE_POINT, RENDER_BILINEAR
+} RenderFilter;
+typedef enum RenderCoverage {
+    RENDER_COVERAGE_DEFAULT, RENDER_COVERAGE_HALF, RENDER_COVERAGE_MESH
+} RenderCoverage;
 typedef struct RenderStyle {
     unsigned shade;
-    int filter;
+    RenderFilter filter;
+    RenderCoverage coverage;
     int nativeBounds; /* request for source bounds */
 } RenderStyle;
 
@@ -64,8 +81,10 @@ static inline unsigned RenderBaseShade(const RenderMaterial *material)
 /* Optional resources/operations requested by the profile, implemented by shared transport. */
 typedef struct RenderResources {
     int originalTextures, hdr;
-    int nativeQuads, alphaMesh, cameraAlignedSky;
 } RenderResources;
+typedef struct RenderPacketPolicy {
+    int nativeQuads, nativeSky, shadowMask;
+} RenderPacketPolicy;
 typedef struct Renderer {
     const char *name;
     /* The registry passes only this renderer's profile, never other profiles or mutable settings. */
@@ -73,6 +92,7 @@ typedef struct Renderer {
     int (*depth)(const void *profile);
     RenderGeometry (*geometry)(const void *profile);
     RenderResources (*resources)(const void *profile);
+    RenderPacketPolicy (*packets)(const void *profile);
 } Renderer;
 extern const Renderer ps1Renderer, pcRenderer, n64Renderer, saturnRenderer, modernRenderer;
 const Renderer *RenderGet(RendererId id);
@@ -80,6 +100,7 @@ RendererId RenderIdFromName(const char *name);
 int RenderModernBloom(const RenderSettings *settings);
 /* Original display cadence of the committed renderer profile. */
 int RenderOriginalFrameRate(int pal);
+int RenderOriginalInterpolates(void);
 int RenderPcViewLimits(const RenderFrame *frame, int *sections, int *scenery);
 const void *RenderProfile(const RenderFrame *frame);
 int RenderDepth(const RenderFrame *frame);
@@ -91,7 +112,11 @@ void RenderNativeSize(RendererId id, int pal, int *width, int *height);
 RenderGeometry RenderGeometryFor(const RenderFrame *frame);
 RenderStyle RenderPrepare(const RenderFrame *frame, const RenderMaterial *material);
 RenderResources RenderResourcesFor(const RenderFrame *frame);
+RenderPacketPolicy RenderPacketPolicyFor(const RenderFrame *frame);
+RenderFrame RenderSnapshot(RendererId id, const RenderSettings *settings);
 const RenderFrame *RenderCurrent(void);
+/* Full configuration at the last commit, used by renderer.ini diagnostics. */
+const RenderSettings *RenderCommittedSettings(void);
 int RenderCommit(void); /* call after flushing the previous frame; returns whether policy changed */
 void RenderInvalidate(void); /* startup/settings reload */
 void RenderDefaults(RenderSettings *settings, RendererId id); /* resets only this profile */

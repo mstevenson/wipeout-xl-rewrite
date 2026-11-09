@@ -10,7 +10,7 @@ static RenderStyle Prepare(const void *profile, const RenderMaterial *m)
         s.shade |= SHADE_WORLD_TINT;
     }
     if (m->textured && settings->bilinear && (m->fullColour || !m->n64 || m->bounds)) {
-        s.filter = 2;
+        s.filter = RENDER_BILINEAR;
     }
     return s;
 }
