@@ -16,7 +16,7 @@ static uint64_t now = 1000000000ull;
 static uint64_t presentationCost = 40000000ull;
 static int presentations, servicedFields, pumpedEvents, jitter;
 static uint64_t simulationCost;
-static int linkRole = LINK_MASTER, split = 1, interpolate;
+static int linkRole = LINK_MASTER, split = 1, interpolate, swapInterval;
 uint64_t TestTicksNS(void) { return now; }
 void TestDelayPrecise(uint64_t delay) { now += delay; }
 int PortLinkRole(void) { return linkRole; }
@@ -25,7 +25,7 @@ int PortLinkField(void) { return 0; }
 void PsxIoField(uint64_t field) { servicedFields++; }
 void PsxShowDisplay(void) { if (!PsxBeginPresentation()) return; presentations++; now += presentationCost + (jitter && !(presentations % 10) ? 80000000ull : 0); PsxEndPresentation(); }
 int PortPumpEvents(void) { pumpedEvents++; return 1; }
-void PortSwapInterval(int vsync) {}
+void PortSwapInterval(int vsync) { swapInterval = vsync; }
 int PsxInterpolationTest(void) { return 0; }
 int PsxCanInterpolate(void) { return interpolate; }
 int PsxInterpolationOn(void) { return interpolate; }
@@ -54,6 +54,8 @@ static double Run(int updates)
 
 int main(void)
 {
+    portSettings.render.selection = RENDER_PS1;
+    portSettings.render.ps1.pacing.rate = FRAME_RATE_UNCAPPED;
     double elapsed = Run(60);
     printf("60 NTSC race updates under a 40ms presentation cost: %.3f seconds, %d pictures\n", elapsed, presentations);
     assert(elapsed > 1.9 && elapsed < 2.15);
@@ -64,15 +66,16 @@ int main(void)
     const int caps[] = {15, 20, 30, 45, 60, 75, 90};
     for (int i = 0; i < 7; i++) {
         int cap = caps[i];
-        portSettings.frameRate = FRAME_RATE_CAPPED;
-        portSettings.frameCap = cap;
+        portSettings.render.ps1.pacing = (RenderPacing){FRAME_RATE_CAPPED, cap};
+        RenderCommit();
         elapsed = Run(300);
         double fps = presentations / elapsed;
         printf("cap %d: %.2f displayed FPS, %.2f race updates/sec\n", cap, fps, 300 / elapsed);
         assert(fps <= cap + 0.2 && fps > cap - 1.0);
         assert(elapsed > 9.95 && elapsed < 10.15);
     }
-    portSettings.frameCap = 60;
+    portSettings.render.ps1.pacing.cap = 60;
+    RenderCommit();
     PsxNextPresentation();
     nextPresentation = now + 1000000000ull / 60;
     assert(!PsxBeginPresentation());
@@ -83,7 +86,8 @@ int main(void)
     now += 1000000000ull; /* a stall drops old deadlines, rather than presenting a burst to catch up */
     assert(PsxBeginPresentation()); PsxEndPresentation(); assert(!PsxBeginPresentation());
     for (int i = 0; i < 5; i++) {
-        portSettings.frameCap = caps[i];
+        portSettings.render.ps1.pacing.cap = caps[i];
+        RenderCommit();
         for (int cost = 8; cost <= 80; cost *= 2) {
             presentationCost = (uint64_t)cost * 1000000ull;
             simulationCost = 5000000ull;
@@ -96,18 +100,20 @@ int main(void)
     jitter = 0; simulationCost = 0;
     portPal = 1;
     for (int i = 0; i < 5; i++) {
-        portSettings.frameCap = caps[i];
+        portSettings.render.ps1.pacing.cap = caps[i];
+        RenderCommit();
         elapsed = Run(250);
         assert(elapsed > 9.9 && elapsed < 10.25);
         assert(presentations / elapsed <= caps[i] + 0.2);
     }
     portPal = 0;
     /* Original changes presentation cadence without changing the game's clock. */
-    portSettings.frameRate = FRAME_RATE_CONSOLE;
     presentationCost = 2000000ull;
     for (portPal = 0; portPal <= 1; portPal++) {
         for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
-            portSettings.render.selection = (RendererId)id; RenderCommit();
+            portSettings.render.selection = (RendererId)id;
+            RenderPacingSetting(&portSettings.render, (RendererId)id)->rate = FRAME_RATE_CONSOLE;
+            RenderCommit();
             interpolate = id != RENDER_PS1;
             int updates = portPal ? 250 : 300;
             int expected = id == RENDER_PC ? 60 : id == RENDER_SATURN ? 20 : id == RENDER_PS1 && portPal ? 25 : 30;
@@ -130,7 +136,17 @@ int main(void)
     RenderCommit();
     assert(PresentationPeriod() == 1000000000ull / 60 && PsxBeginPresentation());
     PsxEndPresentation();
-    portSettings.frameRate = FRAME_RATE_UNCAPPED;
+    portSettings.render.pc.pacing.rate = FRAME_RATE_VSYNC;
+    assert(PresentationPeriod() == 1000000000ull / 60);
+    RenderCommit();
+    assert(PresentationPeriod() == 0);
+    Run(2); assert(swapInterval == 1);
+    portSettings.render.selection = RENDER_SATURN;
+    RenderCommit();
+    assert(PresentationPeriod() == 1000000000ull / 20);
+    Run(2); assert(swapInterval == 0);
+    portSettings.render.saturn.pacing.rate = FRAME_RATE_UNCAPPED;
+    RenderCommit();
     presentationCost = 40000000ull;
     interpolate = 0;
     portPal = 1;

@@ -285,8 +285,7 @@ static void TimingLog(void)
         double seconds = (now - last) / 1e9;
         fprintf(file, "%.3f,%.3f,%.3f,%.3f,%d,%d\n", now/1e9, (shown-pictures)/seconds,
                 (PortGameFrames()-frames)/seconds, (PsxFieldCount()-fieldCount)/seconds, racing,
-                portSettings.frameRate == FRAME_RATE_CAPPED ? portSettings.frameCap :
-                portSettings.frameRate == FRAME_RATE_CONSOLE ? RenderOriginalFrameRate(portPal) : 0);
+                PortFrameCap(portPal));
         fflush(file);
         last = now; frames = PortGameFrames(); fieldCount = PsxFieldCount(); pictures = shown;
     }

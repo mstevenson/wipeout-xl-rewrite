@@ -21,9 +21,9 @@ short CurrentScreen, loTileCount, medTileCount, hiTileCount;
 u_short clipLevel=1;
 u_long *OT[2];
 CameraUpdateFunc CameraUpdate;
-static int renderer, cap=2, hulls, nearPackets;
+static int renderer, cap=2, hulls;
 static Object *firstHull;
-static unsigned char drawn[120];
+static unsigned char drawn[120], nearDetail[120];
 int PortNativeRenderer(void) { return renderer; }
 int PortPcNativeView(int *sections, int *scenery) { *sections=cap; *scenery=32767; return renderer==RENDER_PC; }
 int PortOriginalTrack(void) { return -1; }
@@ -36,9 +36,9 @@ u_long *ClearOTagR(u_long *p, int n) { (void)n; return p; }
 void AddPrims(u_long *ot, void *a, void *b) { (void)ot; (void)a; (void)b; }
 void PortTrackPackets(const void *a, const void *b) { (void)a; (void)b; }
 void PortTrackFar(TrackSection *s, const PortView *v) { (void)v; drawn[s-track->sections]=1; }
-void AsmTrackHi(TrackSection *s, Skeleton *c, AutoMeshData *a, short n) { (void)s; (void)c; (void)a; (void)n; nearPackets++; }
-void AsmTrackMed(TrackSection *s, Skeleton *c, short n) { (void)s; (void)c; (void)n; nearPackets++; }
-void AsmTrackLo(TrackSection *s, Skeleton *c, short n) { (void)s; (void)c; (void)n; nearPackets++; }
+void AsmTrackHi(TrackSection *s, Skeleton *c, AutoMeshData *a, short n) { (void)c; (void)a; (void)n; nearDetail[s-track->sections]=3; }
+void AsmTrackMed(TrackSection *s, Skeleton *c, short n) { (void)c; (void)n; nearDetail[s-track->sections]=2; }
+void AsmTrackLo(TrackSection *s, Skeleton *c, short n) { (void)c; (void)n; nearDetail[s-track->sections]=1; }
 void PortDrawObjectFar(Object *o, const PortView *v, const CVECTOR *c)
 {
     (void)v; (void)c;
@@ -81,10 +81,22 @@ int main(void)
     memset(drawn,0,sizeof(drawn));
     assert(PortDrawNativeTrack(&camera,NULL,1));
     for(int i=0;i<120;i++) assert(drawn[i]);
-    renderer=RENDER_MODERN; memset(drawn,0,sizeof(drawn)); nearPackets=0;
+    Face roadFace={0};
+    VECTOR roadVertex={.vz=4096};
+    course.faces=&roadFace;
+    course.vertices=&roadVertex;
+    sections[0].faceCount=sections[3].faceCount=sections[5].faceCount=sections[7].faceCount=1;
+    renderer=RENDER_MODERN; memset(drawn,0,sizeof(drawn));
     assert(PortDrawNativeTrack(&camera,NULL,0));
-    assert(!nearPackets);
+    assert(nearDetail[0]==3 && nearDetail[3]==2 && nearDetail[5]==1 && !nearDetail[7]);
     for(int i=0;i<120;i++) assert(drawn[i]==(i==0||i==3||i==5||i==12||i==19||i==26||i==33));
+    hiTileCount=0x1c0;
+    memset(nearDetail,0,sizeof(nearDetail));
+    memset(drawn,0,sizeof(drawn));
+    assert(PortDrawNativeTrack(&camera,NULL,0));
+    assert(!nearDetail[0] && drawn[0] && nearDetail[3]==2);
+    hiTileCount=0;
+    sections[0].faceCount=sections[3].faceCount=sections[5].faceCount=sections[7].faceCount=0;
     renderer=RENDER_SATURN; memset(drawn,0,sizeof(drawn));
     assert(PortDrawNativeTrack(&camera,NULL,0));
     for(int i=0;i<120;i++) assert(drawn[i]==(i==0||i==3||(i>=5&&i<=9)));

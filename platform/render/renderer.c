@@ -4,6 +4,7 @@
 #include "../pc.h"
 #include "../saturn.h"
 #include "../psx/psx_io.h"
+#include <limits.h>
 #include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
@@ -14,15 +15,18 @@ static int valid;
 
 typedef struct RenderProfileInfo {
     const Renderer *renderer;
-    const char *key, *scaleKey;
-    size_t offset, size, scaleOffset;
+    const char *key, *scaleKey, *rateKey, *capKey;
+    size_t offset, size, scaleOffset, pacingOffset, sceneOffset;
     int width, height, palHeight, fps, palFps, interpolate;
 } Profile;
 
 static const Profile profiles[RENDER_COUNT] = {
 #define RENDER_PROFILE(id, field, w, h, palH, rate, palRate, interpolate) \
-    [id] = { &field##Renderer, #field, #field "_render_scale", offsetof(RenderSettings, field), \
-             sizeof(((RenderSettings *)0)->field), offsetof(RenderSettings, field.scale), w, h, palH, rate, palRate, interpolate },
+    [id] = { &field##Renderer, #field, #field "_render_scale", #field "_frame_rate", #field "_frame_cap", \
+             offsetof(RenderSettings, field), sizeof(((RenderSettings *)0)->field), \
+             offsetof(RenderSettings, field.scale), offsetof(RenderSettings, field.pacing), \
+             offsetof(RenderSettings, field.scene), \
+             w, h, palH, rate, palRate, interpolate },
 #include "profiles.def"
 #undef RENDER_PROFILE
 };
@@ -32,9 +36,47 @@ static const Profile *ProfileFor(RendererId id)
     return &profiles[id >= RENDER_PS1 && id < RENDER_COUNT ? id : RENDER_PS1];
 }
 
-int RenderOriginalFrameRate(int pal)
+RenderPacing *RenderPacingSetting(RenderSettings *s, RendererId id)
 {
-    const Profile *profile = RenderCurrent()->profile;
+    return (RenderPacing *)((char *)s + ProfileFor(id)->pacingOffset);
+}
+
+RenderScene *RenderSceneSetting(RenderSettings *s, RendererId id)
+{
+    return (RenderScene *)((char *)s + ProfileFor(id)->sceneOffset);
+}
+
+const RenderScene *RenderSceneFor(const RenderFrame *frame)
+{
+    const Profile *profile = frame->profile;
+    return (const RenderScene *)((const char *)&frame->settings + (profile->sceneOffset - profile->offset));
+}
+
+static const RenderPacing *FramePacing(const RenderFrame *frame)
+{
+    const Profile *profile = frame->profile;
+    return (const RenderPacing *)((const char *)&frame->settings + (profile->pacingOffset - profile->offset));
+}
+
+int PortFrameRate(void)
+{
+    if (portSettings.frameRateOverride) return portSettings.frameRateOverride - 1;
+    return FramePacing(RenderCurrent())->rate;
+}
+
+int PortFrameCap(int pal)
+{
+    int rate = PortFrameRate();
+    if (rate == FRAME_RATE_CONSOLE) return RenderOriginalFrameRate(RenderCurrent()->id, pal);
+    if (rate == FRAME_RATE_CAPPED) {
+        return portSettings.frameCapOverride ? portSettings.frameCapOverride : FramePacing(RenderCurrent())->cap;
+    }
+    return 0;
+}
+
+int RenderOriginalFrameRate(RendererId id, int pal)
+{
+    const Profile *profile = ProfileFor(id);
     return pal ? profile->palFps : profile->fps;
 }
 
@@ -82,11 +124,6 @@ const void *RenderProfile(const RenderFrame *f)
 int RenderDepth(const RenderFrame *f)
 {
     return f->profile->renderer->depth(RenderProfile(f));
-}
-
-const char *RenderScaleKey(RendererId id)
-{
-    return ProfileFor(id)->scaleKey;
 }
 
 int *RenderScaleSetting(RenderSettings *s, RendererId id)
@@ -149,7 +186,9 @@ int RenderCommit(void)
     committedSettings.modern.bloom = RenderModernBloom(&committedSettings);
     RendererId id = committedSettings.selection;
     if (id == RENDER_AUTO) {
-        if (PortOriginalTrackIs64()) {
+        if (committedSettings.modernForAllPlatforms) {
+            id = RENDER_MODERN;
+        } else if (PortOriginalTrackIs64()) {
             id = committedSettings.n64Selection;
         } else if (PortOriginalTrack() >= 0) {
             id = committedSettings.ps1Selection;
@@ -160,6 +199,15 @@ int RenderCommit(void)
         } else {
             id = committedSettings.ps1Selection;
         }
+    }
+    const RenderScene *override = &portSettings.sceneOverride;
+    RenderScene *scene = RenderSceneSetting(&committedSettings, id);
+    if (override->farView) scene->farView = override->farView > 0;
+    if (override->farFlares) scene->farFlares = override->farFlares > 0;
+    if (override->fade) scene->fade = override->fade > 0;
+    if (override->fadeNear) {
+        scene->fadeNear = override->fadeNear;
+        scene->fadeFar = override->fadeFar;
     }
     RenderFrame next = RenderSnapshot(id, &committedSettings);
     /* Inactive preferences must not disturb interpolation or recording. */
@@ -213,6 +261,7 @@ static const struct {
     size_t offset;
 } options[] = {
 #define OPTION(key, field) {key, offsetof(RenderSettings, field)}
+    OPTION("modern_for_all_platforms", modernForAllPlatforms),
     OPTION("modern_bilinear", modern.bilinear),
     OPTION("modern_resample", modern.resample),
     OPTION("modern_bloom", modern.bloom),
@@ -239,16 +288,55 @@ static const char *const tonemapperKeys[] = {
     [MODERN_TONEMAP_SOFT_SHADOWS] = "pbr_neutral_soft_shadows"
 };
 
+static int SetScene(RenderScene *scene, const char *key, const char *value)
+{
+    long number = strtol(value, NULL, 10);
+
+    if (!strcmp(key, "far_view")) {
+        scene->farView = number != 0;
+    } else if (!strcmp(key, "fade")) {
+        scene->fade = number != 0;
+    } else if (!strcmp(key, "far_flares")) {
+        scene->farFlares = number != 0;
+    } else if (!strcmp(key, "fade_near")) {
+        if (number > 0 && number <= INT_MAX - 1000) scene->fadeNear = (int)number;
+    } else if (!strcmp(key, "fade_far")) {
+        if (number > 0 && number <= INT_MAX) scene->fadeFar = (int)number;
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
 int RenderSet(RenderSettings *s, const char *key, const char *value)
 {
     for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
-        if (!strcmp(key, profiles[id].scaleKey)) {
+        const Profile *profile = &profiles[id];
+        if (!strcmp(key, profile->rateKey)) {
+            char *end;
+            long rate = strtol(value, &end, 10);
+            if (end != value && !*end && rate >= FRAME_RATE_UNCAPPED && rate <= FRAME_RATE_CONSOLE)
+                RenderPacingSetting(s, (RendererId)id)->rate = (int)rate;
+            return 1;
+        }
+        if (!strcmp(key, profile->capKey)) {
+            char *end;
+            long cap = strtol(value, &end, 10);
+            if (end != value && !*end && cap > 0)
+                RenderPacingSetting(s, (RendererId)id)->cap = cap < FRAME_CAP_MIN ? FRAME_CAP_MIN :
+                    cap > FRAME_CAP_MAX ? FRAME_CAP_MAX : (int)cap;
+            return 1;
+        }
+        if (!strcmp(key, profile->scaleKey)) {
             char *end;
             long scale = strtol(value, &end, 10);
             if (end != value && !*end && scale >= 0 && scale <= 16)
                 *RenderScaleSetting(s, (RendererId)id) = (int)scale;
             return 1;
         }
+        size_t prefix = strlen(profile->key);
+        if (!strncmp(key, profile->key, prefix) && key[prefix] == '_' &&
+            SetScene(RenderSceneSetting(s, (RendererId)id), key + prefix + 1, value)) return 1;
     }
     if (!strcmp(key, "modern_tonemapper")) {
         for (size_t i = 0; i < sizeof(tonemapperKeys) / sizeof(tonemapperKeys[0]); i++) {
@@ -295,8 +383,15 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
 void RenderSave(FILE *file, const RenderSettings *s)
 {
     for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
-        const int *scale = (const int *)((const char *)s + profiles[id].scaleOffset);
-        fprintf(file, "%s = %d\n", profiles[id].scaleKey, *scale);
+        const Profile *profile = &profiles[id];
+        const int *scale = (const int *)((const char *)s + profile->scaleOffset);
+        const RenderPacing *pacing = (const RenderPacing *)((const char *)s + profile->pacingOffset);
+        const RenderScene *scene = (const RenderScene *)((const char *)s + profile->sceneOffset);
+        fprintf(file, "%s = %d\n%s = %d\n%s = %d\n", profile->scaleKey, *scale,
+                profile->rateKey, pacing->rate, profile->capKey, pacing->cap);
+        fprintf(file, "%s_far_view = %d\n%s_fade = %d\n%s_fade_near = %d\n%s_fade_far = %d\n%s_far_flares = %d\n",
+                profile->key, scene->farView, profile->key, scene->fade, profile->key, scene->fadeNear,
+                profile->key, scene->fadeFar, profile->key, scene->farFlares);
     }
     fprintf(file, "pc_draw_distance = %d\n", s->pc.drawDistance);
     fprintf(file, "modern_brightness = %d\n", s->modern.brightness);

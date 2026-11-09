@@ -1874,48 +1874,7 @@ static void Console(void)
         }
         if (ImGui::BeginTabItem("Graphics", nullptr, FirstTab("graphics"))) {
             if (RenderSettingsUi(&portSettings.render)) Changed();
-            ImGui::SeparatorText("Display and scene");
-            char nativeDistance[64];
-            SDL_snprintf(nativeDistance, sizeof(nativeDistance), "Native (%s)", RenderGet(RenderCurrent()->id)->name);
-            const char *const distances[] = {nativeDistance, "Full (the whole track)"};
-            int distance = portSettings.farView ? 1 : 0;
-            if (ImGui::Combo("Draw distance", &distance, distances, IM_ARRAYSIZE(distances))) {
-                portSettings.farView = distance;
-                Changed();
-            }
-            ImGui::BeginDisabled(!portSettings.farView);
-            bool fade = portSettings.fade != 0;
-            if (ImGui::Checkbox("Fade distant scenery into the sky", &fade)) {
-                portSettings.fade = fade;
-                Changed();
-            }
-            bool farFlares = portSettings.farFlares != 0;
-            if (ImGui::Checkbox("Engine flares on distant ships", &farFlares)) {
-                portSettings.farFlares = farFlares;
-                Changed();
-            }
-            ImGui::TextDisabled("Draw engine flares beyond the native distance.");
-            ImGui::EndDisabled();
-            ImGui::Separator();
-            char originalRate[96];
-            SDL_snprintf(originalRate, sizeof(originalRate), "Original (%s, %d fps)",
-                         RenderGet(RenderCurrent()->id)->name, RenderOriginalFrameRate(portPal));
-            const char *const rates[] = {"Uncapped", "Display refresh (VSync)", "Capped", originalRate};
-            int rate = portSettings.frameRate;
-            if (ImGui::Combo("Frame rate", &rate, rates, IM_ARRAYSIZE(rates))) {
-                portSettings.frameRate = rate;
-                Changed();
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip(
-                "Original follows the active renderer profile: PS1 30/25, N64 30, Saturn 20, PC and Modern 60 fps.\n"
-                "Game simulation keeps its original timing; other platforms use interpolated display frames.");
-            if (portSettings.frameRate == FRAME_RATE_CAPPED) {
-                int cap = portSettings.frameCap;
-                if (ImGui::DragInt("Frames per second", &cap, 1.0f, 15, 1000)) {
-                    portSettings.frameCap = SDL_clamp(cap, 15, 1000);
-                    Changed();
-                }
-            }
+            ImGui::SeparatorText("Display");
             VideoStandard();
             ImGui::Separator();
             bool wide = portSettings.widescreen != 0;

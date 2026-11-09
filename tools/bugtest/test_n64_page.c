@@ -576,6 +576,7 @@ static void RendererBoundaries(void)
         assert(!upcoming.table && !shownTables.table);
     }
     portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    portSettings.render.modernForAllPlatforms = 0;
     RenderCommit();
     portSettings.render.selection = RENDER_PS1;
     assert(!RenderCommit()); /* same effective renderer, different selection spelling */
@@ -584,8 +585,8 @@ static void RendererBoundaries(void)
 
 static void OriginalInterpolation(void)
 {
-    portSettings.frameRate = FRAME_RATE_CONSOLE;
     for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
+        RenderPacingSetting(&portSettings.render, (RendererId)id)->rate = FRAME_RATE_CONSOLE;
         portSettings.render.selection = (RendererId)id; RenderCommit();
         assert(PsxInterpolationOn() == (id != RENDER_PS1));
         portConfig.hidden = 1; assert(!PsxInterpolationOn()); portConfig.hidden = 0;
@@ -596,8 +597,8 @@ static void OriginalInterpolation(void)
         testLinkRole = LINK_SLAVE;
         assert(PsxInterpolationOn() == (id != RENDER_PS1));
         testLinkRole = LINK_NONE;
+        RenderPacingSetting(&portSettings.render, (RendererId)id)->rate = FRAME_RATE_UNCAPPED;
     }
-    portSettings.frameRate = FRAME_RATE_UNCAPPED;
     portSettings.render.selection = RENDER_PS1; RenderCommit();
     assert(PsxInterpolationOn());
     GteKeepPast(0);

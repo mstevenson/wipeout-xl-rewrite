@@ -1,18 +1,23 @@
 # Rendering profiles
 
-**Graphics** shows a horizontal row of **PlayStation**, **PC**, **Nintendo 64**
-and **Sega Saturn** columns. Each selects the renderer profile to use for that
-platform, defaulting to its matching renderer. Saturn discs use the Saturn
+**Graphics** starts with **Use Modern for all platforms**, enabled by default
+for every disc and imported track. Turn it off to use the selections in the
+**PlayStation**, **PC**, **Nintendo 64**, and **Sega Saturn** columns. Each
+selection starts with its matching renderer. Saturn discs use the Saturn
 preference, PC discs/folders use the PC preference, and PlayStation discs use the
 PlayStation preference. Imported PlayStation and Wipeout 64 tracks use their own
 platform preferences, returning to the loaded disc's preference afterwards.
 **Active renderer** shows the committed frame's renderer. Selection changes
 rendering, not the game version or assets.
 
-Modern is available in each of the four platform selectors. All selectors stay visible. Below them, each renderer profile has
+Modern appears first in each platform selector and in the row of profile panels.
+All four platform selectors stay visible. Below them, each renderer profile has
 its own controls and reset button. Profiles keep their settings; platforms
 choosing the same profile share those controls. The profile panels scroll
 horizontally in narrow windows and with larger fonts.
+Resolution, frame rate, and draw distance sit at the top of each panel,
+followed by hardware-specific controls. **Enhancements** groups controls for
+port-specific features.
 Each profile has its own **Resolution** selector and remembers its scale.
 At 1×, PS1 uses 320×240 (320×256 in PAL mode), N64 uses 320×240,
 Saturn uses 352×240, and PC uses 640×480. Higher choices multiply that profile's
@@ -20,8 +25,15 @@ base dimensions; **Auto** follows the window size. Widescreen adds columns while
 presentation preserves the 4:3 base aspect ratio. Switching profiles also switches
 resolution. Modern defaults to Auto and uses the PlayStation base dimensions.
 The four hardware profiles default to 1×.
-Widescreen, frame rate, the Native/Full draw-distance choice, fading and HD
-textures are shared. Native draw distance follows the active renderer. PC uses
+Widescreen and HD textures are shared. Each profile saves its **Draw distance**
+choice, fade toggle and range, and distant engine flare toggle. The port's
+scenery fade and distant flares apply in **Full** mode. Modern defaults to
+**Full** with both effects enabled. The four hardware profiles default to
+**Native** with scenery fade off.
+`WIPEOUT_FAR_VIEW`, `WIPEOUT_FADE`, and `WIPEOUT_FAR_FLARES`
+override these settings for the current run.
+
+Native draw distance follows the active renderer. PC uses
 its original F3 road and scenery limits and its separate rendered-ship gate.
 PS1 retains the original regional road, scenery and ship rules. N64 uses its
 camera-direction/junction road walker, original scenery bounds and remembered
@@ -34,11 +46,16 @@ and uses the Saturn ship depth interval. Original course-specific exceptions
 apply when their source course is loaded. See [native distance verification](port-notes/native-distance.md).
 HD texture replacements apply above 1× in the hardware profiles, including when Auto selects a higher scale.
 
-The shared **Frame rate > Original** mode follows the **active renderer profile**,
-including overrides chosen for another platform. Its label shows the selected
-profile and target. PlayStation uses 30 fps (25 in PAL mode), Nintendo 64 uses
-30 fps, Sega Saturn uses 20 fps, and PC and Modern use 60 fps. Changing profiles
-switches the target at the frame boundary.
+Each profile saves its own **Frame rate** mode and **Frames per second** cap.
+The hardware profiles default to **Original**. Modern defaults to
+**Display refresh (VSync)**, which syncs presentation to the display.
+The initial cap when **Capped** is selected is 144 fps.
+`WIPEOUT_FRAME_RATE` can still override presentation pacing for the current run.
+
+**Frame rate > Original** shows the cadence for the profile being edited.
+PlayStation uses 30 fps (25 in PAL mode), Nintendo 64 uses 30 fps,
+Sega Saturn uses 20 fps, and PC and Modern use 60 fps. Changing profiles
+switches the pacing settings at the frame boundary.
 The Saturn target follows [developer David Swan's account](https://www.arcadeattack.co.uk/david-swan-interview/)
 of the 20 fps cap; N64 uses a 30 fps target for the supported USA release, and PC
 uses a 60 fps presentation default, rather than claiming a fixed historical PC rate.
@@ -216,7 +233,7 @@ the original Saturn game's faster, flat-screen scrolling. Its RBG0 transform
 uses heading/2, vertical offset 120−pitch/3, roll, unit scale and pivot (176,120),
 with 352 Saturn dots mapped onto the host's 320-dot scene. It keeps console-pixel
 sampling at higher resolutions.
-Enable **Graphics > Sega Saturn > Camera-aligned sky (enhancement)** to make
+Enable **Graphics > Sega Saturn > Enhancements > Camera-aligned sky** to make
 sky landmarks move with the scenery through yaw, pitch and roll. The shader
 maps perspective viewing rays to panorama angles using the captured focal
 length and inverse camera rotation. The setting is saved as
@@ -246,26 +263,20 @@ Ship road light is decoded from the compatibility colour; source levels above it
 texture samples, rather than native scan-converted pixels. Builds, tests and race
 captures validate this implementation; they do not establish console equivalence.
 
-## Settings and migration
+## Settings
 
 | INI value | Meaning |
 | --- | --- |
+| `modern_for_all_platforms` | Use Modern for every platform when set to 1 (default) |
 | `ps1_renderer`, `pc_renderer`, `n64_renderer`, `saturn_renderer` | Profile for that platform: `ps1`, `pc`, `n64`, `saturn` or `modern`; defaults to the matching profile |
 | `ps1_*`, `pc_*`, `saturn_*`, `n64_*`, `modern_*` controls | Independent profile settings |
 | `ps1_render_scale`, `pc_render_scale`, `n64_render_scale`, `saturn_render_scale`, `modern_render_scale` | Profile resolution multiplier, limited by GPU capacity. Use 0 for Auto. |
 
-The old global `render_scale` migrates to the four hardware profiles where a
-profile scale is missing. Positive values become native multipliers. PC halves
-the old multiplier, rounding up, because its base is now 640×480. The former
-default Auto value gives way to each profile's default. `WIPEOUT_RENDER_SCALE`
-overrides all profile multipliers, including 0 for Auto.
-
-Old `depth_buffer` initializes PC depth when `pc_depth` is missing.
-Explicit profile keys take precedence regardless of line order.
+`WIPEOUT_RENDER_SCALE` overrides all profile multipliers, including 0 for Auto.
 `WIPEOUT_DEPTH_BUFFER` overrides PC depth.
 
-`WIPEOUT_RENDERER=ps1|pc|n64|saturn|modern` forces a renderer for the run and
-`auto` follows platform preferences. The INI stores each platform's chosen
+`WIPEOUT_RENDERER=ps1|pc|n64|saturn|modern` takes precedence for the run.
+`auto` follows the saved renderer settings. The INI stores each platform's chosen
 profile. Hidden regression runs use defaults and environment overrides and skip
 reading and saving player settings.
 

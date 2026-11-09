@@ -902,7 +902,7 @@ static void Save(void)
 
         fprintf(file, "{\n  \"version\": \"%s\",\n  %.*s  \"widescreen\": %d,\n  \"frame rate\": %d,\n"
                       "  \"console depth\": %d,\n  \"recorded frames\": %d\n}\n",
-                PORT_VERSION, n, info, portSettings.widescreen, portSettings.frameRate, !RenderDepth(RenderCurrent()),
+                PORT_VERSION, n, info, portSettings.widescreen, PortFrameRate(), !RenderDepth(RenderCurrent()),
                 count);
         fclose(file);
     }

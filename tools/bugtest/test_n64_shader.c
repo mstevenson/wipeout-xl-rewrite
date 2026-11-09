@@ -37,6 +37,11 @@ static void TestProgram(RendererId id)
 
 /* Flush uses the real batching/depth code; no game or settings file is needed. */
 PortSettings portSettings = {.render = RENDER_DEFAULTS};
+static void ResetRenderSettings(void)
+{
+    RenderDefaults(&portSettings.render, RENDER_AUTO);
+    portSettings.render.modernForAllPlatforms = 0;
+}
 static int n64Track;
 int portPal;
 static int testWindowWidth = 1280, testWindowHeight = 960;
@@ -383,7 +388,7 @@ static void BillboardModulation(void)
     for (int id = RENDER_PS1; id <= RENDER_PC; id++) {
         for (int filtered = 0; filtered < 2; filtered++) {
             for (int depth = 0; depth < 2; depth++) {
-                portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+                ResetRenderSettings();
                 portSettings.render.selection = (RendererId)id;
                 portSettings.render.ps1.colourPrecision = 0;
                 portSettings.render.ps1.depth = portSettings.render.pc.depth = depth;
@@ -756,7 +761,7 @@ static void NativeSaturn(void)
     unsetenv("WIPEOUT_SATURN_VDP2_REFERENCE");
     RenderSettings saved = portSettings.render;
     int oldX=areaX,oldY=areaY,oldW=areaW,oldH=areaH;
-    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    ResetRenderSettings();
     portSettings.render.selection = RENDER_SATURN;
     RenderCommit();
     areaX=0;areaY=100;areaW=8;areaH=8;
@@ -937,7 +942,7 @@ static void SaturnGpuReference(void)
 {
     RenderSettings saved=portSettings.render;
     int ox=areaX,oy=areaY,ow=areaW,oh=areaH;
-    portSettings.render=(RenderSettings)RENDER_DEFAULTS;
+    ResetRenderSettings();
     portSettings.render.selection=RENDER_SATURN;RenderCommit();
     areaX=0;areaY=100;areaW=areaH=64;
     GLuint oldFramebuffer=framebuffer,testTexture,testDepth;
@@ -1287,7 +1292,7 @@ static void WorldDithering(void)
     RenderMaterial material = {.dither = 1};
     GpuDrawState effect = {.semi = 1, .dither = 1};
     for (int id = RENDER_PS1; id <= RENDER_N64; id++) for (int dither = 0; dither < 2; dither++) {
-        portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+        ResetRenderSettings();
         portSettings.render.selection = (RendererId)id;
         portSettings.render.ps1.dither = dither;
         RenderCommit();
@@ -1330,7 +1335,7 @@ static void MainMenuColour(void)
     for (int dither = 0; dither < 2; dither++)
     for (int buffer = 0; buffer < 2; buffer++)
     for (size_t e = 0; e < sizeof(elements) / sizeof(elements[0]); e++) {
-        portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+        ResetRenderSettings();
         portSettings.render.selection = RENDER_PS1;
         portSettings.render.ps1.colourPrecision = precision;
         portSettings.render.ps1.dither = dither;
@@ -1830,7 +1835,7 @@ static void ViResampling(void)
         GLuint destination = ViTarget(&output, 970, 730, NULL);
         PictureChanged(0, VRAM_HEIGHT);
         colour = input; framebuffer = raw; scale = testScale;
-        portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+        ResetRenderSettings();
         portSettings.render.n64 = (N64RenderSettings){1, 0, 1, 1, 0, 1};
         memset(pictureOwners, 0, sizeof(pictureOwners)); n64Track = sceneWide = 1; RenderCommit();
         for (int c = 0; c < sizeof(sizes) / sizeof(sizes[0]); c++) for (int flip = 0; flip <= 1; flip++) {
@@ -1920,7 +1925,7 @@ static void RendererLifecycle(void)
     GLuint destination = ViTarget(&output, 16, 16, NULL);
     colour = input; framebuffer = raw; wideFramebuffer = 0; wideMargin = 0; areaWide = 0;
     scale = 1; PictureChanged(0, VRAM_HEIGHT); memset(pictureOwners, 0, sizeof(pictureOwners)); n64Track = sceneWide = 1;
-    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    ResetRenderSettings();
     RenderCommit();
     GpuRendererShutdown();
     RememberPicture(0, 0, 320, 512);
@@ -2003,7 +2008,7 @@ static void ScreenBufferOwnership(void)
     GLuint raw = ViTarget(&input, VRAM_WIDTH, VRAM_HEIGHT, source);
     GLuint destination = ViTarget(&output, 16, 16, NULL);
     colour = input; framebuffer = raw; wideMargin = areaWide = 0; scale = 1;
-    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    ResetRenderSettings();
     for (int direction = 0; direction < 3; direction++) {
         n64Track = sceneWide = 1; PictureChanged(0, VRAM_HEIGHT);
         memset(pictureOwners, 0, sizeof(pictureOwners));
@@ -2064,7 +2069,7 @@ static void ScreenBufferOwnership(void)
     }
     /* A readback crop straddling both screens must notice a change in either one,
        even when the other screen previously had the newer revision. */
-    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    ResetRenderSettings();
     n64Track = sceneWide = 1; RenderCommit();
     RememberPicture(0, 0, 320, 512); PictureChanged(0, VRAM_HEIGHT);
     for (int update = 0; update < 3; update++) {
@@ -2150,7 +2155,7 @@ static void ProfileNativeResolution(void)
     scale = 1; rasterX = rasterY = 1;
     assert(CreateFramebuffer());
     initialised = 1;
-    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    ResetRenderSettings();
     portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
     portSettings.hdTextures = 1;
     for (portPal = 0; portPal <= 1; portPal++) {
@@ -2260,7 +2265,7 @@ static void ModernHdr(void)
     portPal = 0;
     scale = 1; rasterX = rasterY = 1;
     assert(CreateFramebuffer());
-    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    ResetRenderSettings();
     portSettings.render.selection = RENDER_MODERN;
     portSettings.render.modern.brightness = MODERN_BRIGHTNESS_MAX; /* Keep the HDR fixture's input levels fixed. */
     portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
@@ -2468,7 +2473,7 @@ static void ModernWeaponLights(void)
     wideMargin = areaWide = wideDirty = 0;
     portPal = 0; scale = 1; rasterX = rasterY = 1;
     assert(CreateFramebuffer());
-    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    ResetRenderSettings();
     portSettings.render.selection = RENDER_MODERN;
     portSettings.render.modern.brightness = 100;
     portSettings.render.modern.bloom = 0;
@@ -2543,6 +2548,7 @@ static void ModernWeaponLights(void)
 
 int main(void)
 {
+    ResetRenderSettings();
     assert(SDL_Init(SDL_INIT_VIDEO));
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);

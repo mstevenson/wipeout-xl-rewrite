@@ -2630,7 +2630,7 @@ int PsxInterpolationOn(void)
         on = PortLinkSplit() && PortLinkInterpolate(); /* as the first player's game (whose window it is) does */
     } else {
         on = PsxInterpolationTest() > 0 ||
-             ((portSettings.frameRate != FRAME_RATE_CONSOLE || RenderOriginalInterpolates()) &&
+             ((PortFrameRate() != FRAME_RATE_CONSOLE || RenderOriginalInterpolates()) &&
               !portConfig.fixedStep && !portConfig.hidden);
         if (role == LINK_MASTER) {
             PortLinkSetInterpolate(on);

@@ -1,4 +1,4 @@
-/* Real settings migration/persistence without touching the player's file. */
+/* Real settings persistence without touching the player's file. */
 #include <SDL3/SDL.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -21,10 +21,14 @@ int PortOriginalTrack(void) { return originalTrack; }
 int PortPcData(void) { assert(discLoaded); return pcData; }
 int PortSaturnDisc(void) { assert(discLoaded); return saturnDisc; }
 const struct Disc *PsxIoDisc(void) { return discLoaded ? (const struct Disc *)&discLoaded : NULL; }
-static void Load(const char *contents)
+static void LoadSettings(const char *prefix, const char *contents)
 {
     FILE *file = fopen(PortSettingsPath(), "w"); assert(file);
-    fputs(contents, file); fclose(file); PortSettingsLoad();
+    fputs(prefix, file); fputs(contents, file); fclose(file); PortSettingsLoad();
+}
+static void LoadPlatformSettings(const char *contents)
+{
+    LoadSettings("modern_for_all_platforms = 0\n", contents);
 }
 static void Policies(void)
 {
@@ -69,7 +73,7 @@ static void Policies(void)
 
 static void SaturnProfile(void)
 {
-    Load("ps1_renderer = saturn\nsaturn_depth = 1\nsaturn_mesh = 0\n");
+    LoadPlatformSettings("ps1_renderer = saturn\nsaturn_depth = 1\nsaturn_mesh = 0\n");
     assert(RenderCurrent()->id == RENDER_SATURN && RenderDepth(RenderCurrent()));
     assert(!RenderCurrent()->settings.saturn.cameraAlignedSky);
     RenderMaterial m = {.textured = 1, .dither = 1};
@@ -95,22 +99,22 @@ static void SaturnProfile(void)
     assert(RenderPrepare(RenderCurrent(), &m).coverage == RENDER_COVERAGE_DEFAULT);
     m.n64 = 1;
     assert(RenderPrepare(RenderCurrent(), &m).shade & SHADE_N64);
-    Load("ps1_renderer = saturn\n");
+    LoadPlatformSettings("ps1_renderer = saturn\n");
     n64 = 1; RenderCommit(); assert(RenderCurrent()->id == RENDER_N64);
     n64 = 0; RenderCommit(); assert(RenderCurrent()->id == RENDER_SATURN);
 }
 
 static void ModernProfile(void)
 {
-    Load("ps1_renderer = modern\nmodern_render_scale = 3\n");
+    LoadPlatformSettings("ps1_renderer = modern\nmodern_render_scale = 3\n");
     assert(RenderCurrent()->id == RENDER_MODERN && RenderDepth(RenderCurrent()));
-    assert(RenderOriginalFrameRate(0) == 60 && RenderScale(RenderCurrent()) == 3);
+    assert(RenderOriginalFrameRate(RENDER_MODERN, 0) == 60 && RenderScale(RenderCurrent()) == 3);
     assert(RenderCurrent()->settings.modern.brightness == 85);
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.bloom);
     assert(RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
-    Load("ps1_renderer = modern\nmodern_render_scale = 3\n"
+    LoadPlatformSettings("ps1_renderer = modern\nmodern_render_scale = 3\n"
          "modern_bilinear = 0\nmodern_tonemapper = original\n");
     assert(!RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_ORIGINAL);
@@ -157,10 +161,10 @@ static void ModernProfile(void)
 
 static void DisplayResampling(void)
 {
-    Load(""); /* Missing display settings use each renderer's defaults. */
+    LoadPlatformSettings(""); /* Missing display settings use each renderer's defaults. */
     assert(!portSettings.render.ps1.resample && portSettings.render.pc.resample);
     assert(portSettings.render.n64.resample && !portSettings.render.saturn.resample);
-    Load("ps1_resample = 0\npc_resample = 0\nsaturn_resample = 1\nn64_resample = 0\n");
+    LoadPlatformSettings("ps1_resample = 0\npc_resample = 0\nsaturn_resample = 1\nn64_resample = 0\n");
     assert(!portSettings.render.ps1.resample && !portSettings.render.pc.resample);
     assert(!portSettings.render.n64.resample && portSettings.render.saturn.resample);
     assert(PortSettingsSave());
@@ -173,7 +177,7 @@ static void DisplayResampling(void)
     assert(RenderCommit() && RenderCurrent()->settings.ps1.resample);
     portSettings.render.saturn.resample = 0;
     assert(!RenderCommit()); /* inactive display policy leaves the current frame alone */
-    Load("ps1_resample = bogus\npc_resample = -1\nsaturn_resample = 2\n");
+    LoadPlatformSettings("ps1_resample = bogus\npc_resample = -1\nsaturn_resample = 2\n");
     assert(!portSettings.render.ps1.resample && portSettings.render.pc.resample && !portSettings.render.saturn.resample);
 }
 
@@ -309,9 +313,35 @@ static void ResourcePolicyIsolation(void)
     puts("All five profiles isolate resource requirements and source-bound policy from inactive settings: OK");
 }
 
+static void ModernOverride(void)
+{
+    LoadSettings("", "ps1_renderer = pc\npc_renderer = ps1\n");
+    assert(portSettings.render.modernForAllPlatforms && RenderCurrent()->id == RENDER_MODERN);
+    discLoaded = 1;
+    saturnDisc = 1;
+    assert(!RenderCommit() && RenderCurrent()->id == RENDER_MODERN);
+    saturnDisc = 0; pcData = 1;
+    assert(!RenderCommit() && RenderCurrent()->id == RENDER_MODERN);
+    originalTrack = 0;
+    assert(!RenderCommit() && RenderCurrent()->id == RENDER_MODERN);
+    n64 = 1;
+    assert(!RenderCommit() && RenderCurrent()->id == RENDER_MODERN);
+    discLoaded = pcData = n64 = 0;
+    originalTrack = -1;
+
+    portSettings.render.modernForAllPlatforms = 0;
+    assert(RenderCurrent()->id == RENDER_MODERN);
+    assert(RenderCommit() && RenderCurrent()->id == RENDER_PC);
+    assert(PortSettingsSave());
+    PortSettingsLoad();
+    assert(!portSettings.render.modernForAllPlatforms && RenderCurrent()->id == RENDER_PC);
+    assert(portSettings.render.ps1Selection == RENDER_PC && portSettings.render.pcSelection == RENDER_PS1);
+    puts("Default Modern override covers discs and imported tracks and restores saved platform choices: OK");
+}
+
 static void PlatformSelection(void)
 {
-    Load("");
+    LoadPlatformSettings("");
     discLoaded = 1;
     assert(RenderCurrent()->id == RENDER_PS1);
     saturnDisc = 1;
@@ -327,7 +357,7 @@ static void PlatformSelection(void)
     assert(RenderCommit() && RenderCurrent()->id == RENDER_PC);
     pcData = 0; saturnDisc = 1;
     assert(RenderCommit() && RenderCurrent()->id == RENDER_SATURN);
-    Load("ps1_renderer = n64\nn64_renderer = saturn\n"
+    LoadPlatformSettings("ps1_renderer = n64\nn64_renderer = saturn\n"
          "pc_renderer = ps1\nsaturn_renderer = pc\n");
     assert(RenderCurrent()->id == RENDER_PC);
     assert(portSettings.render.ps1Selection == RENDER_N64);
@@ -342,7 +372,7 @@ static void PlatformSelection(void)
     n64 = 1;
     assert(RenderCommit() && RenderCurrent()->id == RENDER_PS1);
     discLoaded = saturnDisc = pcData = n64 = 0;
-    Load("ps1_renderer = auto\npc_renderer = bad\nsaturn_renderer = -1\nn64_renderer = auto\n");
+    LoadPlatformSettings("ps1_renderer = auto\npc_renderer = bad\nsaturn_renderer = -1\nn64_renderer = auto\n");
     assert(portSettings.render.ps1Selection == RENDER_PS1 && portSettings.render.pcSelection == RENDER_PC);
     assert(portSettings.render.saturnSelection == RENDER_SATURN && portSettings.render.n64Selection == RENDER_N64);
     puts("Platform routing, imported tracks and independent persistence: OK");
@@ -352,7 +382,9 @@ static void EnvironmentOverrides(void)
 {
     SDL_Environment *env = SDL_GetEnvironment();
     SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDERER", "n64", true);
-    Load("ps1_renderer = pc\nn64_renderer = saturn\n");
+    LoadSettings("", "");
+    assert(portSettings.render.modernForAllPlatforms && RenderCurrent()->id == RENDER_N64);
+    LoadPlatformSettings("ps1_renderer = pc\nn64_renderer = saturn\n");
     assert(RenderCurrent()->id == RENDER_N64);
     n64 = 1;
     assert(!RenderCommit() && RenderCurrent()->id == RENDER_N64);
@@ -367,7 +399,7 @@ static void EnvironmentOverrides(void)
 
     for (int force = 0; force <= 1; force++) {
         SDL_SetEnvironmentVariable(env, "WIPEOUT_MODERN_BLOOM", force ? "1" : "0", true);
-        Load(force ? "ps1_renderer = modern\nmodern_weapon_lights = 0\nmodern_bloom = 0\n"
+        LoadPlatformSettings(force ? "ps1_renderer = modern\nmodern_weapon_lights = 0\nmodern_bloom = 0\n"
                    : "ps1_renderer = modern\nmodern_weapon_lights = 0\nmodern_bloom = 1\n");
         assert(RenderCurrent()->id == RENDER_MODERN);
         assert(portSettings.render.modern.bloom == !force);
@@ -385,7 +417,7 @@ static void ProfileResolutions(void)
 {
     SDL_Environment *env = SDL_GetEnvironment();
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDER_SCALE");
-    Load("");
+    LoadPlatformSettings("");
     for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
         assert(*RenderScaleSetting(&portSettings.render, (RendererId)id) == 1);
         for (int pal = 0; pal <= 1; pal++) {
@@ -395,15 +427,9 @@ static void ProfileResolutions(void)
             assert(h == (id == RENDER_PC ? 480 : id == RENDER_PS1 && pal ? 256 : 240));
         }
     }
-    Load("render_scale = 0\n");
-    assert(portSettings.render.saturn.scale == 1 && portSettings.render.pc.scale == 1);
-    Load("render_scale = 3\n");
-    assert(portSettings.render.ps1.scale == 3 && portSettings.render.pc.scale == 2);
-    assert(portSettings.render.n64.scale == 3 && portSettings.render.saturn.scale == 3);
-    assert(portSettings.render.modern.scale == 0);
-    Load("ps1_render_scale = 3\npc_render_scale = 0\nsaturn_render_scale = 2\nrender_scale = 4\n");
+    LoadPlatformSettings("ps1_render_scale = 3\npc_render_scale = 0\nsaturn_render_scale = 2\n");
     assert(portSettings.render.ps1.scale == 3 && portSettings.render.pc.scale == 0);
-    assert(portSettings.render.saturn.scale == 2 && portSettings.render.n64.scale == 4);
+    assert(portSettings.render.saturn.scale == 2 && portSettings.render.n64.scale == 1);
     assert(portSettings.render.modern.scale == 0);
     assert(PortSettingsSave());
     RenderSettings expected = portSettings.render;
@@ -417,32 +443,114 @@ static void ProfileResolutions(void)
     assert(RenderCommit() && RenderScale(RenderCurrent()) == 2);
     RenderDefaults(&portSettings.render, RENDER_PS1);
     assert(portSettings.render.ps1.scale == 1 && portSettings.render.saturn.scale == 5);
-    Load("pc_render_scale = bad\nn64_render_scale = -1\nsaturn_render_scale = 17\nps1_render_scale = 2x\n");
+    LoadPlatformSettings("pc_render_scale = bad\nn64_render_scale = -1\nsaturn_render_scale = 17\nps1_render_scale = 2x\n");
     assert(portSettings.render.ps1.scale == 1 && portSettings.render.pc.scale == 1);
     assert(portSettings.render.n64.scale == 1 && portSettings.render.saturn.scale == 1);
     SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDER_SCALE", "2", true);
-    Load("ps1_render_scale = 1\npc_render_scale = 4\n");
+    LoadPlatformSettings("ps1_render_scale = 1\npc_render_scale = 4\n");
     assert(portSettings.render.ps1.scale == 2 && portSettings.render.pc.scale == 2);
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDER_SCALE");
-    puts("Per-profile native sizes, scale defaults, migration, persistence, reset and frame boundaries: OK");
+    puts("Per-profile native sizes, scale defaults, persistence, reset and frame boundaries: OK");
 }
 
 static void OriginalFrameRates(void)
 {
-    Load("ps1_renderer = saturn\nn64_renderer = pc\n");
+    LoadPlatformSettings("ps1_renderer = saturn\nn64_renderer = pc\nps1_frame_rate = 3\npc_frame_rate = 3\n"
+         "n64_frame_rate = 3\nsaturn_frame_rate = 3\n");
     n64 = 0; RenderCommit();
-    assert(RenderOriginalFrameRate(0) == 20 && RenderOriginalFrameRate(1) == 20);
+    assert(PortFrameCap(0) == 20 && PortFrameCap(1) == 20);
     n64 = 1; RenderCommit();
-    assert(RenderOriginalFrameRate(0) == 60 && RenderOriginalFrameRate(1) == 60);
+    assert(PortFrameCap(0) == 60 && PortFrameCap(1) == 60);
     portSettings.render.n64Selection = RENDER_N64;
-    assert(RenderOriginalFrameRate(0) == 60); /* committed profile only */
+    assert(PortFrameCap(0) == 60); /* committed profile only */
     RenderCommit();
-    assert(RenderOriginalFrameRate(0) == 30 && RenderOriginalFrameRate(1) == 30);
+    assert(PortFrameCap(0) == 30 && PortFrameCap(1) == 30);
     portSettings.render.selection = RENDER_PS1; RenderCommit();
-    assert(RenderOriginalFrameRate(0) == 30 && RenderOriginalFrameRate(1) == 25);
+    assert(PortFrameCap(0) == 30 && PortFrameCap(1) == 25);
     n64 = 0; RenderCommit();
-    assert(RenderOriginalFrameRate(1) == 25);
+    assert(PortFrameCap(1) == 25);
     puts("Original frame rate follows the committed renderer, including cross-platform overrides: OK");
+}
+
+static void ProfilePacing(void)
+{
+    SDL_Environment *env = SDL_GetEnvironment();
+    LoadPlatformSettings("ps1_frame_rate = 2\nps1_frame_cap = 45\npc_frame_rate = 2\npc_frame_cap = 90\n"
+         "n64_frame_rate = 1\nsaturn_frame_cap = 1\nmodern_frame_cap = 1001\n");
+    assert(PortFrameRate() == FRAME_RATE_CAPPED && PortFrameCap(0) == 45);
+    assert(portSettings.render.n64.pacing.rate == FRAME_RATE_VSYNC && portSettings.render.n64.pacing.cap == FRAME_CAP_DEFAULT);
+    assert(portSettings.render.saturn.pacing.cap == FRAME_CAP_MIN && portSettings.render.modern.pacing.cap == FRAME_CAP_MAX);
+    portSettings.render.ps1Selection = RENDER_PC;
+    assert(PortFrameCap(0) == 45);
+    assert(RenderCommit() && PortFrameRate() == FRAME_RATE_CAPPED && PortFrameCap(0) == 90);
+    assert(PortSettingsSave());
+    PortSettingsLoad();
+    assert(PortFrameCap(0) == 90 && portSettings.render.ps1.pacing.cap == 45);
+    RenderDefaults(&portSettings.render, RENDER_PC);
+    assert(RenderCommit() && PortFrameRate() == FRAME_RATE_CONSOLE && PortFrameCap(0) == 60);
+    assert(portSettings.render.pc.pacing.cap == FRAME_CAP_DEFAULT && portSettings.render.ps1.pacing.cap == 45);
+
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_FRAME_RATE", "60", true);
+    LoadPlatformSettings("ps1_frame_rate = 1\nps1_frame_cap = 45\n");
+    assert(PortFrameRate() == FRAME_RATE_CAPPED && PortFrameCap(0) == 60);
+    assert(PortSettingsSave());
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FRAME_RATE");
+    PortSettingsLoad();
+    assert(PortFrameRate() == FRAME_RATE_VSYNC && portSettings.render.ps1.pacing.cap == 45);
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_FRAME_RATE", "vsync", true);
+    LoadPlatformSettings("ps1_frame_rate = 3\n");
+    assert(PortFrameRate() == FRAME_RATE_VSYNC && portSettings.render.ps1.pacing.rate == FRAME_RATE_CONSOLE);
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FRAME_RATE");
+    PortSettingsLoad();
+    assert(PortFrameRate() == FRAME_RATE_CONSOLE);
+    puts("Per-profile frame rates and caps follow the committed renderer, persist, reset and respect run overrides: OK");
+}
+
+static void ProfileScene(void)
+{
+    SDL_Environment *env = SDL_GetEnvironment();
+    LoadPlatformSettings("pc_far_view = 0\npc_fade = 1\npc_fade_near = 81000\npc_fade_far = 80000\n"
+         "\nps1_far_view = 1\nps1_fade = 0\nps1_fade_near = 42000\nps1_fade_far = 80000\nps1_far_flares = 1\n");
+    const RenderScene *scene = RenderSceneFor(RenderCurrent());
+    assert(scene->farView && !scene->fade && scene->farFlares);
+    assert(scene->fadeNear == 42000 && scene->fadeFar == 80000);
+    portSettings.render.ps1Selection = RENDER_PC;
+    assert(RenderSceneFor(RenderCurrent())->farView);
+    assert(RenderCommit());
+    scene = RenderSceneFor(RenderCurrent());
+    assert(!scene->farView && scene->fade && !scene->farFlares);
+    assert(scene->fadeNear == 81000 && scene->fadeFar == 82000);
+    assert(PortSettingsSave());
+    RenderSettings saved = portSettings.render;
+    PortSettingsLoad();
+    assert(!memcmp(&saved, &portSettings.render, sizeof(saved)));
+    RenderDefaults(&portSettings.render, RENDER_PC);
+    assert(RenderCommit());
+    scene = RenderSceneFor(RenderCurrent());
+    assert(!scene->farView && !scene->fade && !scene->farFlares);
+    assert(scene->fadeNear == 64000 && scene->fadeFar == 96000);
+    assert(portSettings.render.ps1.scene.farFlares && !portSettings.render.ps1.scene.fade);
+
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_FAR_VIEW", "0", true);
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_FADE", "33000,55000", true);
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_FAR_FLARES", "1", true);
+    LoadPlatformSettings("ps1_fade = 0\npc_fade = 0\n");
+    for (int id = RENDER_PS1; id <= RENDER_PC; id++) {
+        portSettings.render.ps1Selection = (RendererId)id;
+        RenderCommit();
+        scene = RenderSceneFor(RenderCurrent());
+        assert(!scene->farView && scene->fade && scene->farFlares);
+        assert(scene->fadeNear == 33000 && scene->fadeFar == 55000);
+    }
+    assert(PortSettingsSave());
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FAR_VIEW");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FADE");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FAR_FLARES");
+    PortSettingsLoad();
+    scene = RenderSceneFor(RenderCurrent());
+    assert(!scene->farView && !scene->fade && !scene->farFlares);
+    assert(scene->fadeNear == 64000 && scene->fadeFar == 96000);
+    puts("Scene controls follow the committed renderer, persist, reset and respect run overrides: OK");
 }
 
 static void NativeViewLimits(void)
@@ -473,14 +581,29 @@ int main(void)
     SDL_Environment *env = SDL_GetEnvironment();
     assert(mkdtemp(testDir));
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDERER");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FRAME_RATE");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FAR_VIEW");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FADE");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FAR_FLARES");
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_MODERN_BLOOM");
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_DEPTH_BUFFER");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDER_SCALE");
     PortSettingsLoad();
-    assert(RenderCurrent()->id == RENDER_PS1 && !portSettings.render.ps1.depth);
+    assert(RenderCurrent()->id == RENDER_MODERN && !portSettings.render.ps1.depth);
+    ModernOverride();
+    LoadPlatformSettings("");
+    for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
+        RendererId renderer = (RendererId)id;
+        int modern = id == RENDER_MODERN;
+        assert(RenderPacingSetting(&portSettings.render, renderer)->rate ==
+               (modern ? FRAME_RATE_VSYNC : FRAME_RATE_CONSOLE));
+        const RenderScene *scene = RenderSceneSetting(&portSettings.render, renderer);
+        assert(scene->farView == modern && scene->fade == modern && scene->farFlares == modern);
+    }
     assert(portSettings.render.pc.rgb565);
     assert(portSettings.render.pc.drawDistance == 1);
     assert(!portSettings.render.pc.correctMenuAspect);
-    Load("pc_rgb565 = 0\npc_draw_distance = 8\npc_correct_menu_aspect = 1\n");
+    LoadPlatformSettings("pc_rgb565 = 0\npc_draw_distance = 8\npc_correct_menu_aspect = 1\n");
     assert(!portSettings.render.pc.rgb565 && portSettings.render.pc.drawDistance == 8);
     assert(portSettings.render.pc.correctMenuAspect);
     assert(PortSettingsSave());
@@ -490,25 +613,25 @@ int main(void)
     RenderDefaults(&portSettings.render, RENDER_PC);
     assert(portSettings.render.pc.rgb565 && portSettings.render.pc.drawDistance == 1);
     assert(!portSettings.render.pc.correctMenuAspect);
-    Load("pc_draw_distance = 9\n");
+    LoadPlatformSettings("pc_draw_distance = 9\n");
     assert(portSettings.render.pc.drawDistance == 1);
-    Load("renderer = saturn\nautomatic_renderer = pc\npc_rendering = 1\nsmooth_textures = 1\n");
-    assert(RenderCurrent()->id == RENDER_PS1);
-    Load("pc_depth = 1\ndepth_buffer = 0\n");
-    assert(portSettings.render.pc.depth && !portSettings.render.ps1.depth);
-    Load("depth_buffer = 0\npc_depth = 1\n");
-    assert(portSettings.render.pc.depth);
-    Load("depth_buffer = 0\n");
-    assert(!portSettings.render.pc.depth && RenderCurrent()->id == RENDER_PS1);
+    LoadSettings("", "renderer = saturn\nautomatic_renderer = pc\npc_rendering = 1\nsmooth_textures = 1\n"
+         "render_scale = 4\ndepth_buffer = 0\nframe_rate = 2\nframe_cap = 60\nps1_vsync = 1\n"
+         "far_view = 0\nfade = 1\nfade_near = 20000\nfade_far = 50000\nfar_flares = 1\n");
+    assert(RenderCurrent()->id == RENDER_MODERN);
+    const RenderSettings defaults = RENDER_DEFAULTS;
+    assert(!memcmp(&defaults, &portSettings.render, sizeof(defaults)));
+    LoadPlatformSettings("pc_depth = 0\n");
+    assert(!portSettings.render.pc.depth);
     n64 = 1; RenderCommit(); assert(RenderCurrent()->id == RENDER_N64);
     assert(RenderDepth(RenderCurrent()));
     SDL_SetEnvironmentVariable(env, "WIPEOUT_DEPTH_BUFFER", "0", true);
-    Load("pc_depth = 1\n");
+    LoadPlatformSettings("pc_depth = 1\n");
     assert(!portSettings.render.pc.depth && RenderCurrent()->id == RENDER_N64);
     assert(RenderDepth(RenderCurrent()));
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_DEPTH_BUFFER");
     n64 = 0;
-    Load("ps1_quantize_vertices = 0\nps1_dither = 0\npc_bilinear = 0\nn64_divot = 0\n");
+    LoadPlatformSettings("ps1_quantize_vertices = 0\nps1_dither = 0\npc_bilinear = 0\nn64_divot = 0\n");
     assert(RenderCurrent()->id == RENDER_PS1);
     assert(!portSettings.render.ps1.dither && !portSettings.render.ps1.quantizeVertices);
     assert(!portSettings.render.pc.bilinear && !portSettings.render.n64.divot);
@@ -524,18 +647,20 @@ int main(void)
     RenderSettings expected = portSettings.render;
     PortSettingsLoad();
     assert(!memcmp(&expected, &portSettings.render, sizeof(expected)));
-    Load("ps1_dither = garbage\npc_depth = -1\n");
+    LoadPlatformSettings("ps1_dither = garbage\npc_depth = -1\n");
     assert(portSettings.render.selection == RENDER_AUTO && portSettings.render.ps1.dither && portSettings.render.pc.depth);
     ProfileResolutions();
     PlatformSelection();
     EnvironmentOverrides();
     OriginalFrameRates();
+    ProfilePacing();
+    ProfileScene();
     SaturnProfile();
     DisplayResampling();
     ModernProfile();
     portConfig.hidden = 1; PortSettingsLoad();
     assert(portSettings.render.selection == RENDER_AUTO && !PortSettingsSave());
     unlink(PortSettingsPath()); rmdir(testDir);
-    puts("Renderer defaults, legacy migration, precedence, independent persistence/reset and frame-boundary selection: OK");
+    puts("Renderer defaults, ignored obsolete keys, independent persistence/reset and frame-boundary selection: OK");
     return 0;
 }

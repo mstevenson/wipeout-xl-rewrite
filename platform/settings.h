@@ -12,12 +12,10 @@ extern "C" {
 
 typedef struct PortSettings {
     int showFps;          /* the frame-rate overlay */
-    int farView;          /* 0: the console's draw distance; 1: the whole track */
-    int fade;             /* distant geometry fades into the sky */
-    int fadeNear, fadeFar;
+    RenderScene sceneOverride; /* runtime only: -1 disables a toggle, 1 enables it, 0 uses the profile */
     int widescreen;       /* the picture fills a wider window: more of the scene at the sides (render/gl_backend.c) */
-    int frameRate;        /* the display: FRAME_RATE_*; simulation keeps its original NTSC/PAL timing */
-    int frameCap;         /* pictures a second with FRAME_RATE_CAPPED */
+    int frameRateOverride; /* 0 follows the settings, otherwise FRAME_RATE_* + 1 for this run */
+    int frameCapOverride; /* cap from WIPEOUT_FRAME_RATE */
     int skipIntro;        /* no intro movie at start-up */
     int recordFrames;     /* the frame recorder (psx/framecap.h): RECORD_* */
     int recordReplays;    /* every session is recorded as a replay (trace.c, --record) */
@@ -44,8 +42,6 @@ typedef struct PortSettings {
     int recordRate;       /* the frame recorder's pictures a second, up to: 30 the game's frames, more the ones between
                              (psx/framecap.h; 0: 60) */
     int videoStandard;    /* VIDEO_BY_DISC, VIDEO_NTSC or VIDEO_PAL (region.c); takes effect at the next start */
-    int farFlares;        /* the engine flares of the ships the whole track's view draws beyond the console's distance
-                             (portfar.c; the console drew none there) */
     int surround;         /* the game's Stereo mode, a Dolby Surround encoding of its sound effects: SURROUND_* */
     int digitalSteering; /* 0: proportional gamepad stick; 1: stick acts as the directional pad */
     int fullscreen;       /* the window was full screen when last left: the next start is too (video.c) */
@@ -70,15 +66,10 @@ enum {
     RECORD_WITH_TAB      /* from one Tab to the next (up to the last 10 seconds); the game goes on */
 };
 
-enum {
-    FRAME_RATE_UNCAPPED, /* as many pictures as the computer draws, moving between the game's frames */
-    FRAME_RATE_VSYNC,    /* ... one per refresh of the display */
-    FRAME_RATE_CAPPED,   /* ... at most frameCap a second */
-    FRAME_RATE_CONSOLE   /* Original: the active renderer profile's presentation rate */
-};
-
 extern PortSettings portSettings;
 
+int PortFrameRate(void); /* effective FRAME_RATE_* for the committed renderer */
+int PortFrameCap(int pal); /* effective timed presentation cap, or 0 if none */
 void PortSettingsLoad(void);
 int PortSettingsSave(void);
 const char *PortSettingsPath(void);  /* the file */

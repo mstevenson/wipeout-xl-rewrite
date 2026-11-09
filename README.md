@@ -174,20 +174,26 @@ forward a frame, and − / + zoom the picture, kept at the resolution it was dra
 `wipeoutxl.ini` in the user's data folder; a new saves folder takes effect at
 the next start. Dear ImGui (`platform/third_party/imgui`, MIT) draws it.
 
-Graphics shows **PlayStation**, **PC**, **Nintendo 64** and **Sega Saturn** in a
-horizontal row. Each platform has its own renderer selector, defaulting to the
-matching profile. Loading a Saturn disc therefore uses the Saturn renderer;
-imported PlayStation and Wipeout 64 tracks use their respective platform choices.
+Graphics starts with **Use Modern for all platforms**, enabled by default.
+Turn it off to use the individual **PlayStation**, **PC**, **Nintendo 64**, and
+**Sega Saturn** selections for discs and imported tracks. Each selection starts
+with its matching profile.
 All four selectors stay visible. Below them, each profile has its own controls
 and restore-defaults button; these panels scroll horizontally on smaller windows.
 Profile controls are shared by platforms that select the same profile.
+Resolution, frame rate, and draw distance sit at the top of each panel.
+Controls that only enable port-specific features appear under **Enhancements**.
 Each profile also has its own **Resolution** selector: PS1 defaults to 320×240
 (320×256 in PAL mode), N64 to 320×240, Saturn to 352×240 and PC to 640×480.
 Choose a higher multiplier or Auto independently for each profile.
-**Frame rate > Original** follows the active renderer profile: PS1 30 fps
-(25 PAL), N64 30 fps, Saturn 20 fps, and PC and Modern 60 fps. Its label updates when the
-renderer changes, including when a platform uses another platform's profile.
-This changes presentation cadence while keeping the game's simulation timing.
+Each profile has a **Frame rate** selector with **Uncapped**,
+**Display refresh (VSync)**, **Capped**, and **Original**. Capped uses the
+profile's own FPS limit. Original uses 30 fps for PS1 (25 in PAL mode),
+30 fps for N64, 20 fps for Saturn, and 60 fps for PC and Modern.
+These settings change presentation cadence while keeping the game's simulation timing.
+Each profile also saves its **Draw distance**, **Fade distant scenery**,
+and **Engine flares on distant ships** settings. Fade and distant flares
+apply when draw distance is **Full**.
 Each profile includes **Linear display resampling**: turn it off for sharp pixels
 when upscaling the final image, or on for smooth scaling. It defaults to on for
 PC and N64, and off for PS1 and Saturn, independently of texture filtering.
@@ -208,13 +214,11 @@ filtering of the original world textures. Bilinear is the default. Its independe
 **Dynamic lights** toggle adds coloured light from projectiles and explosion flashes,
 subtle blue engine lights and stronger blue active shield lights to nearby surfaces,
 with or without HDR bloom.
-Frame rate and draw distance are shared. HD replacements are shared by the
-hardware profiles.
+HD replacements are shared by the hardware profiles.
 
 `WIPEOUT_RENDERER=ps1|pc|n64|saturn|modern` forces a renderer for one run.
-`auto` follows platform preferences. The previous global scale and depth
-settings migrate to profile settings. See [rendering profiles](docs/RENDERERS.md)
-for defaults, controls and migration.
+`auto` follows the saved renderer settings. See [rendering profiles](docs/RENDERERS.md)
+for defaults and controls.
 These are rendering approximations using the loaded assets, not changes of game
 version or pixel-exact emulation.
 

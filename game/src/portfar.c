@@ -410,9 +410,9 @@ static const NativeVisibility nativeVisibility[RENDER_COUNT] = {
     [RENDER_PC] = {ROAD_PC_LINKED, SCENERY_PC, SHIPS_PC, 1},
     [RENDER_N64] = {ROAD_N64, SCENERY_N64, SHIPS_N64, 0},
     [RENDER_SATURN] = {ROAD_CONTIGUOUS, SCENERY_SATURN, SHIPS_SATURN, 1},
-    /* Modern retains the linked road runs without the F3 cap, unculled
+    /* Port: Modern uses the authored road detail without the F3 cap, unculled
        scenery, and the Saturn depth interval for ships. */
-    [RENDER_MODERN] = {ROAD_LINKED, SCENERY_UNCULLED, SHIPS_SATURN, 0},
+    [RENDER_MODERN] = {ROAD_LINKED, SCENERY_UNCULLED, SHIPS_SATURN, 1},
 };
 
 static int NativeSectionIndex(TrackSection *section)
@@ -478,7 +478,7 @@ static void NativeN64Section(int index, void *context)
 }
 
 /* Keep the compatibility tiles where their projection and packet pools can represent the section. */
-static void PcNearSection(TrackSection *section, TrackCamera *camera, AutoMeshData *autoMesh, int detail)
+static void DrawNearRoadSection(TrackSection *section, TrackCamera *camera, AutoMeshData *autoMesh, int detail)
 {
     int faces = section->faceCount;
     if (faces <= 0) return;
@@ -566,7 +566,7 @@ int PortDrawNativeTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView
                 for (int j = 0; j < section->faceCount; j++)
                     if (!PortNativeTrackFaceVisible(&track->faces[(u_short)section->faceStart + j], &view)) inside = 0;
             }
-            if (inside) PcNearSection(section, camera, autoMesh, details[i]);
+            if (inside) DrawNearRoadSection(section, camera, autoMesh, details[i]);
         }
         PortTrackFar(section, &view);
     }

@@ -54,11 +54,7 @@ static int presentationPending, presentationCap;
 
 static uint64_t PresentationPeriod(void)
 {
-    int cap = 0;
-    if (!portConfig.fixedStep && PortLinkRole() != LINK_SLAVE) {
-        if (portSettings.frameRate == FRAME_RATE_CAPPED) cap = SDL_max(portSettings.frameCap, 1);
-        else if (portSettings.frameRate == FRAME_RATE_CONSOLE) cap = RenderOriginalFrameRate(portPal);
-    }
+    int cap = !portConfig.fixedStep && PortLinkRole() != LINK_SLAVE ? PortFrameCap(portPal) : 0;
     if (cap != presentationCap) {
         presentationCap = cap;
         nextPresentation = 0;
@@ -118,8 +114,8 @@ static void Pace(void)
     due = startTicks + (uint64_t)((fields - paceField) * FIELD_SECONDS * 1e9);
     now = SDL_GetTicksNS();
     /* Original uses its platform's presentation clock, not the monitor's refresh. */
-    PortSwapInterval(portSettings.frameRate == FRAME_RATE_VSYNC ||
-                     (portSettings.frameRate != FRAME_RATE_CONSOLE && !PsxInterpolationOn()));
+    int rate = PortFrameRate();
+    PortSwapInterval(rate == FRAME_RATE_VSYNC || (rate != FRAME_RATE_CONSOLE && !PsxInterpolationOn()));
     if (due > now && PsxCanInterpolate()) {
         /* frame interpolation: pictures between the game's frames until the field is due, as many as the
            settings allow (each waits for the display's refresh with VSync) */

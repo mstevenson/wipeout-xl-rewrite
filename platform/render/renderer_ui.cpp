@@ -3,11 +3,15 @@
 #include "../psx/gpu.h"
 #include "../region.h"
 
-static void Tooltip(const char *text)
+static void Tooltip(const char *text, const char *heading = nullptr)
 {
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled) &&
         ImGui::BeginTooltip()) {
         ImGui::PushTextWrapPos(ImGui::GetFontSize() * 35);
+        if (heading) {
+            ImGui::TextUnformatted(heading);
+            ImGui::Separator();
+        }
         ImGui::TextUnformatted(text);
         ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
@@ -50,10 +54,6 @@ static bool Ps1Settings(Ps1RenderSettings *s)
         "Adds the PS1 dither pattern to polygons that request it, reducing visible colour banding at the cost of "
         "a grainy pattern. Requires 5-bit colour precision.");
     ImGui::EndDisabled();
-    changed |= Check("Depth buffer (enhancement)", &s->depth,
-        "Uses polygon depth to help nearer surfaces hide farther ones, reducing draw-order errors. "
-        "Disable to use the game's original ordering tables for visibility.");
-    changed |= DisplaySettings(&s->resample);
     return changed;
 }
 
@@ -70,12 +70,6 @@ static bool SaturnSettings(SaturnRenderSettings *s)
     changed |= Check("Checkerboard transparency", &s->mesh,
         "Uses a console-pixel checkerboard for Saturn mesh effects, including exhaust flares and trails. "
         "Turn off for smooth transparency; additive light effects contribute half their intensity.");
-    changed |= Check("Depth buffer (enhancement)", &s->depth,
-        "Uses depth testing to reduce draw-order errors. Disabled by default for ordering-table visibility.");
-    changed |= Check("Camera-aligned sky (enhancement)", &s->cameraAlignedSky,
-        "Matches the sky's motion to the world camera on Saturn tracks. "
-        "Disable for the original Saturn game's faster background scrolling.");
-    changed |= DisplaySettings(&s->resample);
     return changed;
 }
 
@@ -97,10 +91,6 @@ static bool PcSettings(PcRenderSettings *s)
     changed |= Check("Depth buffer", &s->depth,
         "Uses polygon depth to help nearer surfaces hide farther ones, reducing draw-order errors. "
         "Disable to use ordering-table visibility.");
-    changed |= Check("Correct menu model aspect", &s->correctMenuAspect,
-        "Enhancement for the Windows menus. Removes the original horizontal stretch from 3D models "
-        "while keeping their height and placement. Disabled by default.");
-    changed |= DisplaySettings(&s->resample);
     return changed;
 }
 
@@ -123,7 +113,6 @@ static bool N64Settings(N64RenderSettings *s)
     changed |= Check("VI divot filtering (approximate)", &s->divot,
         "Approximates the N64 Video Interface's removal of isolated pixel gaps by filtering high-contrast "
         "horizontal spikes. Also affects the race HUD and can soften small details.");
-    changed |= DisplaySettings(&s->resample);
     return changed;
 }
 
@@ -152,14 +141,121 @@ static bool Resolution(RenderSettings *s, RendererId id)
     return changed;
 }
 
+static bool FrameRate(RenderSettings *s, RendererId id)
+{
+    RenderPacing *pacing = RenderPacingSetting(s, id);
+    char original[32];
+    snprintf(original, sizeof(original), "Original (%d fps)", RenderOriginalFrameRate(id, portPal));
+    const char *const rates[] = {"Uncapped", "Display refresh (VSync)", "Capped", original};
+
+    ImGui::TextUnformatted("Frame rate");
+    ImGui::SetNextItemWidth(-1);
+    bool changed = ImGui::Combo("##Frame rate", &pacing->rate, rates, IM_ARRAYSIZE(rates));
+    Tooltip("Sets how often this profile presents a picture. The game simulation keeps its original timing.");
+    if (pacing->rate == FRAME_RATE_CAPPED) {
+        ImGui::TextUnformatted("Frames per second");
+        ImGui::SetNextItemWidth(-1);
+        changed |= ImGui::DragInt("##Frames per second", &pacing->cap, 1.0f, FRAME_CAP_MIN, FRAME_CAP_MAX,
+                                  "%d", ImGuiSliderFlags_AlwaysClamp);
+    }
+    return changed;
+}
+
+struct NativeDistanceText {
+    char label[32];
+    char limits[512];
+};
+
+static NativeDistanceText NativeDistance(const RenderSettings *settings, RendererId id)
+{
+    switch (id) {
+    case RENDER_PC: {
+        NativeDistanceText text = {};
+        RenderFrame frame = RenderSnapshot(id, settings);
+        int sections, scenery;
+        RenderPcViewLimits(&frame, &sections, &scenery);
+        snprintf(text.label, sizeof(text.label), "Native (F3 level %d)", settings->pc.drawDistance);
+        snprintf(text.limits, sizeof(text.limits),
+            "Road caps each low-detail north run at %d sections. All-view lists use their authored lengths.\n"
+            "Scenery uses depth bounds of 2048 to %d world units, accounting for object size.\n"
+            "Ships use a shifted magnitude below 1200 (about 9600 world units), positive depth, "
+            "and fewer than 40 sections of separation. The camera ship bypasses the magnitude and depth checks.",
+            sections, scenery);
+        return text;
+    }
+    case RENDER_N64:
+        return {"Native (section budget)",
+            "Road starts with a 22-section budget (20 on course 7). Heading, junctions, and course exceptions "
+            "adjust it. Start-camera lists cap low-detail runs at 100 sections.\n"
+            "Scenery uses depth bounds of 4096 to 76400 world units, accounting for object size.\n"
+            "Ships are remembered within about 9600 world units. Rejected ships lose that history "
+            "from about 23200 world units. A remembered ship in front can remain visible farther away."};
+    case RENDER_SATURN:
+        return {"Native (course depth)",
+            "Road follows authored spans and tests the farthest tile corner against 40064 world units of depth "
+            "(32000 on the two bonus courses).\n"
+            "Scenery uses the same course depth limits with model bounds and polygon depth rules.\n"
+            "Ships other than the camera ship need depth above 160 and below 32000 world units, "
+            "plus a model bounds check."};
+    case RENDER_MODERN:
+        return {"Native (linked road)",
+            "Road follows linked section lists for the current view.\n"
+            "Scenery uses the track's object lists and viewport clipping.\n"
+            "Ships use the Saturn depth interval. Ships other than the camera ship need depth above 160 "
+            "and below 32000 world units, plus a model bounds check."};
+    default:
+        return {"Native (regional limits)",
+            "Road follows authored section lists. Directional low-detail runs cap at 100 sections.\n"
+            "Scenery uses object bounds. PAL depths are 2048 to 38200 world units. NTSC near depth is "
+            "2048 to 3072 (up to 4096 in link), and far depth is 37000 to 38200 (20000 to 38200 in link).\n"
+            "Ships use a shifted magnitude below 1200 (about 9600 world units), positive depth, "
+            "and fewer than 40 sections of separation. The camera ship bypasses the magnitude and depth checks."};
+    }
+}
+
+static bool DrawDistance(const RenderSettings *settings, RendererId id, int *farView)
+{
+    const NativeDistanceText native = NativeDistance(settings, id);
+    const char *const distances[] = {native.label, "Full (the whole track)"};
+    ImGui::TextUnformatted("Draw distance");
+    ImGui::SetNextItemWidth(-1);
+    bool changed = ImGui::Combo("##Draw distance", farView, distances, IM_ARRAYSIZE(distances));
+    Tooltip(native.limits, native.label);
+    return changed;
+}
+
+static bool SceneEnhancements(RenderScene *scene)
+{
+    ImGui::BeginDisabled(!scene->farView);
+    bool changed = Check("Fade distant scenery", &scene->fade,
+        "Port enhancement that fades distant scenery into the sky in Full draw distance.");
+    changed |= Check("Engine flares on distant ships", &scene->farFlares,
+        "Draws engine flares beyond the native distance in Full draw distance.");
+    ImGui::EndDisabled();
+    return changed;
+}
+
 static bool ProfileSettings(RenderSettings *s, RendererId edit)
 {
     bool changed = false;
+    RenderScene *scene = RenderSceneSetting(s, edit);
 
     ImGui::PushID((int)edit);
     ImGui::SeparatorText(RenderGet(edit)->name);
     ImGui::PushTextWrapPos(0);
     changed |= Resolution(s, edit);
+    changed |= FrameRate(s, edit);
+    changed |= DrawDistance(s, edit, &scene->farView);
+    switch (edit) {
+    case RENDER_MODERN: break;
+    case RENDER_SATURN: changed |= SaturnSettings(&s->saturn); break;
+    case RENDER_PC: changed |= PcSettings(&s->pc); break;
+    case RENDER_N64: changed |= N64Settings(&s->n64); break;
+    default: changed |= Ps1Settings(&s->ps1); break;
+    }
+
+    ImGui::SeparatorText("Enhancements");
+    changed |= SceneEnhancements(scene);
     switch (edit) {
     case RENDER_MODERN: {
         changed |= Check("Bilinear texture filtering", &s->modern.bilinear,
@@ -193,10 +289,29 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
         ImGui::EndDisabled();
         break;
     }
-    case RENDER_SATURN: changed |= SaturnSettings(&s->saturn); break;
-    case RENDER_PC: changed |= PcSettings(&s->pc); break;
-    case RENDER_N64: changed |= N64Settings(&s->n64); break;
-    default: changed |= Ps1Settings(&s->ps1); break;
+    case RENDER_SATURN:
+        changed |= Check("Depth buffer", &s->saturn.depth,
+            "Uses depth testing to reduce draw-order errors. Disabled by default for ordering-table visibility.");
+        changed |= Check("Camera-aligned sky", &s->saturn.cameraAlignedSky,
+            "Matches the sky's motion to the world camera on Saturn tracks. "
+            "Disable for the original Saturn game's faster background scrolling.");
+        changed |= DisplaySettings(&s->saturn.resample);
+        break;
+    case RENDER_PC:
+        changed |= Check("Correct menu model aspect", &s->pc.correctMenuAspect,
+            "Removes the original horizontal stretch from 3D models while keeping their height and placement. "
+            "Disabled by default.");
+        changed |= DisplaySettings(&s->pc.resample);
+        break;
+    case RENDER_N64:
+        changed |= DisplaySettings(&s->n64.resample);
+        break;
+    default:
+        changed |= Check("Depth buffer", &s->ps1.depth,
+            "Uses polygon depth to help nearer surfaces hide farther ones, reducing draw-order errors. "
+            "Disable to use the game's original ordering tables for visibility.");
+        changed |= DisplaySettings(&s->ps1.resample);
+        break;
     }
     if (ImGui::Button("Restore renderer defaults")) {
         RenderDefaults(s, edit);
@@ -210,27 +325,41 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
 
 bool RenderSettingsUi(RenderSettings *s)
 {
-    const int profiles = RENDER_COUNT - RENDER_PS1;
+    const RendererId profileOrder[] = {RENDER_MODERN, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN};
+    const int profiles = IM_ARRAYSIZE(profileOrder);
     const char *names[profiles];
-    for (int i = 0; i < profiles; i++) names[i] = RenderGet((RendererId)(i + RENDER_PS1))->name;
-    RendererId *selections[] = {&s->ps1Selection, &s->pcSelection, &s->n64Selection, &s->saturnSelection};
-    bool changed = false;
-
+    for (int i = 0; i < profiles; i++) names[i] = RenderGet(profileOrder[i])->name;
+    const struct {
+        RendererId id;
+        RendererId *selection;
+    } platforms[] = {
+        {RENDER_PS1, &s->ps1Selection}, {RENDER_PC, &s->pcSelection},
+        {RENDER_N64, &s->n64Selection}, {RENDER_SATURN, &s->saturnSelection}
+    };
+    bool changed = Check("Use Modern for all platforms", &s->modernForAllPlatforms,
+        "Uses the Modern profile for all discs and imported tracks. Turn this off to use the individual platform selections.");
     ImGui::Text("Active renderer: %s", RenderGet(RenderCurrent()->id)->name);
-    ImGui::TextWrapped("Each platform uses its selected renderer profile when loaded.");
     if (s->selection != RENDER_AUTO)
         ImGui::TextWrapped("Environment override: %s", RenderGet(s->selection)->name);
 
+    ImGui::BeginDisabled(s->modernForAllPlatforms);
     ImGuiTableFlags selectorFlags = ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings;
-    if (ImGui::BeginTable("Renderer platforms", 4, selectorFlags)) {
-        for (int i = 0; i < 4; i++) {
+    if (ImGui::BeginTable("Renderer platforms", IM_ARRAYSIZE(platforms), selectorFlags)) {
+        for (int i = 0; i < IM_ARRAYSIZE(platforms); i++) {
             ImGui::TableNextColumn();
             ImGui::PushID(i);
-            ImGui::TextUnformatted(names[i]);
-            int choice = (int)*selections[i] - RENDER_PS1;
+            ImGui::TextUnformatted(RenderGet(platforms[i].id)->name);
+            RendererId &selection = *platforms[i].selection;
+            int choice = 0;
+            for (int j = 0; j < profiles; j++) {
+                if (selection == profileOrder[j]) {
+                    choice = j;
+                    break;
+                }
+            }
             ImGui::SetNextItemWidth(-1);
             if (ImGui::Combo("##Renderer", &choice, names, IM_ARRAYSIZE(names))) {
-                *selections[i] = (RendererId)(choice + RENDER_PS1);
+                selection = profileOrder[choice];
                 changed = true;
             }
             Tooltip("Renderer profile used for this platform. Profiles keep their settings when switching platforms. "
@@ -239,6 +368,7 @@ bool RenderSettingsUi(RenderSettings *s)
         }
         ImGui::EndTable();
     }
+    ImGui::EndDisabled();
 
     /* Keep platform columns horizontal, with scrolling on smaller windows or larger fonts. */
     const ImGuiStyle &style = ImGui::GetStyle();
@@ -246,15 +376,13 @@ bool RenderSettingsUi(RenderSettings *s)
         ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + style.CellPadding.x * 2;
     float width = panelWidth * profiles;
     if (width < ImGui::GetContentRegionAvail().x) width = ImGui::GetContentRegionAvail().x;
-    float height = ImGui::GetFrameHeightWithSpacing() * 13 + style.ScrollbarSize;
+    float height = ImGui::GetFrameHeightWithSpacing() * 22 + style.ScrollbarSize;
     ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoSavedSettings |
         ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_ScrollX;
     if (ImGui::BeginTable("Renderer settings", profiles, flags, ImVec2(0, height), width)) {
-        for (int i = 0; i < profiles; i++) {
+        for (RendererId id : profileOrder) {
             ImGui::TableNextColumn();
-            ImGui::PushID(i);
-            changed |= ProfileSettings(s, (RendererId)(i + RENDER_PS1));
-            ImGui::PopID();
+            changed |= ProfileSettings(s, id);
         }
         ImGui::EndTable();
     }

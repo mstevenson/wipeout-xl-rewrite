@@ -7,29 +7,56 @@ extern "C" {
 #endif
 
 typedef enum RendererId { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, RENDER_MODERN, RENDER_COUNT } RendererId;
+enum {
+    FRAME_RATE_UNCAPPED,
+    FRAME_RATE_VSYNC,
+    FRAME_RATE_CAPPED,
+    FRAME_RATE_CONSOLE
+};
+enum { FRAME_CAP_MIN = 15, FRAME_CAP_DEFAULT = 144, FRAME_CAP_MAX = 1000 };
+typedef struct RenderPacing {
+    int rate; /* FRAME_RATE_* */
+    int cap;  /* pictures a second with FRAME_RATE_CAPPED */
+} RenderPacing;
+typedef struct RenderScene {
+    int farView; /* 0 uses native visibility, 1 draws the whole track */
+    int fade, fadeNear, fadeFar;
+    int farFlares; /* engine flares on ships beyond native visibility */
+} RenderScene;
 typedef struct Ps1RenderSettings {
     int quantizeVertices, affineTextures, colourPrecision, dither, depth, resample, scale;
+    RenderPacing pacing;
+    RenderScene scene;
 } Ps1RenderSettings;
 enum { PC_DRAW_DISTANCE_LEVELS = 8 };
 typedef struct PcRenderSettings {
     int bilinear, lighting, depth, resample, scale;
     int rgb565, drawDistance, correctMenuAspect;
+    RenderPacing pacing;
+    RenderScene scene;
 } PcRenderSettings;
 typedef struct N64RenderSettings {
     int threePoint, colourPrecision, dither, dedither, divot, resample, scale;
+    RenderPacing pacing;
+    RenderScene scene;
 } N64RenderSettings;
 typedef struct SaturnRenderSettings {
     int quantizeVertices, affineTextures, colourPrecision, mesh, depth, cameraAlignedSky, resample, scale;
+    RenderPacing pacing;
+    RenderScene scene;
 } SaturnRenderSettings;
 enum { MODERN_BRIGHTNESS_MIN = 50, MODERN_BRIGHTNESS_DEFAULT = 85, MODERN_BRIGHTNESS_MAX = 100 };
 enum { MODERN_TONEMAP_ORIGINAL, MODERN_TONEMAP_SOFT_SHADOWS };
 typedef struct ModernRenderSettings {
     int resample, scale, brightness, bilinear, bloom, tonemapper, smoothTrackLighting, weaponLights;
+    RenderPacing pacing;
+    RenderScene scene;
 } ModernRenderSettings;
 typedef struct RenderSettings {
-    RendererId selection; /* runtime override; AUTO follows the loaded platform */
+    RendererId selection; /* explicit environment override; AUTO uses the saved settings */
     RendererId ps1Selection;
     RendererId pcSelection, n64Selection, saturnSelection;
+    int modernForAllPlatforms;
     Ps1RenderSettings ps1;
     PcRenderSettings pc;
     N64RenderSettings n64;
@@ -37,7 +64,15 @@ typedef struct RenderSettings {
     ModernRenderSettings modern;
     int modernBloomOverride; /* 0 follows the setting, -1 forces off, 1 forces on */
 } RenderSettings;
-#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, {1,1,1,1,0,0,1}, {1,1,1,1,1,1,1,0}, {1,1,1,1,1,1,1}, {1,1,1,1,0,0,0,1}, {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1,1}, 0 }
+#define RENDER_SCENE_DEFAULTS(full, fade, flares) { full, fade, 64000, 96000, flares }
+#define RENDER_HARDWARE_DEFAULTS { FRAME_RATE_CONSOLE, FRAME_CAP_DEFAULT }, RENDER_SCENE_DEFAULTS(0, 0, 0)
+#define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, 1, \
+    {1,1,1,1,0,0,1,RENDER_HARDWARE_DEFAULTS}, \
+    {1,1,1,1,1,1,1,0,RENDER_HARDWARE_DEFAULTS}, \
+    {1,1,1,1,1,1,1,RENDER_HARDWARE_DEFAULTS}, \
+    {1,1,1,1,0,0,0,1,RENDER_HARDWARE_DEFAULTS}, \
+    {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1,1, \
+        {FRAME_RATE_VSYNC, FRAME_CAP_DEFAULT}, RENDER_SCENE_DEFAULTS(1, 1, 1)}, 0 }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef union RenderProfileSettings {
@@ -99,14 +134,15 @@ extern const Renderer ps1Renderer, pcRenderer, n64Renderer, saturnRenderer, mode
 const Renderer *RenderGet(RendererId id);
 RendererId RenderIdFromName(const char *name);
 int RenderModernBloom(const RenderSettings *settings);
-/* Original display cadence of the committed renderer profile. */
-int RenderOriginalFrameRate(int pal);
+RenderPacing *RenderPacingSetting(RenderSettings *settings, RendererId id);
+RenderScene *RenderSceneSetting(RenderSettings *settings, RendererId id);
+const RenderScene *RenderSceneFor(const RenderFrame *frame);
+int RenderOriginalFrameRate(RendererId id, int pal);
 int RenderOriginalInterpolates(void);
 int RenderPcViewLimits(const RenderFrame *frame, int *sections, int *scenery);
 const void *RenderProfile(const RenderFrame *frame);
 int RenderDepth(const RenderFrame *frame);
 /* Scale 0 follows the window; positive values multiply this profile's native size. */
-const char *RenderScaleKey(RendererId id);
 int *RenderScaleSetting(RenderSettings *settings, RendererId id);
 int RenderScale(const RenderFrame *frame);
 void RenderNativeSize(RendererId id, int pal, int *width, int *height);

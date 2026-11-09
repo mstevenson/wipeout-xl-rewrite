@@ -7,8 +7,7 @@
 #include "platform.h"
 #include "settings.h"
 
-PortSettings portSettings = {.farView = 1, .fade = 1, .fadeNear = 64000, .fadeFar = 96000,
-                             .frameRate = FRAME_RATE_UNCAPPED, .frameCap = 144, .render = RENDER_DEFAULTS};
+PortSettings portSettings = {.render = RENDER_DEFAULTS};
 static char path[1024];
 static char defaultSaveDir[1024];
 
@@ -29,22 +28,8 @@ static void Set(const char *key, const char *value)
     if (RenderSet(&portSettings.render, key, value)) return;
     if (!strcmp(key, "show_fps")) {
         portSettings.showFps = number != 0;
-    } else if (!strcmp(key, "far_view")) {
-        portSettings.farView = number != 0;
-    } else if (!strcmp(key, "far_flares")) {
-        portSettings.farFlares = number != 0;
-    } else if (!strcmp(key, "fade")) {
-        portSettings.fade = number != 0;
-    } else if (!strcmp(key, "fade_near") && number > 0) {
-        portSettings.fadeNear = number;
-    } else if (!strcmp(key, "fade_far") && number > 0) {
-        portSettings.fadeFar = number;
     } else if (!strcmp(key, "widescreen")) {
         portSettings.widescreen = number != 0;
-    } else if (!strcmp(key, "frame_rate")) {
-        portSettings.frameRate = SDL_clamp(number, FRAME_RATE_UNCAPPED, FRAME_RATE_CONSOLE);
-    } else if (!strcmp(key, "frame_cap") && number > 0) {
-        portSettings.frameCap = SDL_clamp(number, 15, 1000);
     } else if (!strcmp(key, "check_updates")) {
         portSettings.noUpdateCheck = number == 0;
     } else if (!strcmp(key, "skip_intro")) {
@@ -109,8 +94,6 @@ void PortSettingsLoad(void)
     char *base = SDL_GetPrefPath("Psygnosis", "WipeoutXL");
     char *text, *line, *next;
     const char *value;
-    int legacyDepth = -1, havePcDepth = 0;
-    int legacyScale = -1, haveScale[RENDER_COUNT] = {0};
     RenderDefaults(&portSettings.render, RENDER_AUTO);
     RenderInvalidate();
 
@@ -124,7 +107,7 @@ void PortSettingsLoad(void)
 #endif
     /* the tests' hidden runs keep the defaults: a player's file must not change them */
     if (path[0] && !portConfig.hidden && (text = SDL_LoadFile(path, NULL))) {
-        for (line = text; line && *line; line = next) {
+        for (line = text; line; line = next) {
             char *equals, *end;
 
             next = strchr(line, '\n');
@@ -145,27 +128,13 @@ void PortSettingsLoad(void)
             for (end = (char *)value + strlen(value); end > value && (end[-1] == '\r' || end[-1] == ' '); end--) {
                 end[-1] = 0;
             }
-            if (!strcmp(line, "render_scale")) {
-                legacyScale = SDL_clamp(SDL_atoi(value), 0, 16);
-            } else if (!strcmp(line, "depth_buffer")) {
-                legacyDepth = SDL_atoi(value) != 0;
-            } else {
-                for (int id = RENDER_PS1; id <= RENDER_SATURN; id++)
-                    haveScale[id] |= !strcmp(line, RenderScaleKey((RendererId)id));
-                havePcDepth |= !strcmp(line, "pc_depth");
-                Set(line, value);
-            }
+            Set(line, value);
         }
         SDL_free(text);
     }
-    if (legacyDepth >= 0 && !havePcDepth) portSettings.render.pc.depth = legacyDepth;
-    /* The former default Auto setting gives way to native defaults. Retain explicit
-       positive scales where no profile preference exists (PC's base is now 2x). */
-    if (legacyScale > 0) {
-        for (int id = RENDER_PS1; id <= RENDER_SATURN; id++) {
-            if (!haveScale[id]) *RenderScaleSetting(&portSettings.render, (RendererId)id) =
-                id == RENDER_PC ? (legacyScale + 1) / 2 : legacyScale;
-        }
+    for (int id = RENDER_PS1; id < RENDER_COUNT; id++) {
+        RenderScene *scene = RenderSceneSetting(&portSettings.render, (RendererId)id);
+        if (scene->fadeFar <= scene->fadeNear) scene->fadeFar = scene->fadeNear + 1000;
     }
     /* the environment overrides the file for this run */
     if ((value = SDL_getenv("WIPEOUT_SKIP_INTRO"))) {
@@ -173,9 +142,6 @@ void PortSettingsLoad(void)
     }
     if ((value = SDL_getenv("WIPEOUT_DIGITAL_STEERING"))) {
         portSettings.digitalSteering = SDL_atoi(value) != 0;
-    }
-    if ((value = SDL_getenv("WIPEOUT_FAR_VIEW"))) {
-        portSettings.farView = SDL_atoi(value) != 0;
     }
     if ((value = SDL_getenv("WIPEOUT_SAVE_SLOT"))) {
         /* the save in use ("card:name"; tests) */
@@ -198,9 +164,6 @@ void PortSettingsLoad(void)
     if ((value = SDL_getenv("WIPEOUT_FRAMECAP_RATE"))) {
         portSettings.recordRate = SDL_clamp(SDL_atoi(value), 30, 240);
     }
-    if ((value = SDL_getenv("WIPEOUT_FAR_FLARES"))) {
-        portSettings.farFlares = SDL_atoi(value) != 0;
-    }
     if ((value = SDL_getenv("WIPEOUT_SKIP_LOGOS"))) {
         portSettings.skipLogos = SDL_atoi(value) != 0;
     }
@@ -220,32 +183,38 @@ void PortSettingsLoad(void)
     if ((value = SDL_getenv("WIPEOUT_WIDESCREEN"))) {
         portSettings.widescreen = SDL_atoi(value) != 0;
     }
+    portSettings.frameRateOverride = 0;
+    portSettings.frameCapOverride = 0;
     if ((value = SDL_getenv("WIPEOUT_FRAME_RATE"))) {
         /* "uncapped", "vsync", "console" or a cap in pictures a second */
         if (!strcmp(value, "uncapped")) {
-            portSettings.frameRate = FRAME_RATE_UNCAPPED;
+            portSettings.frameRateOverride = FRAME_RATE_UNCAPPED + 1;
         } else if (!strcmp(value, "vsync")) {
-            portSettings.frameRate = FRAME_RATE_VSYNC;
+            portSettings.frameRateOverride = FRAME_RATE_VSYNC + 1;
         } else if (!strcmp(value, "console")) {
-            portSettings.frameRate = FRAME_RATE_CONSOLE;
+            portSettings.frameRateOverride = FRAME_RATE_CONSOLE + 1;
         } else if (SDL_atoi(value) > 0) {
-            portSettings.frameRate = FRAME_RATE_CAPPED;
-            portSettings.frameCap = SDL_clamp(SDL_atoi(value), 15, 1000);
+            portSettings.frameRateOverride = FRAME_RATE_CAPPED + 1;
+            portSettings.frameCapOverride = SDL_clamp(SDL_atoi(value), FRAME_CAP_MIN, FRAME_CAP_MAX);
         }
+    }
+    portSettings.sceneOverride = (RenderScene){0};
+    if ((value = SDL_getenv("WIPEOUT_FAR_VIEW"))) {
+        portSettings.sceneOverride.farView = SDL_atoi(value) ? 1 : -1;
+    }
+    if ((value = SDL_getenv("WIPEOUT_FAR_FLARES"))) {
+        portSettings.sceneOverride.farFlares = SDL_atoi(value) ? 1 : -1;
     }
     if ((value = SDL_getenv("WIPEOUT_FADE"))) {
         int a = 0, b = 0;
 
         if (SDL_sscanf(value, "%d,%d", &a, &b) == 2 && b > a && a > 0) {
-            portSettings.fade = 1;
-            portSettings.fadeNear = a;
-            portSettings.fadeFar = b;
+            portSettings.sceneOverride.fade = 1;
+            portSettings.sceneOverride.fadeNear = a;
+            portSettings.sceneOverride.fadeFar = b;
         } else {
-            portSettings.fade = 0;
+            portSettings.sceneOverride.fade = -1;
         }
-    }
-    if (portSettings.fadeFar <= portSettings.fadeNear) {
-        portSettings.fadeFar = portSettings.fadeNear + 1000;
     }
 }
 
@@ -261,16 +230,15 @@ int PortSettingsSave(void)
     }
     fprintf(file,
             "# Wipeout XL settings (the ~ key opens the debug console that changes them)\n"
-            "show_fps = %d\nfar_view = %d\nfade = %d\nfade_near = %d\nfade_far = %d\n"
-            "widescreen = %d\nframe_rate = %d\nframe_cap = %d\nskip_intro = %d\nrecord_frames = %d\nrecord_replays = %d\nsave_dir = %s\ndisc = %s\noriginal = %s\n"
+            "show_fps = %d\n"
+            "widescreen = %d\nskip_intro = %d\nrecord_frames = %d\nrecord_replays = %d\nsave_dir = %s\ndisc = %s\noriginal = %s\n"
             "hd_textures = %d\nhd_pack = %s\nwipeout64 = %s\n"
             "custom_music = %d\nmusic_shuffle = %d\nmusic_folder = %s\nsave_slot = %s\nautosave = %d\n"
             "touch_controls = %d\ntouch_size = %d\ntouch_opacity = %d\nskip_logos = %d\nrecord_rate = %d\n"
-            "video_standard = %d\nvibration = %d\nvibration_strength = %d\nfar_flares = %d\npause_unfocused = %d\n"
+            "video_standard = %d\nvibration = %d\nvibration_strength = %d\npause_unfocused = %d\n"
             "surround = %d\nfullscreen = %d\ndigital_steering = %d\npad_type = %d\ncheck_updates = %d\n",
-            portSettings.showFps, portSettings.farView, portSettings.fade, portSettings.fadeNear, portSettings.fadeFar,
-            portSettings.widescreen, portSettings.frameRate,
-            portSettings.frameCap, portSettings.skipIntro,
+            portSettings.showFps,
+            portSettings.widescreen, portSettings.skipIntro,
             portSettings.recordFrames,
             portSettings.recordReplays,
             portSettings.saveDir, portSettings.discPath, portSettings.originalPath,
@@ -279,7 +247,7 @@ int PortSettingsSave(void)
             portSettings.touchControls, portSettings.touchSize ? portSettings.touchSize : 100,
             portSettings.touchOpacity ? portSettings.touchOpacity : 60, portSettings.skipLogos,
             portSettings.recordRate ? portSettings.recordRate : 60, portSettings.videoStandard, !portSettings.noRumble,
-            portSettings.rumbleStrength ? portSettings.rumbleStrength : 100, portSettings.farFlares,
+            portSettings.rumbleStrength ? portSettings.rumbleStrength : 100,
             !portSettings.noFocusPause, portSettings.surround, portSettings.fullscreen, portSettings.digitalSteering,
             portSettings.negconPad, !portSettings.noUpdateCheck);
     RenderSave(file, &portSettings.render);

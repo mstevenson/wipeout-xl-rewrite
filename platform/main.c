@@ -526,12 +526,12 @@ int PortFarViewEnabled(void)
            the lockstep tests compare the console's drawing */
         mode = value && SDL_atoi(value) == 2 ? 2 : SDL_getenv("WIPEOUT_TRACE") ? 0 : 1;
     }
-    return mode == 2 || (mode == 1 && portSettings.farView);
+    return mode == 2 || (mode == 1 && RenderSceneFor(RenderCurrent())->farView);
 }
 
 int PortFarFlaresEnabled(void)
 {
-    return portSettings.farFlares;
+    return PortFarViewEnabled() && RenderSceneFor(RenderCurrent())->farFlares;
 }
 
 int PortNativeRenderer(void)
@@ -546,9 +546,10 @@ int PortPcNativeView(int *sections, int *scenery)
 
 int PortFadeRange(int *nearDistance, int *farDistance)
 {
-    *nearDistance = portSettings.fadeNear;
-    *farDistance = portSettings.fadeFar;
-    return portSettings.fade;
+    const RenderScene *scene = RenderSceneFor(RenderCurrent());
+    *nearDistance = scene->fadeNear;
+    *farDistance = scene->fadeFar;
+    return scene->fade;
 }
 
 /* The level at the strength the player asked for (0: the scale's own), in the game's units. */
