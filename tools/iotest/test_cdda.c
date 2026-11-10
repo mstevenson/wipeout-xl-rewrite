@@ -10,25 +10,6 @@
 #include "testenv.h"
 #include "testutil.h"
 
-static char cueDir[1024];
-
-/* One sector of a track's .bin file, read with stdio (not through the disc module's mapping). */
-static int read_reference(int trackNumber, const DiscTrack *t, int32_t lba, uint8_t out[2352])
-{
-    char path[1100];
-    FILE *f;
-    int ok;
-
-    snprintf(path, sizeof(path), "%s/Wipeout XL (USA) (Track %02d).bin", cueDir, trackNumber);
-    f = fopen(path, "rb");
-    if (!f) {
-        return 0;
-    }
-    ok = fseek(f, (long)(lba - t->index0) * 2352, SEEK_SET) == 0 && fread(out, 1, 2352, f) == 2352;
-    fclose(f);
-    return ok;
-}
-
 static uint8_t response[16];
 
 static void step(CdDrive *cd, long n)
@@ -75,8 +56,6 @@ int main(void)
         printf("test_cdda: disc not found, skipped\n");
         return 0;
     }
-    snprintf(cueDir, sizeof(cueDir), "%s", cue);
-    *strrchr(cueDir, '/') = 0;
     disc = DiscOpen(cue, error, sizeof(error));
     CHECK(disc != NULL);
     if (!disc) {
@@ -130,7 +109,11 @@ int main(void)
     for (i = 0; i < 3; i++) {
         long k;
 
-        CHECK(read_reference(2, t2, 36601 + i, ref));
+        if (!test_cdda_reference(cue, 2, 36601 + (int)i - t2->index0, ref)) {
+            fprintf(stderr, "test_cdda: could not read the reference audio for track 2\n");
+            DiscClose(disc);
+            return 1;
+        }
         for (k = 0; k < 588; k++) {
             CdDriveSample(&cd, out);
             CHECK_EQ_INT(out[0], (int16_t)(ref[k * 4] | ref[k * 4 + 1] << 8));
@@ -179,7 +162,11 @@ int main(void)
         const DiscTrack *t = lba < t3->index0 ? t2 : t3;
         uint8_t where[8];
 
-        CHECK(read_reference(lba < t3->index0 ? 2 : 3, t, lba, ref));
+        if (!test_cdda_reference(cue, t->number, lba - t->index0, ref)) {
+            fprintf(stderr, "test_cdda: could not read the reference audio for track %d\n", t->number);
+            DiscClose(disc);
+            return 1;
+        }
         CdDriveCommand(&cd, CDC_GETLOCP, NULL, 0, where);
         CHECK_EQ_INT(where[0], lba < t3->index0 ? 0x02 : 0x03);
         CHECK_EQ_INT(where[1], lba < t3->index0 ? 0x01 : 0x00); /* track 2 index 1, then track 3's pregap */

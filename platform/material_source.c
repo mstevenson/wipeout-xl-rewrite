@@ -43,4 +43,3 @@ void PortObjectVisualFrame(int *assetTag, unsigned frame)
 {
     *assetTag = (int)SDL_Swap32BE(SaturnNativeFrameTag(SDL_Swap32BE((uint32_t)*assetTag), frame));
 }
-

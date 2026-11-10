@@ -1,9 +1,10 @@
 # Wipeout XL / 2097
 
-This project is a rewrite of Wipeout XL / 2097 inspired by [wipeout-rewrite](https://github.com/phoboslab/wipeout-rewrite). It is based off a decompilation of the PS1 version of Wipeout XL & 2097 and another partial decompilation of the PC release.
+This project is a rewrite of Wipeout XL / 2097 inspired by [wipeout-rewrite](https://github.com/phoboslab/wipeout-rewrite). It is based off a [decompilation](https://github.com/Yash-Singh1/wipeout-xl-decomp) of the PS1 version of Wipeout XL & 2097 and another partial decompilation of the PC release.
 
 The goal of this project is to keep the original behavior as much as possible while also upgrading the game with more capabilities. Here is a rough list of the changes in this game compared with the original PS1 version:
 - Higher resolutions (HD Mod support, accurate rendering w/out PGXP)
+- Downsampling to a chosen resolution, with smoother edges from higher-resolution rendering
 - Uncapped framerates (physics & game logic still limited to original framerate)
 - Widescreen support
 - Split-screen for one on one mode
@@ -16,6 +17,29 @@ The goal of this project is to keep the original behavior as much as possible wh
 - Minor culling & depth buffer fixes
 
 If you would like to change any of the settings or files for the game press the <kbd>`</kbd> or <kbd>~</kbd> key on your keyboard to toggle the debug UI. It has multiple tabs with many options to configure.
+
+Choose a rendering **Resolution** in the debug UI, then a target under **Downsample to**.
+Targets are multiples of PS1 native resolution: 1× is 320×240 for NTSC, 2× is 640×480, and so on.
+PAL uses 256 lines; widescreen adds columns. Rendering at 4× and downsampling to 2× gives smoother
+edges at 640×480. Targets above the rendering resolution use the rendering resolution. Off is the default.
+
+**Downsampling style** has two choices:
+
+- **Box** averages the whole picture, including the HUD, and enlarges it with sharp pixels.
+  Targets divide the rendering scale exactly, so 4× to 1×, 8× to 2× and 16× to 4× all work.
+  A saved target that no longer divides an automatic rendering scale uses the nearest lower divisor.
+  Scales count pixels along each axis: 2× to 1× averages four source pixels per output pixel.
+- **Adaptive** smooths enlarged flat pixels while preserving fine detail at the rendering resolution.
+  The target sets the coarse pixel grid, rather than forcing the whole picture to that resolution.
+  It detects detail from the image, so it cannot always distinguish 2D from 3D.
+
+The adaptive approach is inspired by [DuckStation](https://github.com/stenzek/duckstation), with independently
+written shaders. See [the attribution](docs/THIRD_PARTY.md#adaptive-downsampling).
+
+The settings file stores the target as `downsample` and the style as `downsample_style`, with 0 for Box
+and 1 for Adaptive. `WIPEOUT_DOWNSAMPLE=2` selects a 2× target for one run; `WIPEOUT_DOWNSAMPLE_STYLE=1`
+selects Adaptive. A target of zero disables either style. Existing settings with `downsample = 1` still
+target PS1 native, using Box unless a style is chosen.
 
 ## Getting Started
 
@@ -59,7 +83,7 @@ real game.
 
 ## Build
 
-Each build has its own folder under `build/`. macOS (Homebrew's `sdl3`):
+Each build has its own folder under `build/`. macOS uses Homebrew's `sdl3` and `jpeg-turbo`:
 
 ```sh
 cmake -S . -B build/mac -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -68,6 +92,13 @@ ninja -C build/mac
 
 It also makes `build/mac/Wipeout XL.app`, with the Mac version's icon and the
 Homebrew libraries it uses inside (copy it to `/Applications`).
+
+The recorder uses the static libjpeg-turbo library when its CMake package is available.
+It preserves quality 95 and full 4:4:4 chroma. Minimal builds can use the slower portable
+encoder with `-DWIPEOUT_FAST_JPEG=OFF`; release builds require the SIMD codec.
+This software is based in part on the work of the Independent JPEG Group.
+See [JPEG notices](docs/licenses/libjpeg-turbo.txt).
+
 
 Linux (for example Debian 13 or Ubuntu 25.04: `libsdl3-dev libgl-dev`): the
 same two commands with `build/linux`.
@@ -114,6 +145,11 @@ emcmake cmake -S . -B build/web -G Ninja -DCMAKE_BUILD_TYPE=Release \
 ninja -C build/web
 ```
 
+The web build bounds function inlining to avoid excessive compiler memory use
+in older iOS WebKit. Keep those web-specific compiler/linker options together;
+removing only the LLVM or Binaryen bound can recreate large Asyncify functions.
+`wipeoutxl.html.symbols` maps function indices for profiling.
+
 This makes `wipeoutxl.html`, `wipeoutxl.js` and `wipeoutxl.wasm`, and, as
 wipeout-rewrite's web build has its data beside the page, the disc the page
 loads by itself: `WIPEOUT_WEB_DISC` (your own copy) links the `.cue` and its
@@ -126,6 +162,48 @@ without a `wipeoutxl-data.json`, and the JSON (`{ "disc": "url/of/the.cue" }`)
 can point anywhere on the site. With `-DWIPEOUT_WEB_DISC_MUSIC=OFF` only the
 data track goes into `disc/` (about 86 MB in place of about 700): the game
 plays, without its music.
+
+For a muted phone test over your LAN, run `python3 tools/serve_web.py --host YOUR_LAN_IP`
+from the repository root and open `http://YOUR_LAN_IP:8768/phone.html`. It keeps 3x
+widescreen rendering, enables touch controls and the FPS counter, and serves only
+the data track. Small compressed chunks use the HTTP cache even on a plain HTTP
+LAN address. The first preparation creates a compressed cache under `build/phone-cache`.
+This helper requires a CUE with separate data and music files. The normal web page
+and full-music build remain available as above.
+
+Add `--music` to publish `phone-music.html` alongside the muted test. It includes
+every original CD track and enables audio. Tap **Play with sound** after the disc loads. This starts audio inside a user
+gesture before the game opens its audio device. If the browser interrupts audio,
+the **Enable sound** button resumes it. On iOS, the mixed audio plays through a
+media element started by the same gesture. Music streams through a shared six MiB decoded cache with small
+track headers. The server must remain reachable for uncached music chunks.
+The mixer schedules short Web Audio buffers ahead of playback, with a bounded
+queue, so rendering does not have to meet a main-thread audio callback deadline.
+Uncached music sectors load in the background while sound effects continue;
+music resumes from the same sample once its data is ready.
+If browser save storage does not respond within five seconds, Play becomes
+available with a notice that the session will not save changes. Existing browser
+saves remain untouched. Normal save restoration and autosaving continue when
+storage is available.
+
+For static hosting, run `python3 tools/serve_web.py --music --export build/web-static`
+and upload the contents of `build/web-static/`. Its `index.html` enables streamed
+music; `phone.html` is the muted version. These are ordinary HTML, JS, WASM, CUE
+and binary chunk files. They need no API, Python process, service worker or custom
+compression headers, and relative URLs allow hosting under a subdirectory.
+
+For local phone crash checks, `phone-music-check.html` uses the same music build
+and saves a small diagnostic snapshot once per second to `build/phone-diagnostics/`.
+It includes audio activation and media state, scheduled audio queue and underruns,
+FPS, heap capacity, music fetch state, graphics API timings, GPU fence waits and WebGL context loss. The static
+export excludes this diagnostic hook.
+
+The mobile web page has a **Full screen** button. Browsers with the Fullscreen API
+enter full screen directly. On iPhone with iOS 16, open the page in Safari, use
+**Share > Add to Home Screen**, and launch Wipeout XL from that icon to remove the
+browser bars. The game resizes on rotation and keeps its HUD and touch controls
+clear of the notch and home indicator. This does not require a service worker;
+the game still needs access to the server for files missing from the HTTP cache.
 
 ## Phones and tablets (iOS, Android)
 
@@ -218,7 +296,7 @@ with or without HDR bloom.
 With **HD textures** enabled, Modern uses the selected pack at every resolution.
 The hardware profiles require a render scale above 1×.
 
-`WIPEOUT_RENDERER=ps1|pc|n64|saturn|modern` forces a renderer for one run.
+`WIPEOUT_RENDER_PROFILE=ps1|pc|n64|saturn|modern` forces a renderer for one run.
 `auto` follows the saved renderer settings. See [rendering profiles](docs/RENDERERS.md)
 for defaults and controls.
 These are rendering approximations using the loaded assets, not changes of game
@@ -229,3 +307,5 @@ version or pixel-exact emulation.
 [docs/PLAN.md](docs/PLAN.md) describes the design; [docs/IO.md](docs/IO.md)
 the sound, CD, pad and card side. [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) has the licenses of code adapted
 from others (Monkey's Audio's decoder).
+
+Graphics devices and live switching in the debug console are described in [Graphics backends](docs/RENDER_BACKENDS.md).

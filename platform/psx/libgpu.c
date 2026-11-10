@@ -45,6 +45,10 @@ static void **linkPointers;
 static uint32_t linkCount = 1; /* 0 is unused */
 static void **linkKeys;
 static uint32_t *linkIds;
+static struct {
+    const uint32_t *fill[2];
+    const void *table;
+} hudColourBars[2];
 
 static uint32_t HashPointer(const void *pointer)
 {
@@ -228,6 +232,11 @@ u_long *ClearOTagR(u_long *ot, int n)
 {
     int i;
 
+    for (i = 0; i < 2; i++) {
+        if (hudColourBars[i].table == ot) {
+            memset(&hudColourBars[i], 0, sizeof(hudColourBars[i]));
+        }
+    }
     for (i = n - 1; i > 0; i--) {
         ot[i] = LinkId(&ot[i - 1]) & 0x00FFFFFFu;
     }
@@ -433,6 +442,12 @@ static void ReadPendingTables(void);
 static int interpolating; /* drawing a picture between two of the game's frames (PsxDrawInterpolated) */
 static int recordingBetween; /* ... which the frame recorder keeps (FrameCapBetween) */
 static float interpolationAlong;
+static int interpolationHasGeometry;
+static struct {
+    int valid, scale, margin;
+    unsigned textures;
+    PortSettings settings;
+} menuPicture;
 
 static struct {
     uint32_t frame;
@@ -529,8 +544,12 @@ void PortWideMenu(void)
     GpuWideMenu();
 }
 
+static int loadingPending;
+static const void *loadingTable;
+
 void PortWideLoadScreen(void)
 {
+    loadingPending = 1;
     GpuWideLoadScreen(); /* (as a menu without a backdrop: only the fills across the screen reach the sides) */
 }
 
@@ -548,6 +567,30 @@ static int Backdrop(const uint32_t *w)
 
 static int heldCount; /* (the ships' shadows held: PortShadowRange) */
 static int hudPackets; /* (below) */
+static int hudColourOverlay;
+
+void PortHudColourBars(const void *thrust, const void *energy, const void *table, int screen)
+{
+    if (screen >= 0 && screen < 2) {
+        hudColourBars[screen].fill[0] = (const uint32_t *)thrust + 1;
+        hudColourBars[screen].fill[1] = (const uint32_t *)energy + 1;
+        hudColourBars[screen].table = table;
+    }
+}
+
+void PortSaturnFontQuad(void *packet, int anchorX)
+{
+    POLY_FT4 *quad = packet;
+    short *xy[4] = {&quad->x0, &quad->x1, &quad->x2, &quad->x3};
+
+    for (int i = 0; i < 4; i++) {
+        float x = anchorX + (xy[i][0] - anchorX) * (320.0f / 352.0f);
+        xy[i][0] = (short)SDL_roundf(x);
+        uint32_t key = (uint16_t)xy[i][0] | (uint32_t)(uint16_t)xy[i][1] << 16;
+        GteBindPrecise(xy[i], GteRecordProjection(key, x, (float)xy[i][1], 0.0f, 1.0f));
+    }
+}
+
 static int HoldShadow(const uint32_t *w, int words);
 static void ReleaseShadows(void);
 static int AheadOfShadows(const uint32_t *w, int words);
@@ -566,7 +609,11 @@ static void DrawPacket(const uint32_t *w, int words)
     if (backdrop) {
         GpuBackdrop(1);
     }
+    hudColourOverlay = !PortTracing() &&
+        (w == hudColourBars[0].fill[0] || w == hudColourBars[0].fill[1] ||
+         w == hudColourBars[1].fill[0] || w == hudColourBars[1].fill[1]);
     Packet(w, words);
+    hudColourOverlay = 0;
     if (backdrop) {
         GpuBackdrop(0);
     }
@@ -642,6 +689,7 @@ static struct {
 static void ForgetDrawnFrame(void)
 {
     drawnFrame.pending = 0;
+    menuPicture.valid = 0;
 }
 
 static int shakeX, shakeY; /* PortDisplayShake's, until the next PutDispEnv */
@@ -674,12 +722,21 @@ DISPENV *PutDispEnv(DISPENV *env)
     return given;
 }
 
+static int startupDisplayBlocked;
+
+void PsxStartupDisplay(int enabled)
+{
+    startupDisplayBlocked = !enabled;
+    SetDispMask(enabled);
+}
+
 void SetDispMask(int mask)
 {
     if (!mask) {
         ForgetDrawnFrame();
     }
-    state.displayEnabled = mask != 0;
+    state.displayEnabled = mask != 0 && !startupDisplayBlocked;
+    FrameCapDisplayEnabled(state.displayEnabled);
 }
 
 /* ResetGraph as the library's _reset: mode 0 resets the GPU (GP1 0), modes 1
@@ -1063,6 +1120,8 @@ static void Vertex(GpuVertex *v, uint32_t xy, const GtePrecise *precise)
 {
     int x = (int32_t)(xy << 21) >> 21, y = (int32_t)(xy << 5) >> 21;
     GtePrecise moved;
+    if (interpolating && precise && (precise->z != 0.0f || precise->view[2] != 0.0f))
+        interpolationHasGeometry = 1;
 
     memset(v->shutterDelta, 0, sizeof(v->shutterDelta));
     if (precise && interpolating && GteInterpolate(precise, interpolationAlong, &moved)) {
@@ -1804,6 +1863,7 @@ static void TextureFromPage(GpuDrawState *draw, uint32_t page)
 static void StateFor(GpuDrawState *draw, int textured, int semi, int raw)
 {
     memset(draw, 0, sizeof(*draw));
+    draw->hudColourOverlay = hudColourOverlay;
     draw->textured = textured;
     draw->raw = raw;
     draw->semi = semi ? (int)((state.texpage >> 5) & 3) : -1;
@@ -1996,6 +2056,9 @@ static void Polygon(const uint32_t *w, uint32_t code)
     draw.dither &= gouraud || (textured && !raw);
     if (textured) {
         TextureFromPage(&draw, page);
+        /* Port-only texture page bit: Saturn's checkerboard mesh, drawn opaque
+           at alternating console pixels rather than blended with the scene. */
+        if (semi && (page & 0x1000)) draw.semi = 4;
         draw.clutX = (int)(clut & 0x3F) * 16;
         draw.clutY = (int)((clut >> 6) & 0x3FF); /* (bit 15: a palette in the second half, gpu.h) */
         draw.trackTile = TrackPacket(w);
@@ -2266,6 +2329,33 @@ static u_long *NodeAfter(u_long *node)
     return link == LINK_END ? NULL : LinkPointer(link);
 }
 
+/* A reused packet can link back into the same table. Interpolation would then
+   draw forever without returning to the event pump, while audio keeps playing.
+   Preserve every distinct node, cutting only the edge that repeats the cycle. */
+static void EndTableCycle(u_long *head)
+{
+    u_long *slow = head, *fast = head, *tail;
+
+    while (fast && (fast = NodeAfter(fast)) != NULL) {
+        slow = NodeAfter(slow);
+        fast = NodeAfter(fast);
+        if (slow == fast) {
+            slow = head;
+            while (slow != fast) {
+                slow = NodeAfter(slow);
+                fast = NodeAfter(fast);
+            }
+            tail = slow;
+            while (NodeAfter(tail) != slow) {
+                tail = NodeAfter(tail);
+            }
+            fprintf(stderr, "libgpu: cyclic ordering table at packet %p; closing repeated link\n", (void *)slow);
+            *tail = (*tail & 0xFF000000u) | LINK_END;
+            return;
+        }
+    }
+}
+
 /* The first node from node on that carries a packet, or NULL. */
 static u_long *PacketFrom(u_long *node)
 {
@@ -2370,6 +2460,7 @@ static void ReadPendingTables(void)
     }
     memset(seen, 0, sizeof(seen));
     for (i = 0; i < pendingCount; i++) {
+        EndTableCycle(pending[i].table);
         u_long *head = PacketFrom(pending[i].table);
         uint32_t first = head ? LinkId(head) : LINK_END;
 
@@ -2720,6 +2811,9 @@ static int CameraBlurOn(void)
 
 void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env, int cameraCut)
 {
+    menuPicture.valid = 0;
+    EndTableCycle(table);
+    EndTableCycle(second);
     if (CameraBlurOn()) GteKeepPast(1);
     if (table) {
         PrepareTrackTable(table);
@@ -2730,6 +2824,10 @@ void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV 
     centredCount[0] = 0;
     inPlace[1] = inPlace[0];
     inPlace[0] = 0;
+    if (loadingPending) {
+        loadingTable = table;
+        loadingPending = 0;
+    }
     upcoming.table = table;
     upcoming.second = second;
     upcoming.hudEntry = hudFirst;
@@ -2786,7 +2884,8 @@ int PsxInterpolationOn(void)
 
 int PsxCanInterpolate(void)
 {
-    return upcoming.table && upcoming.width > 0 && upcoming.height > 0 && !holdPicture && PsxInterpolationOn();
+    return state.displayEnabled && upcoming.table && upcoming.width > 0 && upcoming.height > 0 &&
+           !holdPicture && PsxInterpolationOn();
 }
 
 static void DrawTableAgain(u_long *p)
@@ -2794,6 +2893,7 @@ static void DrawTableAgain(u_long *p)
     u_long *node;
     int inHud = p == hudTable;
 
+    EndTableCycle(p);
     WalkTable(p, 0);
     if (PortLinkSplit()) {
         DrawAnchored(p, PortScreenMargin(), 1);
@@ -2846,15 +2946,30 @@ static void CaptureCameraBlur(float along, int hudOnly)
     GpuCaptureCameraMotion(upcoming.left, upcoming.top, upcoming.width, upcoming.height, view, hudOnly);
 }
 
+static int CanReuseMenuPicture(void)
+{
+    return menuPicture.valid && !recordingBetween && !GpuRaceWide() && PortLinkRole() == LINK_NONE &&
+        menuPicture.scale == GpuScale() &&
+        menuPicture.margin == PortScreenMargin() && menuPicture.textures == HdTexEpoch() &&
+        !memcmp(&menuPicture.settings, &portSettings, sizeof(portSettings));
+}
+
 static void DrawInterpolated(float along)
 {
     u_long *savedHudEntry = hudEntry, *savedHudTable = hudTable;
     __typeof__(state) saved = state;
 
+    /* Flat menu packets do not change between game updates. Reuse their
+       full-resolution image for extra presentations, while recording frames
+       still rebuild their complete inspection records. Any 3D geometry keeps
+       the interpolation path. New tables/transfers/draws invalidate the image. */
+    if (CanReuseMenuPicture()) return;
+    interpolationHasGeometry = 0;
     interpolating = 1;
     interpolationAlong = CameraBlurOn() && upcoming.cameraCut ? 1.0f : SDL_clamp(along, 0.0f, 1.0f);
     DrawLights(interpolationAlong);
     GpuInterpolating(1);
+    if (upcoming.table == loadingTable) GpuWideLoadScreen();
     state.areaLeft = upcoming.left;
     state.areaTop = upcoming.top;
     state.areaRight = upcoming.left + upcoming.width - 1;
@@ -2876,6 +2991,11 @@ static void DrawInterpolated(float along)
     hudTable = savedHudTable;
     state = saved;
     ApplyArea();
+    menuPicture.valid = !interpolationHasGeometry && !GpuRaceWide() && PortLinkRole() == LINK_NONE;
+    menuPicture.scale = GpuScale();
+    menuPicture.margin = PortScreenMargin();
+    menuPicture.textures = HdTexEpoch();
+    menuPicture.settings = portSettings;
     interpolating = 0;
     GpuInterpolating(0);
 }
@@ -2958,6 +3078,8 @@ void DrawOTag(u_long *p)
     int mainTable = p == upcoming.table;
     int secondTable = drawnFrame.pending && p == drawnFrame.second;
 
+    menuPicture.valid = 0;
+    EndTableCycle(p);
     DrawLights(1.0f);
     WalkTable(p, 1);
     tablesDrawn++;
@@ -2985,12 +3107,18 @@ void DrawOTag(u_long *p)
     } else if (p != drawnFrame.second) {
         ForgetDrawnFrame();
     }
-    if (holdPicture && holdAreaCount < HOLD_AREAS) {
+    if (holdPicture && holdAreaCount < HOLD_AREAS && TableDraws(p)) {
         holdAreas[holdAreaCount].left = state.areaLeft;
         holdAreas[holdAreaCount].top = state.areaTop;
         holdAreas[holdAreaCount].right = state.areaRight;
         holdAreas[holdAreaCount].bottom = state.areaBottom;
         holdAreaCount++;
+    }
+    if (p == loadingTable) {
+        /* Swap waits before drawing. Mark the loading table when it actually draws,
+           so a presentation of the previous picture cannot consume its wide flag. */
+        GpuWideLoadScreen();
+        loadingTable = NULL;
     }
     FrameCapTable(state.offsetX, state.offsetY, state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1,
                   state.areaBottom - state.areaTop + 1);

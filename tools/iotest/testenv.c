@@ -16,6 +16,17 @@
 
 static uint64_t fields;
 static char saveDir[256];
+int portPal; /* these fixtures use NTSC timing */
+
+uint64_t PsxFieldCount(void)
+{
+    return fields;
+}
+
+int PortLinkRaceActive(void)
+{
+    return 0;
+}
 
 uint64_t test_fields(void)
 {
@@ -99,6 +110,48 @@ const char *test_disc_path(void)
     }
     snprintf(path, sizeof(path), "%s/../wipeout-xl/Wipeout XL (USA).cue", REPO_DIR);
     return exists(path) ? path : NULL;
+}
+
+int test_cdda_reference(const char *cue, int track, int sectorInTrack, uint8_t out[2352])
+{
+    FILE *sheet = fopen(cue, "r");
+    if (!sheet) return 0;
+
+    char line[2048], filename[1024] = "", type[32] = "";
+    int number = 0, fileSector = -1;
+    while (fgets(line, sizeof(line), sheet)) {
+        char key[16];
+        if (sscanf(line, " %15s", key) != 1) continue;
+        if (!strcmp(key, "FILE")) {
+            if (number == track) break;
+            filename[0] = type[0] = 0;
+            if (sscanf(line, " FILE \"%1023[^\"]\" %31s", filename, type) != 2)
+                sscanf(line, " FILE %1023s %31s", filename, type);
+        } else if (!strcmp(key, "TRACK")) {
+            if (number == track) break;
+            number = 0;
+            sscanf(line, " TRACK %d", &number);
+        } else if (number == track && !strcmp(key, "INDEX")) {
+            int index, minutes, seconds, frames;
+            if (sscanf(line, " INDEX %d %d:%d:%d", &index, &minutes, &seconds, &frames) == 4 &&
+                (index == 0 || (index == 1 && fileSector < 0)))
+                fileSector = (minutes * 60 + seconds) * 75 + frames;
+        }
+    }
+    fclose(sheet);
+    if (fileSector < 0 || sectorInTrack < 0 || !filename[0] || strcmp(type, "BINARY")) return 0;
+
+    char path[2048];
+    const char *slash = strrchr(cue, '/');
+    int directory = filename[0] != '/' && slash ? (int)(slash - cue + 1) : 0;
+    int length = snprintf(path, sizeof(path), "%.*s%s", directory, cue, filename);
+    if (length < 0 || (size_t)length >= sizeof(path)) return 0;
+    FILE *raw = fopen(path, "rb");
+    if (!raw) return 0;
+    int ok = fseek(raw, ((long)fileSector + sectorInTrack) * 2352, SEEK_SET) == 0 &&
+             fread(out, 1, 2352, raw) == 2352;
+    fclose(raw);
+    return ok;
 }
 
 const char *test_root_dir(void)

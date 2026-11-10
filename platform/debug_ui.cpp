@@ -4,13 +4,13 @@
 // memory cards live. Not in the tests' hidden runs.
 #include "render/renderer_ui.h"
 #include <SDL3/SDL.h>
-#include "port_gl.h"
+#include "render/state.h"
+#include "render/imgui.h"
 
 #include <stdio.h>
 #include <string.h>
 
 #include "imgui.h"
-#include "backends/imgui_impl_opengl3.h"
 #include "backends/imgui_impl_sdl3.h"
 
 extern "C" {
@@ -80,14 +80,15 @@ extern "C" void DebugUiInit(SDL_Window *w, void *context)
     style.FrameRounding = 4.0f;
     style.Colors[ImGuiCol_WindowBg].w = 0.92f;
     baseStyle = style;
-    ImGui_ImplSDL3_InitForOpenGL(w, context);
+    ImGui_ImplSDL3_InitForOther(w);
     ImGui_ImplSDL3_SetGamepadMode(ImGui_ImplSDL3_GamepadMode_AutoAll);
-    ImGui_ImplOpenGL3_Init(PORT_GLSL_VERSION);
+    RenderImGuiInit();
     SDL_strlcpy(saveDirEdit, portSettings.saveDir, sizeof(saveDirEdit));
     SDL_strlcpy(originalEdit, portSettings.originalPath, sizeof(originalEdit));
     SDL_strlcpy(discEdit, portSettings.discPath[0] ? portSettings.discPath : (portConfig.discGiven ? portConfig.discGiven : ""),
                 sizeof(discEdit));
     pickLock = SDL_CreateMutex();
+    consoleOpen = SDL_getenv("WIPEOUT_DEBUG_CONSOLE") != nullptr;
     ready = true;
 }
 
@@ -96,7 +97,7 @@ extern "C" void DebugUiShutdown(void)
     if (!ready) {
         return;
     }
-    ImGui_ImplOpenGL3_Shutdown();
+    RenderImGuiShutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
     ready = false;
@@ -283,29 +284,8 @@ static int uploadedShown;
 static bool uploadedHad;            // ... and whether it had its picture then (a recording being made: compressed later)
 static float pictureZoom;           // the picture's pixels per console pixel; 0: as large as fits
 static float pictureRoom;           // the height dragged for the picture above the list (0: as the layout gives)
-static GLuint frameTexture;
+static RgHandle frameTexture;
 static int pickHit = -1;
-
-// The texture's own sampling (its mipmaps), not the backend's sampler.
-typedef void (*BindSamplerFunction)(GLuint unit, GLuint sampler);
-typedef void (*GenerateMipmapFunction)(GLenum target);
-static BindSamplerFunction bindSampler;
-static GenerateMipmapFunction generateMipmap;
-
-static void LoadMipmapFunctions(void)
-{
-    if (!generateMipmap) {
-        bindSampler = (BindSamplerFunction)SDL_GL_GetProcAddress("glBindSampler");
-        generateMipmap = (GenerateMipmapFunction)SDL_GL_GetProcAddress("glGenerateMipmap");
-    }
-}
-
-static void TextureSampling(const ImDrawList *, const ImDrawCmd *)
-{
-    if (bindSampler) {
-        bindSampler(0, 0);
-    }
-}
 
 // The recorded picture: its pixels sharp when larger than the screen's, else smoothed through its mipmaps (the
 // backend samples linearly unless told otherwise).
@@ -314,8 +294,8 @@ static void PixelImage(ImVec2 size, ImVec2 uv0, ImVec2 uv1, bool smooth)
     ImGuiPlatformIO &io = ImGui::GetPlatformIO();
     ImDrawList *draw = ImGui::GetWindowDrawList();
 
-    if (smooth) {
-        draw->AddCallback(TextureSampling, nullptr);
+    if (smooth && io.DrawCallback_SetSamplerLinear) {
+        draw->AddCallback(io.DrawCallback_SetSamplerLinear, nullptr);
     } else if (io.DrawCallback_SetSamplerNearest) {
         draw->AddCallback(io.DrawCallback_SetSamplerNearest, nullptr);
     }
@@ -353,7 +333,9 @@ static void Explain(const FrameCapPrim *p, const FrameCapHit *h, char *out, size
     if (h->transparent) {
         n += SDL_snprintf(out + n, size - n, "transparent texel: what is below shows; ");
     }
-    if (p->draw.semi >= 0 && p->kind != FRAMECAP_FILL) {
+    if (p->draw.semi == 4) {
+        n += SDL_snprintf(out + n, size - n, "Saturn checkerboard mesh; ");
+    } else if (p->draw.semi >= 0 && p->kind != FRAMECAP_FILL) {
         n += SDL_snprintf(out + n, size - n, "blend %s; ", blends[p->draw.semi & 3]);
     }
     if (h->alpha < 254.5f && p->kind != FRAMECAP_FILL) {
@@ -474,28 +456,26 @@ static void RecorderTab(void)
         followNewest = true;
     }
     ImGui::Separator();
-    // the frames up to the newest shown: the one being drawn when the recording stopped (or while it goes on) is
-    // not finished, and has no picture
-    int usable = total;
-    while (usable > 0 && !FrameCapFrameAt(usable - 1)->shown) {
-        usable--;
+    // Hidden and unfinished draws have no displayed image. Keep them in the saved
+    // diagnostic data, but stepping the picture viewer visits presented frames only.
+    static ImVector<int> visibleFrames;
+    visibleFrames.resize(0);
+    for (int i = 0; i < total; i++) {
+        if (FrameCapPictureReady(i)) visibleFrames.push_back(i);
     }
-    if (usable == 0) {
+    int usable = visibleFrames.Size;
+    if (!usable) {
         ImGui::TextDisabled("Waiting for the first frame...");
         return;
     }
+    int position = usable - 1;
     if (frameShown >= 0 && !followNewest) {
-        // the same frame as before, wherever it is now (the oldest once it is gone)
-        int i = usable - 1;
-        while (i >= 0 && FrameCapFrameAt(i)->number != frameShownNumber) {
-            i--;
-        }
-        frameShown = SDL_max(i, 0);
-    }
-    if (frameShown < 0 || frameShown >= usable || followNewest) {
-        frameShown = usable - 1;
-        while (frameShown > 0 && !FrameCapFrameAt(frameShown)->shown) {
-            frameShown--; // the newest frame that reached the screen
+        position = 0;
+        for (int i = usable - 1; i >= 0; i--) {
+            if (FrameCapFrameAt(visibleFrames[i])->number == frameShownNumber) {
+                position = i;
+                break;
+            }
         }
     }
     // , and . step back and forward a frame (held: on and on), as the arrows do
@@ -516,19 +496,20 @@ static void RecorderTab(void)
         }
     }
     bool changed = step != 0;
-    frameShown = SDL_clamp(frameShown + step, 0, usable - 1);
+    position = SDL_clamp(position + step, 0, usable - 1);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-1);
     char sliderLabel[64];
-    int number = frameShown + 1; // (counted from 1)
+    int number = position + 1; // (counted from 1)
     SDL_snprintf(sliderLabel, sizeof(sliderLabel), live ? "frame %%d / %d (recording)" : "frame %%d / %d", usable);
     if (ImGui::SliderInt("##frame", &number, 1, usable, sliderLabel)) {
-        frameShown = number - 1;
+        position = number - 1;
         changed = true;
     }
-    if (changed || frameShown >= usable - 1) {
-        followNewest = live && frameShown >= usable - 1; // back at the newest: following it again
+    if (changed || position >= usable - 1) {
+        followNewest = live && position >= usable - 1; // back at the newest: following it again
     }
+    frameShown = visibleFrames[position];
     const FrameCapFrame *f = FrameCapFrameAt(frameShown);
     frameShownNumber = f->number;
 
@@ -539,6 +520,8 @@ static void RecorderTab(void)
     int picturePixelsW = 0, picturePixelsH = 0;
     const uint8_t *picture = f->shown ? FrameCapPicture(frameShown, &picturePixelsW, &picturePixelsH) : nullptr;
     bool hasPicture = picture != nullptr;
+    if (FrameCapPictureSkipped(frameShown))
+        TextWrappedColored(note, "Preview skipped because recording was busy. Frame inspection data is available.");
     // Keep picking and overlays in game coordinates, even with non-square native pixels.
     int pictureX = hasPicture ? f->pictureX : 0;
     int pictureW = hasPicture && f->pictureGameW ? f->pictureGameW : 320;
@@ -595,24 +578,21 @@ static void RecorderTab(void)
 
     // the picture; a click picks the pixel
     if (!frameTexture) {
-        glGenTextures(1, &frameTexture);
-        glBindTexture(GL_TEXTURE_2D, frameTexture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        RgGenTextures(1, &frameTexture);
+        RgBindTexture(RG_TEXTURE_2D, frameTexture);
+        RgTexParameteri(RG_TEXTURE_2D, RG_TEXTURE_MIN_FILTER, RG_NEAREST);
+        RgTexParameteri(RG_TEXTURE_2D, RG_TEXTURE_MAG_FILTER, RG_NEAREST);
     }
     // the picture: the console's 320 columns, and with widescreen the sides (from column `pictureX`)
     if (!uploaded || uploadedNumber != f->number || uploadedShown != f->shown || uploadedHad != hasPicture) {
         static uint8_t black[320 * 256 * 3];
-        glBindTexture(GL_TEXTURE_2D, frameTexture);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, hasPicture ? picturePixelsW : 320, hasPicture ? picturePixelsH : GPU_LINES, 0,
-                     GL_RGB, GL_UNSIGNED_BYTE, hasPicture ? picture : black);
-        LoadMipmapFunctions();
-        if (generateMipmap) {
-            generateMipmap(GL_TEXTURE_2D); // (for the picture shown smaller than it is)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-        }
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
+        RgBindTexture(RG_TEXTURE_2D, frameTexture);
+        RgPixelStorei(RG_UNPACK_ALIGNMENT, 1);
+        RgTexImage2D(RG_TEXTURE_2D, 0, RG_RGB8, hasPicture ? picturePixelsW : 320, hasPicture ? picturePixelsH : GPU_LINES, 0,
+                     RG_RGB, RG_UNSIGNED_BYTE, hasPicture ? picture : black);
+        RgGenerateMipmap(RG_TEXTURE_2D); // for the picture shown smaller than it is
+        RgTexParameteri(RG_TEXTURE_2D, RG_TEXTURE_MIN_FILTER, RG_LINEAR_MIPMAP_LINEAR);
+        RgPixelStorei(RG_UNPACK_ALIGNMENT, 2);
         uploaded = true;
         uploadedNumber = f->number;
         uploadedShown = f->shown;
@@ -628,14 +608,10 @@ static void RecorderTab(void)
     // the picture as large as fits or as zoomed (in a pane of its own that scrolls when it is larger), the picked
     // pixel's primitives beside it (in a narrow window below it)
     float zoom = pictureZoom > 0 ? pictureZoom : fit;
-    ImVec2 imageSize(pictureW * zoom, pictureH * zoom);
     if (!beside && pictureZoom > 0 && pictureRoom <= 0) {
         paneH = SDL_max(paneH, room.y - belowZoomed - splitter); // zoomed in: as tall as it gets, the list smaller
     }
-    float bar = ImGui::GetStyle().ScrollbarSize;
-    bool across = imageSize.x > paneW, down = imageSize.y > paneH;
-    ImGui::BeginChild("##picture",
-                      ImVec2(across ? paneW : imageSize.x + (down ? bar : 0), down ? paneH : imageSize.y + (across ? bar : 0)),
+    ImGui::BeginChild("##picture", ImVec2(paneW, paneH),
                       ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
     ImVec2 origin = ImGui::GetCursorScreenPos();
     PixelImage(ImVec2(pictureW * zoom, pictureH * zoom), ImVec2(0, 0), ImVec2(1, 1), zoom < pictureScale);
@@ -1710,6 +1686,46 @@ static void VideoStandard(void)
     }
 }
 
+static void Downsampling(void)
+{
+    char labels[16][48];
+    const char *items[17];
+    int rendering = GpuScale(), w, h;
+
+    items[0] = "Off";
+    for (int target = 1; target <= SDL_min(rendering, 16); target++) {
+        GpuPixelSize(320, GPU_LINES, &w, &h);
+        SDL_snprintf(labels[target - 1], sizeof(labels[target - 1]), "%dx%d",
+                     w * target / rendering, h * target / rendering);
+        items[target] = labels[target - 1];
+    }
+    int downsample = PortDownsampleTarget(rendering, portSettings.downsample, portSettings.downsampleStyle);
+    if (ImGui::BeginCombo("Downsample to", items[downsample])) {
+        for (int target = 0; target <= SDL_min(rendering, 16); target++) {
+            if (target && portSettings.downsampleStyle == DOWNSAMPLE_BOX && rendering % target) continue;
+            if (ImGui::Selectable(items[target], downsample == target)) {
+                portSettings.downsample = target;
+                Changed();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    static const char *styles[] = {"Box", "Adaptive"};
+    int style = portSettings.downsampleStyle;
+    if (ImGui::Combo("Downsampling style", &style, styles, 2)) {
+        portSettings.downsampleStyle = style;
+        Changed();
+    }
+    if (style == DOWNSAMPLE_ADAPTIVE) {
+        ImGui::TextWrapped("Smooths enlarged flat pixels while preserving fine detail at the rendering resolution. "
+                           "The target controls the flat-pixel grid; detection is based on the image. Choose Box to keep 2D pixel edges sharp.");
+        ImGui::TextDisabled("Adaptive style inspired by DuckStation.");
+    } else {
+        ImGui::TextWrapped("Averages equal blocks into the target, then enlarges with nearest-neighbour sampling for crisp 2D pixels.");
+    }
+    ImGui::TextWrapped("Off disables either style. Box targets divide the rendering scale exactly; automatic resolution changes use the nearest lower valid target. A 2x-to-1x reduction averages a 2x2 block, or four pixels.");
+}
+
 static void UsePack(const char *path)
 {
     SDL_strlcpy(packEdit, path, sizeof(packEdit));
@@ -1873,8 +1889,20 @@ static void Console(void)
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Graphics", nullptr, FirstTab("graphics"))) {
+            if (ImGui::BeginCombo("Graphics backend", RenderBackendName(RenderActiveBackend()))) {
+                for (int i = 0; i < RENDER_BACKEND_COUNT; i++) {
+                    RenderBackend backend = (RenderBackend)i;
+                    if (!RenderBackendAvailable(backend)) continue;
+                    bool selected = backend == RenderActiveBackend();
+                    if (ImGui::Selectable(RenderBackendName(backend), selected)) RenderRequestBackend(backend);
+                    if (selected) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            if (RenderBackendError()[0]) ImGui::TextWrapped("%s", RenderBackendError());
             if (RenderSettingsUi(&portSettings.render)) Changed();
             ImGui::SeparatorText("Display");
+            Downsampling();
             VideoStandard();
             ImGui::Separator();
             bool wide = portSettings.widescreen != 0;
@@ -2059,7 +2087,7 @@ extern "C" void DebugUiSplash(const char *text, float fraction)
     int width, height;
     SDL_GetWindowSizeInPixels(window, &width, &height);
     FitToWindow();
-    ImGui_ImplOpenGL3_NewFrame();
+    RenderImGuiNewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     const ImGuiViewport *view = ImGui::GetMainViewport();
@@ -2075,8 +2103,8 @@ extern "C" void DebugUiSplash(const char *text, float fraction)
     ImGui::End();
     ImGui::Render();
     GpuClearWindow(0.0f, 0.0f, 0.18f);
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    SDL_GL_SwapWindow(window);
+    RenderImGuiDraw(ImGui::GetDrawData());
+    RenderPresent();
 }
 
 extern "C" void DebugUiRender(void)
@@ -2094,7 +2122,7 @@ extern "C" void DebugUiRender(void)
 #ifndef __EMSCRIPTEN__
     UpdateNoticeNavigation();
 #endif
-    ImGui_ImplOpenGL3_NewFrame();
+    RenderImGuiNewFrame();
     ImGui_ImplSDL3_NewFrame();
     ImGui::NewFrame();
     if (portSettings.showFps) {
@@ -2111,6 +2139,6 @@ extern "C" void DebugUiRender(void)
     UpdateNotice();
 #endif
     ImGui::Render();
-    glViewport(0, 0, width, height);
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+    RenderImGuiDraw(ImGui::GetDrawData());
 }

@@ -109,7 +109,7 @@ and [N64 rendering](N64_RENDERING.md) for fidelity limits.
 ## Modern profile
 
 Choose **Modern** in a platform's renderer selector or set
-`WIPEOUT_RENDERER=modern` for a single run. The profile uses the original
+`WIPEOUT_RENDER_PROFILE=modern` for a single run. The profile uses the original
 textures and models with full-colour rendering and Auto resolution.
 
 **Bilinear texture filtering** is enabled by default and blends neighbouring
@@ -189,7 +189,7 @@ See [PC rendering evidence](PC.md#rendering-evidence-and-limits).
 
 Loading a Saturn disc uses **Sega Saturn** by default. Choose another profile in
 the Sega Saturn column to override that platform, or choose the Saturn profile
-for another platform. `WIPEOUT_RENDERER=saturn` forces it for the run, including
+for another platform. `WIPEOUT_RENDER_PROFILE=saturn` forces it for the run, including
 imported tracks. The profile works with any loaded assets.
 
 Independent controls are `saturn_quantize_vertices`, `saturn_affine_textures`,
@@ -303,7 +303,7 @@ captures validate this implementation; they do not establish console equivalence
 `WIPEOUT_RENDER_SCALE` overrides all profile multipliers, including 0 for Auto.
 `WIPEOUT_DEPTH_BUFFER` overrides PC depth.
 
-`WIPEOUT_RENDERER=ps1|pc|n64|saturn|modern` takes precedence for the run.
+`WIPEOUT_RENDER_PROFILE=ps1|pc|n64|saturn|modern` takes precedence for the run.
 `auto` follows the saved renderer settings. The INI stores each platform's chosen
 profile. Hidden regression runs use defaults and environment overrides and skip
 reading and saving player settings.
@@ -365,6 +365,7 @@ Run from the repository root with an existing build tree:
 ```sh
 sh tools/bugtest/run.sh
 sh tools/bugtest/render.sh
+WIPEOUT_TEST_GL=1 WIPEOUT_TEST_METAL=1 sh tools/bugtest/run.sh # Metal-capable Mac
 cmake --build build/mac -j 2
 ```
 
@@ -376,9 +377,9 @@ flips and readbacks. Recorded results and blocked checks are in the
 [consolidated change record](port-notes/renderer-changes.md) and
 [architecture refactor notes](port-notes/renderer-consolidation.md).
 
-Boundary checks reject private profile settings and direct Saturn or Modern
-dispatch in shared GL transport and the packet adapter. Source-material tests exercise
-all five profiles, bloom toggles, animation, capture, replay and packet reuse.
-Standalone profile tests link both CPU policy and GL code without the registry,
-backend or other profiles, exercising private batch bindings, HDR presentation
-and repeated destruction/recreation.
+Source-material tests exercise all five profiles, bloom toggles, animation,
+capture, replay and packet reuse. Standalone profile tests link the original
+OpenGL programs as references. The shared-device tests cover Modern shutter
+and bloom, HUD protection and capture during backend switching, and Saturn's
+native quads and panorama on desktop OpenGL and Metal. See the
+[backend integration notes](port-notes/renderer-backend-integration.md).

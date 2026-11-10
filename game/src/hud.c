@@ -245,6 +245,7 @@ void fill_speedo(Speedo *speedo, ShipData *ships, ConfigData *game, int player)
     short secondInset;
     int energyTop;
     int thrustTop, thrustBottom;
+    int thrustLeft;
 
     if (PortPcData()) {
         PcFillSpeedo(ships, game, player); /* Port: the PC version's speedometer (pc/pchud.c) */
@@ -309,13 +310,16 @@ void fill_speedo(Speedo *speedo, ShipData *ships, ConfigData *game, int player)
     }
     thrustBottom = thrustTop - secondInset + 1;
     if (thrustBottom < 0) thrustBottom = 0;
-    SPEEDO_QUAD(marker).x0 = 206;
+    /* Port: the marker artwork ends one pixel left of the frame's inside edge.
+       Align its texels with the frame, retaining the console packets for tracing. */
+    thrustLeft = 206 + !PortTracing();
+    SPEEDO_QUAD(marker).x0 = thrustLeft;
     SPEEDO_QUAD(marker).y0 = PAL_PANEL_Y(173);
-    SPEEDO_QUAD(marker).x1 = 206 + thrustTop;
+    SPEEDO_QUAD(marker).x1 = thrustLeft + thrustTop;
     SPEEDO_QUAD(marker).y1 = PAL_PANEL_Y(173);
-    SPEEDO_QUAD(marker).x2 = 206;
+    SPEEDO_QUAD(marker).x2 = thrustLeft;
     SPEEDO_QUAD(marker).y2 = PAL_PANEL_Y(195);
-    SPEEDO_QUAD(marker).x3 = 206 + thrustBottom;
+    SPEEDO_QUAD(marker).x3 = thrustLeft + thrustBottom;
     SPEEDO_QUAD(marker).y3 = PAL_PANEL_Y(195);
     SPEEDO_QUAD(marker).u0 = (u_short)speedoMarkerTex->u0;
     SPEEDO_QUAD(marker).v0 = (u_short)speedoMarkerTex->v0;
@@ -325,6 +329,7 @@ void fill_speedo(Speedo *speedo, ShipData *ships, ConfigData *game, int player)
     SPEEDO_QUAD(marker).v2 = (u_char)speedoMarkerTex->v2 + 1;
     SPEEDO_QUAD(marker).u3 = (u_char)speedoMarkerTex->u0 + thrustBottom;
     SPEEDO_QUAD(marker).v3 = (u_char)speedoMarkerTex->v3 + 1;
+    PortHudColourBars(&speedo->marker[CurrentScreen], &speedo->shield[CurrentScreen], OT[CurrentScreen], CurrentScreen);
     AddPrim(OT[CurrentScreen], &speedo->speed[CurrentScreen]);
     if (player != -1) AddPrim(OT[CurrentScreen], &speedo->shield[CurrentScreen]);
     else if (100 - shipDamage[ownShip] >= 41) AddPrim(OT[CurrentScreen], &speedo->shield[CurrentScreen]);
@@ -334,12 +339,26 @@ void fill_speedo(Speedo *speedo, ShipData *ships, ConfigData *game, int player)
 }
 
 
+/* Port: Saturn's 352-column text is fitted into the same 4:3 picture as
+   the PlayStation's 320 columns. Keep each string's alignment anchor. */
+static void AddFontPrim(POLY_FT4 *quad, int anchorX)
+{
+    if (PortSaturnDisc()) PortSaturnFontQuad(quad, anchorX);
+    AddPrim(OT[CurrentScreen], quad);
+}
+
+static int FontSpace(int size)
+{
+    return PortSaturnDisc() ? size / 2 : 8;
+}
+
 void AddTime(int time, int x, int y, int size, int colour, unsigned char flags)
 {
     if (PortPcData()) {
         PcAddTime(time, x, y, PC_SIZE(size), PC_COLOUR(colour), flags); /* Port: see PC_SIZE */
         return;
     }
+    int fontAnchorX = x;
     int          j;
     int          length = 0;
     int          digits[20];
@@ -398,7 +417,7 @@ void AddTime(int time, int x, int y, int size, int colour, unsigned char flags)
             poly->v3 = (u_char) glyph->vramY + size;
             poly->clut = clut;
             poly->tpage = GetTPage(0, 0, 576, 256);
-            AddPrim(OT[CurrentScreen], poly);
+            AddFontPrim(poly, fontAnchorX);
             x += width;
             quadIndex++;
         }
@@ -425,7 +444,7 @@ void AddTime(int time, int x, int y, int size, int colour, unsigned char flags)
         poly->v3 = (u_char) glyph->vramY + size;
         poly->clut = clut;
         poly->tpage = GetTPage(0, 0, 576, 256);
-        AddPrim(OT[CurrentScreen], poly);
+        AddFontPrim(poly, fontAnchorX);
         x += width;
         quadIndex++;
     }
@@ -460,7 +479,7 @@ void AddTime(int time, int x, int y, int size, int colour, unsigned char flags)
         poly->v3 = (u_char) glyph->vramY + size;
         poly->clut = clut;
         poly->tpage = GetTPage(0, 0, 576, 256);
-        AddPrim(OT[CurrentScreen], poly);
+        AddFontPrim(poly, fontAnchorX);
         x += width;
         quadIndex++;
     }
@@ -485,7 +504,7 @@ void AddTime(int time, int x, int y, int size, int colour, unsigned char flags)
     poly->v3 = (u_char) glyph->vramY + size;
     poly->clut = clut;
     poly->tpage = GetTPage(0, 0, 576, 256);
-    AddPrim(OT[CurrentScreen], poly);
+    AddFontPrim(poly, fontAnchorX);
     x += width;
     quadIndex++;
     font = fontGlyphs8;
@@ -514,7 +533,7 @@ void AddTime(int time, int x, int y, int size, int colour, unsigned char flags)
     poly->v3 = (u_char) glyph->vramY + size;
     poly->clut = clut;
     poly->tpage = GetTPage(0, 0, 576, 256);
-    AddPrim(OT[CurrentScreen], poly);
+    AddFontPrim(poly, fontAnchorX);
     x += width;
     quadIndex++;
 }
@@ -526,6 +545,7 @@ void AddText(unsigned char *textPointer, int x, int y, int size, int colour)
         PcAddText((const char *)textPointer, x, y, PC_TEXT_SIZE, PC_COLOUR(colour)); /* Port: see PC_SIZE */
         return;
     }
+    int fontAnchorX = x;
     unsigned char *text = textPointer;
     unsigned char  letter;
     Texture       *charTexture;
@@ -565,11 +585,11 @@ void AddText(unsigned char *textPointer, int x, int y, int size, int colour)
             quad->v3 = charSet[glyphIndex].vramY + size;
             quad->clut = clut;
             quad->tpage = GetTPage(0, 0, 576, 256);
-            AddPrim(OT[CurrentScreen], quad);
+            AddFontPrim(quad, fontAnchorX);
             quadIndex++;
             x += width;
         } else {
-            x += 8;
+            x += FontSpace(size);
         }
     }
 }
@@ -581,6 +601,7 @@ void AddNumber(int number, int x, int y, int size, int colour)
         PcAddNumber(number, x, y, PC_SIZE(size), PC_COLOUR(colour)); /* Port: see PC_SIZE */
         return;
     }
+    int fontAnchorX = x;
     int          digits[12];
     int          digitIndex, digitCount;
     int          glyphIndex;
@@ -627,7 +648,7 @@ void AddNumber(int number, int x, int y, int size, int colour)
         else clut = textureTable[hudTexIndexAlt]->cba;
         /* Port: stored through quadClutField, a symbol inside quadPool. */
         ((POLY_FT4 *)((char *)quads + quadOffset))->clut = clut;
-        AddPrim(OT[CurrentScreen], (POLY_FT4 *)((char *)quads + quadIndex * 40));
+        AddFontPrim((POLY_FT4 *)((char *)quads + quadIndex * 40), fontAnchorX);
         quadIndex++;
         x += width;
     }
@@ -640,6 +661,7 @@ void AddJustifyNumber(int number, int xInput, int y, int size, int colour)
         PcAddJustifyNumber(number, xInput, y, PC_SIZE(size), PC_COLOUR(colour)); /* Port: see PC_SIZE */
         return;
     }
+    int fontAnchorX = xInput;
     int          digits[12];
     int          zeroLocal = 0;
     int          digitIndex, digitCount;
@@ -693,7 +715,7 @@ void AddJustifyNumber(int number, int xInput, int y, int size, int colour)
         else clut = textureTable[hudTexIndexAlt]->cba;
         /* Port: stored through quadClutField, a symbol inside quadPool. */
         ((POLY_FT4 *)((char *)quads + quadOffset))->clut = clut;
-        AddPrim(OT[CurrentScreen], (POLY_FT4 *)((char *)quads + quadIndex * 40));
+        AddFontPrim((POLY_FT4 *)((char *)quads + quadIndex * 40), fontAnchorX);
         quadIndex++;
         x += width;
     }
@@ -803,6 +825,7 @@ void CentreText(unsigned char *text, int unusedX, int yInput, int sizeInput, int
         PcCentreText((const char *)text, unusedX, yInput, PC_TEXT_SIZE, PC_COLOUR(colour));
         return;
     }
+    int fontAnchorX = 160;
     short         textWidth = 0;
     int          y = yInput;
     int          size = sizeInput;
@@ -830,7 +853,7 @@ void CentreText(unsigned char *text, int unusedX, int yInput, int sizeInput, int
         if (letter != 32) {
             textWidth += charSet[glyphIndex].width;
         } else {
-            textWidth += 8;
+            textWidth += FontSpace(size);
         }
         scan++;
         letter = *scan;
@@ -863,11 +886,11 @@ void CentreText(unsigned char *text, int unusedX, int yInput, int sizeInput, int
             else clut = textureTable[hudTexIndexAlt]->cba;
             /* Port: stored through quadClutField, a symbol inside quadPool. */
             ((POLY_FT4 *)((char *)quads + quadOffset))->clut = clut;
-            AddPrim(OT[CurrentScreen], (POLY_FT4 *)((char *)quads + quadIndex * 40));
+            AddFontPrim((POLY_FT4 *)((char *)quads + quadIndex * 40), fontAnchorX);
             quadIndex++;
             x = width + x;
         } else {
-            x += 8;
+            x += FontSpace(size);
         }
     }
 }
@@ -879,6 +902,7 @@ void CentreText2(unsigned char *text, int x, int y, int size, int colour)
         PcCentreText2((const char *)text, x, y, PC_TEXT_SIZE, PC_COLOUR(colour)); /* Port: see PC_SIZE */
         return;
     }
+    int fontAnchorX = x;
     short         textWidth = 0;
     unsigned char *scan, letter;
     u_short       width;
@@ -903,7 +927,7 @@ void CentreText2(unsigned char *text, int x, int y, int size, int colour)
         if (letter != 32) {
             textWidth += charSet[glyphIndex].width;
         } else {
-            textWidth += 8;
+            textWidth += FontSpace(size);
         }
         scan++;
         letter = *scan;
@@ -936,11 +960,11 @@ void CentreText2(unsigned char *text, int x, int y, int size, int colour)
             else clut = textureTable[hudTexIndexAlt]->cba;
             /* Port: stored through quadClutField, a symbol inside quadPool. */
             ((POLY_FT4 *)((char *)quads + quadOffset))->clut = clut;
-            AddPrim(OT[CurrentScreen], (POLY_FT4 *)((char *)quads + quadIndex * 40));
+            AddFontPrim((POLY_FT4 *)((char *)quads + quadIndex * 40), fontAnchorX);
             quadIndex++;
             x = width + x;
         } else {
-            x += 8;
+            x += FontSpace(size);
         }
     }
 }

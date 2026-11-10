@@ -11,6 +11,15 @@ int main(void)
     role = LINK_MASTER;
     shared = MapShared(1);
     assert(shared);
+    assert(PortLinkDownsample() == -1);
+    PortLinkSetBand(16, 1280, 360, 3, DOWNSAMPLE_ADAPTIVE);
+    role = LINK_SLAVE;
+    assert(PortLinkDownsample() == 3 && PortLinkDownsampleStyle() == DOWNSAMPLE_ADAPTIVE);
+    role = LINK_MASTER;
+    PortLinkSetBand(16, 1280, 360, 0, DOWNSAMPLE_BOX);
+    role = LINK_SLAVE;
+    assert(PortLinkDownsample() == 0 && PortLinkDownsampleStyle() == DOWNSAMPLE_BOX);
+    role = LINK_MASTER;
     portSettings.render = (RenderSettings)RENDER_DEFAULTS;
     portSettings.render.selection = RENDER_N64;
     portSettings.render.ps1.dither = 0;

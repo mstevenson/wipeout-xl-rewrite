@@ -6,6 +6,7 @@
 
 #include "platform.h"
 #include "settings.h"
+#include "render/device.h"
 
 PortSettings portSettings = {.render = RENDER_DEFAULTS};
 static char path[1024];
@@ -28,6 +29,8 @@ static void Set(const char *key, const char *value)
     if (RenderSet(&portSettings.render, key, value)) return;
     if (!strcmp(key, "show_fps")) {
         portSettings.showFps = number != 0;
+    } else if (!strcmp(key, "graphics_backend")) {
+        portSettings.graphicsBackend = SDL_clamp(number, -1, RENDER_BACKEND_COUNT-1);
     } else if (!strcmp(key, "widescreen")) {
         portSettings.widescreen = number != 0;
     } else if (!strcmp(key, "check_updates")) {
@@ -62,6 +65,10 @@ static void Set(const char *key, const char *value)
         SDL_strlcpy(portSettings.saveSlot, value, sizeof(portSettings.saveSlot));
     } else if (!strcmp(key, "autosave")) {
         portSettings.noAutoSave = number == 0;
+    } else if (!strcmp(key, "downsample")) {
+        portSettings.downsample = SDL_clamp(number, 0, 16);
+    } else if (!strcmp(key, "downsample_style")) {
+        portSettings.downsampleStyle = SDL_clamp(number, DOWNSAMPLE_BOX, DOWNSAMPLE_ADAPTIVE);
     } else if (!strcmp(key, "hd_textures")) {
         portSettings.hdTextures = number != 0;
     } else if (!strcmp(key, "hd_pack")) {
@@ -97,6 +104,7 @@ void PortSettingsLoad(void)
     RenderDefaults(&portSettings.render, RENDER_AUTO);
     RenderInvalidate();
 
+    portSettings.graphicsBackend = -1; /* Choose the platform default unless a renderer was saved. */
     if (base) {
         SDL_snprintf(path, sizeof(path), "%swipeoutxl.ini", base);
         SDL_strlcpy(defaultSaveDir, base, sizeof(defaultSaveDir));
@@ -151,8 +159,14 @@ void PortSettingsLoad(void)
         for (int id = RENDER_PS1; id < RENDER_COUNT; id++)
             *RenderScaleSetting(&portSettings.render, (RendererId)id) = SDL_clamp(SDL_atoi(value), 0, 16);
     }
-    if ((value = SDL_getenv("WIPEOUT_RENDERER"))) portSettings.render.selection = RenderIdFromName(value);
+    if ((value = SDL_getenv("WIPEOUT_RENDER_PROFILE"))) portSettings.render.selection = RenderIdFromName(value);
     if ((value = SDL_getenv("WIPEOUT_MODERN_BLOOM"))) portSettings.render.modernBloomOverride = SDL_atoi(value) ? 1 : -1;
+    if ((value = SDL_getenv("WIPEOUT_DOWNSAMPLE"))) {
+        portSettings.downsample = SDL_clamp(SDL_atoi(value), 0, 16);
+    }
+    if ((value = SDL_getenv("WIPEOUT_DOWNSAMPLE_STYLE"))) {
+        portSettings.downsampleStyle = SDL_clamp(SDL_atoi(value), DOWNSAMPLE_BOX, DOWNSAMPLE_ADAPTIVE);
+    }
     if ((value = SDL_getenv("WIPEOUT_HD_PACK"))) {
         /* a pack's .zip or folder, drawn ("" not) */
         SDL_strlcpy(portSettings.hdPackPath, value, sizeof(portSettings.hdPackPath));
@@ -232,7 +246,7 @@ int PortSettingsSave(void)
             "# Wipeout XL settings (the ~ key opens the debug console that changes them)\n"
             "show_fps = %d\n"
             "widescreen = %d\nskip_intro = %d\nrecord_frames = %d\nrecord_replays = %d\nsave_dir = %s\ndisc = %s\noriginal = %s\n"
-            "hd_textures = %d\nhd_pack = %s\nwipeout64 = %s\n"
+            "downsample = %d\ndownsample_style = %d\nhd_textures = %d\nhd_pack = %s\nwipeout64 = %s\n"
             "custom_music = %d\nmusic_shuffle = %d\nmusic_folder = %s\nsave_slot = %s\nautosave = %d\n"
             "touch_controls = %d\ntouch_size = %d\ntouch_opacity = %d\nskip_logos = %d\nrecord_rate = %d\n"
             "video_standard = %d\nvibration = %d\nvibration_strength = %d\npause_unfocused = %d\n"
@@ -242,7 +256,7 @@ int PortSettingsSave(void)
             portSettings.recordFrames,
             portSettings.recordReplays,
             portSettings.saveDir, portSettings.discPath, portSettings.originalPath,
-            portSettings.hdTextures, portSettings.hdPackPath, portSettings.wipeout64Path, portSettings.customMusic,
+            portSettings.downsample, portSettings.downsampleStyle, portSettings.hdTextures, portSettings.hdPackPath, portSettings.wipeout64Path, portSettings.customMusic,
             portSettings.musicShuffle, portSettings.musicFolder, portSettings.saveSlot, !portSettings.noAutoSave,
             portSettings.touchControls, portSettings.touchSize ? portSettings.touchSize : 100,
             portSettings.touchOpacity ? portSettings.touchOpacity : 60, portSettings.skipLogos,
@@ -251,6 +265,7 @@ int PortSettingsSave(void)
             !portSettings.noFocusPause, portSettings.surround, portSettings.fullscreen, portSettings.digitalSteering,
             portSettings.negconPad, !portSettings.noUpdateCheck);
     RenderSave(file, &portSettings.render);
+    fprintf(file, "graphics_backend = %d\n", portSettings.graphicsBackend);
     fclose(file);
     return 1;
 }

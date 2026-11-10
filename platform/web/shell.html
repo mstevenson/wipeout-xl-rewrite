@@ -3,7 +3,8 @@
      comes from the page's own server when whoever hosts the page put it there, as wipeout-rewrite's page has its
      data: wipeoutxl-data.json names it (the build writes it: -DWIPEOUT_WEB_DISC), else disc/Wipeout XL (USA).cue,
      or the address says (?disc=); only when none is there does the page ask for the player's own files. The
-     page reads the tracks into the game's memory once (platform/psx/disc.c finds them there by name), and keeps
+     page maps data tracks in WASM and keeps raw audio tracks in JavaScript chunks (platform/psx/disc.c reads
+     their sectors by name), and keeps
      a downloaded disc in the browser's cache for the next visit; it keeps the settings and memory cards in the
      browser's storage (IndexedDB, under SDL's data folder /libsdl) and starts the game's main(). Gamepads come
      through the browser's Gamepad API (SDL's joystick driver for the web): press a button on one for the
@@ -12,16 +13,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Wipeout XL">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#000000">
 <title>Wipeout XL</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #ddd; overflow: hidden;
                font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  #canvas { display: block; outline: none;  /* SDL sizes it to the page (SDL_WINDOW_FILL_DOCUMENT) */
+  *, *::before, *::after { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  input, textarea, [contenteditable="true"] { -webkit-user-select: text; user-select: text; }
+  #canvas { display: block; outline: none; position: fixed; top: 0; left: 0;
+            width: 100vw; height: 100vh; height: 100dvh;
             touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
             /* (the touch controls: a finger on the game neither scrolls nor zooms the page) */
   #start { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
            background: radial-gradient(circle at 50% 35%, #1b2340, #000 70%); }
-  #panel { width: min(560px, 90vw); padding: 28px 32px; border: 1px solid #3a4670; border-radius: 10px;
+  #panel { box-sizing: border-box; width: min(560px, 90vw); padding: 28px 32px; border: 1px solid #3a4670; border-radius: 10px;
            background: rgba(10, 14, 30, 0.92); box-shadow: 0 10px 40px #000; }
   h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: 0.08em; color: #fff; }
   p { margin: 8px 0; }
@@ -36,6 +44,25 @@
   #bar { height: 100%; width: 0; background: #7f9bff; }
   #status { min-height: 1.45em; }
   #status.error, .error { color: #ff8f8f; }
+  #game-fullscreen { position: fixed; z-index: 3; top: max(6px, env(safe-area-inset-top));
+    right: max(6px, env(safe-area-inset-right)); box-sizing: border-box; width: 44px; height: 44px; padding: 11px;
+    border-radius: 50%; color: #fffa; background: #0003; border-color: #fff5; }
+  #game-fullscreen svg { display: block; width: 100%; height: 100%; }
+  #game-fullscreen:active { background: #fff4; }
+  #fullscreen-help { position: fixed; z-index: 4; inset: 0; background: #000b;
+    padding: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+             max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+    display: flex; align-items: center; justify-content: center; }
+  #fullscreen-help[hidden], #game-fullscreen[hidden] { display: none; }
+  #fullscreen-help > div { max-width: 380px; padding: 20px; background: #141a2b;
+    border: 1px solid #5a6aa8; border-radius: 10px; }
+  #fullscreen-help h2 { margin: 0 0 10px; font-size: 20px; }
+  #enable-audio { position: fixed; z-index: 3; top: max(6px, env(safe-area-inset-top));
+    left: 50%; transform: translateX(-50%); min-height: 36px; font-size: 12px;
+    background: #111e; }
+  #enable-audio[hidden], #play[hidden], #play-muted[hidden] { display: none; }
+  #audio-status { color: #ffbd7f; }
+  @media (hover: hover) and (pointer: fine) { #game-fullscreen { display: none; } }
 </style>
 </head>
 <body>
@@ -52,6 +79,9 @@
       </div>
     </div>
     <p id="status"></p>
+    <button id="play" type="button" hidden>Play with sound</button>
+    <button id="play-muted" type="button" hidden>Play without sound</button>
+    <p id="audio-status" role="status"></p>
     <div id="progress"><div id="bar"></div></div>
     <p class="muted" id="note">Settings and memory cards are kept in this browser. Keyboard or gamepad; ~ opens the
       debug console.</p>
@@ -141,6 +171,32 @@ function cueFiles(text) {
   return names;
 }
 
+// Audio-only raw BIN files can stay outside WebAssembly's contiguous heap.
+// iOS Safari can refuse a large WASM heap even when JS buffers still fit.
+function audioOnlyFiles(cue) {
+  var files = {}, current = null;
+  cue.split(/\r?\n/).forEach(function (line) {
+    var file = /^\s*FILE\s+"([^"]+)"/i.exec(line);
+    if (file) { current = file[1].split(/[\\/]/).pop(); if (!(current in files)) files[current] = true; }
+    var track = /^\s*TRACK\s+\d+\s+(\S+)/i.exec(line);
+    if (track && current && track[1].toUpperCase() !== 'AUDIO') files[current] = false;
+  });
+  return files;
+}
+var discChunkSize = 1 << 20;
+Module.discExternal = [null];
+function copyDiscBytes(file, offset, count, destination) {
+  if (offset < 0 || count < 0 || offset + count > file.size) return false;
+  if (file.stream) return file.stream.copy(offset, count, destination);
+  for (var copied = 0; copied < count;) {
+    var at = offset + copied, chunk = file.chunks[Math.floor(at / discChunkSize)];
+    var begin = at % discChunkSize, take = Math.min(count - copied, chunk.length - begin);
+    destination.set(chunk.subarray(begin, begin + take), copied);
+    copied += take;
+  }
+  return true;
+}
+
 // A track: its size, and its bytes in pieces (a File chosen or dropped, or a URL on the page's server)
 function fileTrack(file) {
   return { name: file.name, size: async function () { return file.size; },
@@ -184,33 +240,85 @@ async function start(cueName, cueText, trackOf) {
   if (missing.length) { say('Missing: ' + missing.join(', '), true); return; }
   started = true;
 
-  // the tracks into the game's memory, a piece at a time (the memory may grow, and move, meanwhile)
+  // Keep data in WASM and raw audio in page-owned chunks, a piece at a time.
+  // The WASM heap may grow and move while allocating the next data track.
   document.getElementById('progress').style.visibility = 'visible';
+  var allocated = [];
   try {
     var tracks = needed.map(trackOf), sizes = [], total = 0, done = 0;
-    for (var i = 0; i < tracks.length; i++) { sizes[i] = await tracks[i].size(); total += sizes[i]; }
+    var audio = audioOnlyFiles(cueText);
+    for (var i = 0; i < tracks.length; i++) {
+      sizes[i] = await tracks[i].size();
+      total += audio[tracks[i].name] && tracks[i].stream ? Math.min(65536, sizes[i]) : sizes[i];
+    }
     for (i = 0; i < tracks.length; i++) {
-      var data = Module._malloc(sizes[i]), at = 0;
-      if (!data) throw new Error('not enough memory for ' + tracks[i].name);
+      var external = !!audio[tracks[i].name];
+      var file = { size: sizes[i] }, at = 0;
+      allocated.push(file);
+      if (external && tracks[i].stream) {
+        file.stream = tracks[i].stream;
+        var header = await file.stream.header();
+        if (header[0] === 82 && header[1] === 73 && header[2] === 70 && header[3] === 70) {
+          // The native RIFF parser still requires a full WAV mapping.
+          file.stream.close(); delete file.stream;
+          total += file.size - header.length;
+        } else {
+          file.data = Module._malloc(header.length);
+          if (!file.data) throw new Error('not enough memory for track header');
+          Module.HEAPU8.set(header, file.data);
+          file.external = Module.discExternal.length; Module.discExternal.push(file);
+          Module.discFiles[tracks[i].name] = file;
+          done += header.length;
+          document.getElementById('bar').style.width = (100 * done / total).toFixed(1) + '%';
+          say('Preparing music...');
+          continue;
+        }
+      }
+      if (external) file.chunks = [];
+      else {
+        file.data = Module._malloc(sizes[i]);
+        if (!file.data) throw new Error('not enough memory for ' + tracks[i].name);
+      }
       for await (var piece of tracks[i].pieces()) {
         if (at + piece.length > sizes[i]) throw new Error(tracks[i].name + ' is longer than it said');
-        Module.HEAPU8.set(piece, data + at);
-        at += piece.length;
+        if (external) {
+          for (var used = 0; used < piece.length;) {
+            var chunkNumber = Math.floor(at / discChunkSize), begin = at % discChunkSize;
+            if (!file.chunks[chunkNumber])
+              file.chunks[chunkNumber] = new Uint8Array(Math.min(discChunkSize, file.size - chunkNumber * discChunkSize));
+            var take = Math.min(piece.length - used, file.chunks[chunkNumber].length - begin);
+            file.chunks[chunkNumber].set(piece.subarray(used, used + take), begin);
+            used += take; at += take;
+          }
+        } else { Module.HEAPU8.set(piece, file.data + at); at += piece.length; }
         done += piece.length;
         document.getElementById('bar').style.width = (100 * done / total).toFixed(1) + '%';
         say((tracks[i].url && !tracks[i].cached ? 'Downloading' : 'Reading') + ' the disc: ' +
             Math.round(done / 1048576) + ' of ' + Math.round(total / 1048576) + ' MB');
       }
-      Module.discFiles[tracks[i].name] = { data: data, size: at };
+      if (at !== file.size) throw new Error(tracks[i].name + ' is shorter than it said');
+      if (external) {
+        file.data = Module._malloc(Math.min(file.size, 65536));
+        if (!file.data) throw new Error('not enough memory for track header');
+        copyDiscBytes(file, 0, Math.min(file.size, 65536), Module.HEAPU8.subarray(file.data));
+        // Preserve WAV files disguised as BIN; their RIFF parser needs a full mapping.
+        if (Module.HEAPU8[file.data] === 82 && Module.HEAPU8[file.data + 1] === 73 &&
+            Module.HEAPU8[file.data + 2] === 70 && Module.HEAPU8[file.data + 3] === 70) {
+          Module._free(file.data); file.data = Module._malloc(file.size);
+          if (!file.data) throw new Error('not enough memory for WAV track');
+          copyDiscBytes(file, 0, file.size, Module.HEAPU8.subarray(file.data)); delete file.chunks;
+        } else { file.external = Module.discExternal.length; Module.discExternal.push(file); }
+      }
+      Module.discFiles[tracks[i].name] = file;
     }
-    // a downloaded disc kept for the next visit (from the game's memory, a track at a time; the cache may refuse)
-    var cache = await openDiscCache();
+    // Keep downloaded tracks for the next visit; the browser may refuse the cache write.
+    var cache = tracks.some(function (track) { return track.url && !track.cached; }) ? await openDiscCache() : null;
     for (i = 0; cache && i < tracks.length; i++) {
       if (!tracks[i].url || tracks[i].cached) continue;
       say('Keeping the disc in this browser for next time: ' + tracks[i].name);
       var file = Module.discFiles[tracks[i].name];
       try {
-        await cache.put(tracks[i].url, new Response(Module.HEAPU8.slice(file.data, file.data + file.size),
+        await cache.put(tracks[i].url, new Response(file.chunks ? new Blob(file.chunks) : Module.HEAPU8.slice(file.data, file.data + file.size),
                         { headers: { 'Content-Length': String(file.size) } }));
       } catch (e) {
         console.warn('the disc is not kept: ' + e);
@@ -218,6 +326,11 @@ async function start(cueName, cueText, trackOf) {
       }
     }
   } catch (e) {
+    allocated.forEach(function (file) {
+      if (file.data) Module._free(file.data);
+      if (file.stream) file.stream.close();
+    });
+    Module.discFiles = {}; Module.discExternal = [null];
     say('The disc could not be read: ' + e.message, true);
     started = false;
     return;
@@ -228,17 +341,22 @@ async function start(cueName, cueText, trackOf) {
   // settings and memory cards: SDL's data folder, kept in IndexedDB
   FS.mkdir('/libsdl');
   FS.mount(IDBFS, {}, '/libsdl');
-  FS.syncfs(true, function (error) {
-    if (error) console.warn('saved data: ' + error);
-    var save = function () { FS.syncfs(false, function (e) { if (e) console.warn('saving: ' + e); }); };
-    setInterval(save, 3000);
-    addEventListener('pagehide', save);
-    document.addEventListener('visibilitychange', function () { if (document.hidden) save(); });
-
+  say('Loading saved data...');
+  Module.gameSaves = Module.createGameSaves(FS, IDBFS, window);
+  var restored = await Module.gameSaves.restore();
+  if (!restored) {
+    console.warn('saved data: ' + Module.gameSaves.snapshot().error);
+    document.getElementById('note').textContent = 'Saved data is unavailable. Changes will not be saved this session.';
+  }
+  var launch = function () {
+    Module.gameSaves.watch();
     document.getElementById('start').remove();
     canvas.focus();
     Module.callMain(['--disc', '/disc/' + cueName]);
-  });
+  };
+  say('Ready to play.');
+  if (Module.gameAudio) Module.gameAudio.ready(launch, typeof ENV !== 'undefined' && 'WIPEOUT_MUTE' in ENV);
+  else launch();
 }
 
 // The player's files, chosen or dropped

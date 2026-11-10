@@ -450,7 +450,7 @@ static void PlatformSelection(void)
 static void EnvironmentOverrides(void)
 {
     SDL_Environment *env = SDL_GetEnvironment();
-    SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDERER", "n64", true);
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDER_PROFILE", "n64", true);
     LoadSettings("", "");
     assert(portSettings.render.modernForAllPlatforms && RenderCurrent()->id == RENDER_N64);
     LoadPlatformSettings("ps1_renderer = pc\nn64_renderer = saturn\n");
@@ -459,12 +459,12 @@ static void EnvironmentOverrides(void)
     assert(!RenderCommit() && RenderCurrent()->id == RENDER_N64);
     assert(PortSettingsSave());
 
-    SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDERER", "auto", true);
+    SDL_SetEnvironmentVariable(env, "WIPEOUT_RENDER_PROFILE", "auto", true);
     PortSettingsLoad();
     assert(RenderCurrent()->id == RENDER_SATURN);
     n64 = 0;
     assert(RenderCommit() && RenderCurrent()->id == RENDER_PC);
-    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDERER");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDER_PROFILE");
 
     for (int force = 0; force <= 1; force++) {
         SDL_SetEnvironmentVariable(env, "WIPEOUT_MODERN_BLOOM", force ? "1" : "0", true);
@@ -649,7 +649,7 @@ int main(void)
     ResourcePolicyIsolation();
     SDL_Environment *env = SDL_GetEnvironment();
     assert(mkdtemp(testDir));
-    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDERER");
+    SDL_UnsetEnvironmentVariable(env, "WIPEOUT_RENDER_PROFILE");
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FRAME_RATE");
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FAR_VIEW");
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_FADE");

@@ -21,6 +21,7 @@ void PortTagTrackLight(const void *packet, const uint32_t colours[4])
     assert(packet == linked);
     for (int i = 0; i < 4; i++) tagged[i] = colours[i] & 0xffffffu;
 }
+u_long *ClearOTagR(u_long *ot, int n) { (void)n; return ot; }
 void AddPrim(u_long *slot, void *poly) { (void)slot; linked = poly; linkedCount++; }
 void SetPolyFT4(POLY_FT4 *poly) { poly->tag = 9u << 24; poly->code = 0x2c; }
 void PortTagPrims(const void *first, const void *end, const char *kind, const char *name, int index)

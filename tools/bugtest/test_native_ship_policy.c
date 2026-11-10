@@ -4,6 +4,7 @@
 #include <stdio.h>
 static int renderer;
 int PortNativeRenderer(void) { return renderer; }
+uint32_t GteFrameNumber(void) { return 1; }
 int PortScreenMargin(void) { return 0; }
 
 ConfigData *gameData;
@@ -14,6 +15,7 @@ short numTrackSections=100, CurrentScreen;
 int ownShip, remoteShip=1, ghostShip=2, raceType, shipTargetIndex[15];
 static int hulls, shadowPackets;
 u_long *OT[2];
+u_long *ClearOTagR(u_long *ot, int n) { (void)n; return ot; }
 void AddPrim(u_long *ot, void *p) { (void)ot; (void)p; shadowPackets++; }
 int PlaneLineCollision(VECTOR p, VECTOR s, SVector n) { (void)p; (void)s; (void)n; return 0; }
 void GteBindPrecise(const void *p, uint32_t h) { (void)p; (void)h; }

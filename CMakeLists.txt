@@ -76,6 +76,17 @@ else()
     endif()
 endif()
 
+# Full-resolution rolling recording must keep JPEG compression off the render path.
+# Releases bundle the static SIMD codec; minimal builds retain the stb fallback.
+option(WIPEOUT_FAST_JPEG "Use libjpeg-turbo for recorder compression when available" ON)
+option(WIPEOUT_REQUIRE_FAST_JPEG "Fail if the recorder's fast JPEG codec is unavailable" OFF)
+if(WIPEOUT_FAST_JPEG AND NOT EMSCRIPTEN)
+    find_package(libjpeg-turbo CONFIG QUIET)
+endif()
+if(WIPEOUT_REQUIRE_FAST_JPEG AND NOT TARGET libjpeg-turbo::turbojpeg-static)
+    message(FATAL_ERROR "The release requires the static libjpeg-turbo library")
+endif()
+
 # ---- Platform: the PsyQ libraries and the program entry ----
 # platform/*.c: entry point, window, movies, traces.  platform/psx/: the libraries (gte, gpu, etc here;
 # the sound, disc, controller and memory card libraries are the psxio target of platform/psx/CMakeLists.txt).
@@ -93,24 +104,61 @@ if(APPLE)
 elseif(NOT WIN32 AND NOT ANDROID AND NOT EMSCRIPTEN)
     find_package(CURL REQUIRED)
 endif()
+# The native driver is shared by both game instances. All mutable device state
+# belongs to RenderDevice, so the second game's symbol rewriting excludes it.
+if(APPLE AND NOT IOS)
+    option(WIPEOUT_METALLIB "Compile macOS Metal shaders ahead of time (requires Xcode Metal tools)" OFF)
+    if(WIPEOUT_METALLIB)
+        find_program(XCRUN_EXECUTABLE xcrun REQUIRED)
+        set(METAL_LIBRARY ${CMAKE_BINARY_DIR}/generated/wipeout.metallib)
+        set(METAL_SHADER_HEADER ${CMAKE_BINARY_DIR}/generated/shaders_metallib.h)
+        set(METAL_MINIMUM "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+        if(NOT METAL_MINIMUM)
+            set(METAL_MINIMUM "11.0")
+        endif()
+        add_custom_command(OUTPUT ${METAL_LIBRARY} ${METAL_SHADER_HEADER}
+            COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated
+            COMMAND ${XCRUN_EXECUTABLE} -sdk macosx metal -std=macos-metal2.3 -fno-fast-math
+                -mmacosx-version-min=${METAL_MINIMUM} -c ${CMAKE_SOURCE_DIR}/platform/render/shaders_metal.metal
+                -o ${CMAKE_BINARY_DIR}/generated/wipeout.air
+            COMMAND ${XCRUN_EXECUTABLE} -sdk macosx metallib ${CMAKE_BINARY_DIR}/generated/wipeout.air -o ${METAL_LIBRARY}
+            COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/embed_metallib.py ${METAL_LIBRARY} ${METAL_SHADER_HEADER}
+            DEPENDS tools/embed_metallib.py platform/render/shaders_metal.metal VERBATIM)
+    else()
+        set(METAL_SHADER_HEADER ${CMAKE_BINARY_DIR}/generated/shaders_metal.h)
+        add_custom_command(OUTPUT ${METAL_SHADER_HEADER}
+            COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/embed_shader.py
+                ${CMAKE_SOURCE_DIR}/platform/render/shaders_metal.metal ${METAL_SHADER_HEADER}
+            DEPENDS tools/embed_shader.py platform/render/shaders_metal.metal VERBATIM)
+    endif()
+    add_library(render_metal STATIC platform/render/device_metal.m ${METAL_SHADER_HEADER})
+    target_include_directories(render_metal PRIVATE ${CMAKE_BINARY_DIR}/generated)
+    target_compile_options(render_metal PRIVATE -fobjc-arc)
+    if(WIPEOUT_METALLIB)
+        target_compile_definitions(render_metal PRIVATE PORT_PRECOMPILED_METAL)
+    endif()
+    target_link_libraries(render_metal PRIVATE SDL3::SDL3 "-framework Metal" "-framework QuartzCore" "-framework AppKit")
+    add_compile_definitions(PORT_HAVE_METAL)
+endif()
 set(PLATFORM_PSX_SOURCES
-    platform/psx/gte.c platform/psx/gte_tables.c
+    platform/psx/gte.c platform/psx/gte_tables.c platform/psx/gpu_renderer.c
+    platform/render/state.c platform/render/device_gl.c
     platform/psx/libetc.c platform/psx/libgpu.c platform/psx/libgte.c platform/psx/libgte_more.c
     platform/psx/framecap.c)
 list(TRANSFORM PLATFORM_PSX_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/)
-set(PLATFORM_RENDER_SOURCES platform/render/gl_backend.c platform/render/renderer.c
-    platform/render/ps1_renderer.c platform/render/modern_renderer.c platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c platform/render/saturn_native.c platform/render/n64_visibility.c platform/render/saturn_visibility.c
-    platform/render/gl_api.c platform/render/gl_program.c platform/render/gl_pipeline.c
-    platform/render/ps1_gl.c platform/render/modern_gl.c platform/render/pc_gl.c platform/render/n64_gl.c platform/render/saturn_gl.c)
+set(PLATFORM_RENDER_SOURCES platform/render/renderer.c platform/render/ps1_renderer.c
+    platform/render/pc_renderer.c platform/render/n64_renderer.c platform/render/saturn_renderer.c
+    platform/render/modern_renderer.c platform/render/modern_pass.c platform/render/saturn_native.c
+    platform/render/n64_visibility.c platform/render/saturn_visibility.c)
 list(TRANSFORM PLATFORM_RENDER_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/)
-# The debug console: Dear ImGui (platform/third_party/imgui, MIT) over SDL3 and OpenGL 3.
+# The debug console uses SDL3 input and the shared graphics device interface.
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/platform/third_party/imgui)
 set(IMGUI_SOURCES ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
-    ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
-set(DEBUG_UI_SOURCES ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp ${CMAKE_SOURCE_DIR}/platform/render/renderer_ui.cpp ${CMAKE_SOURCE_DIR}/platform/touch.cpp ${IMGUI_SOURCES})
+    ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp)
+set(DEBUG_UI_SOURCES ${CMAKE_SOURCE_DIR}/platform/render/imgui.cpp ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp ${CMAKE_SOURCE_DIR}/platform/render/renderer_ui.cpp ${CMAKE_SOURCE_DIR}/platform/touch.cpp ${IMGUI_SOURCES})
 # (the port's own: what the second player's game has a copy of, platform/second/)
-set(PLATFORM_OWN_SOURCES ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${PLATFORM_RENDER_SOURCES} ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp
-    ${CMAKE_SOURCE_DIR}/platform/touch.cpp ${CMAKE_SOURCE_DIR}/platform/render/renderer_ui.cpp)
+set(PLATFORM_OWN_SOURCES ${CMAKE_SOURCE_DIR}/platform/render/imgui.cpp ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${PLATFORM_RENDER_SOURCES} ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp ${CMAKE_SOURCE_DIR}/platform/render/renderer_ui.cpp
+    ${CMAKE_SOURCE_DIR}/platform/touch.cpp)
 list(SORT PLATFORM_OWN_SOURCES)
 set(PLATFORM_SOURCES ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${PLATFORM_RENDER_SOURCES} ${DEBUG_UI_SOURCES})
 # Disc images in .7z archives (platform/archive.c): the LZMA SDK's 7z decoder (platform/third_party/lzma, public
@@ -166,6 +214,23 @@ set(WIPEOUT_VERSION "" CACHE STRING "The release's version, shown in the debug c
 if(WIPEOUT_VERSION)
     set(PORT_VERSION "${WIPEOUT_VERSION}")
 else()
+    # Recompute the version after commits, branch switches or newly fetched tags.
+    # A normal build otherwise keeps the version from the last configure.
+    execute_process(COMMAND git symbolic-ref -q HEAD WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                    OUTPUT_VARIABLE version_branch OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    foreach(version_ref HEAD packed-refs refs/tags ${version_branch})
+        execute_process(COMMAND git rev-parse --git-path ${version_ref} WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                        OUTPUT_VARIABLE version_path OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(version_path)
+            get_filename_component(version_path "${version_path}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+            if(NOT EXISTS "${version_path}")
+                get_filename_component(version_path "${version_path}" DIRECTORY)
+            endif()
+            if(EXISTS "${version_path}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${version_path}")
+            endif()
+        endif()
+    endforeach()
     execute_process(COMMAND git describe --tags --always --dirty WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
                     OUTPUT_VARIABLE PORT_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 endif()
@@ -184,9 +249,16 @@ function(port_platform_target name)
         target_link_libraries(${name} PRIVATE gamedata)
     endif()
     target_link_libraries(${name} PRIVATE SDL3::SDL3)
+    if(WIPEOUT_FAST_JPEG AND TARGET libjpeg-turbo::turbojpeg-static)
+        target_link_libraries(${name} PRIVATE libjpeg-turbo::turbojpeg-static)
+        target_compile_definitions(${name} PRIVATE PORT_HAVE_TURBOJPEG)
+    endif()
     if(TARGET port_archive)
         target_link_libraries(${name} PRIVATE port_archive)
         target_compile_definitions(${name} PRIVATE PORT_HAVE_LIBARCHIVE)
+    endif()
+    if(APPLE AND NOT IOS)
+        target_link_libraries(${name} PRIVATE render_metal)
     endif()
     if(APPLE)
         target_link_libraries(${name} PRIVATE "-framework Foundation")
@@ -269,9 +341,10 @@ if(APPLE AND NOT IOS)
     set(MAC_APP "${CMAKE_BINARY_DIR}/Wipeout XL.app")
     add_custom_command(OUTPUT "${MAC_APP}/Contents/Info.plist"
         COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/macos_app.py $<TARGET_FILE:wipeoutxl> "${MAC_APP}"
-                ${CMAKE_SOURCE_DIR}/platform/macos/Info.plist ${CMAKE_SOURCE_DIR}/platform/macos/wipeoutxl.icns
+                ${CMAKE_SOURCE_DIR}/platform/macos/Info.plist ${CMAKE_SOURCE_DIR}/platform/macos/wipeoutxl.icns ${METAL_LIBRARY}
         DEPENDS wipeoutxl ${CMAKE_SOURCE_DIR}/tools/macos_app.py ${CMAKE_SOURCE_DIR}/platform/macos/Info.plist
-                ${CMAKE_SOURCE_DIR}/platform/macos/wipeoutxl.icns
+                ${CMAKE_SOURCE_DIR}/platform/macos/wipeoutxl.icns ${METAL_LIBRARY}
+                ${CMAKE_SOURCE_DIR}/docs/licenses/libjpeg-turbo.txt
         COMMENT "Wipeout XL.app"
         VERBATIM)
     add_custom_target(macos_app ALL DEPENDS "${MAC_APP}/Contents/Info.plist")
@@ -303,15 +376,38 @@ endif()
 # (up to the 4 GB WebAssembly allows) and keeps the settings and memory cards in the browser's storage.
 if(EMSCRIPTEN)
     set_target_properties(wipeoutxl PROPERTIES SUFFIX ".html")
+    # Let Binaryen inline small hot helpers within the bound below instead of
+    # inheriting LLVM's large single-caller merges before Asyncify runs.
+    foreach(web_target wipeoutxl game psxio)
+        target_compile_options(${web_target} PRIVATE -fno-inline-functions)
+    endforeach()
     set(WEB_SHELL ${CMAKE_SOURCE_DIR}/platform/web/shell.html)
-    set_property(TARGET wipeoutxl APPEND PROPERTY LINK_DEPENDS ${WEB_SHELL})
+    set(WEB_VIEWPORT ${CMAKE_SOURCE_DIR}/platform/web/viewport.js)
+    set(WEB_FULLSCREEN ${CMAKE_SOURCE_DIR}/platform/web/fullscreen.js)
+    set(WEB_AUDIO ${CMAKE_SOURCE_DIR}/platform/web/audio.js)
+    set(WEB_AUDIO_OUTPUT ${CMAKE_SOURCE_DIR}/platform/web/audio-output.js)
+    set(WEB_PRESENTATION ${CMAKE_SOURCE_DIR}/platform/web/presentation.js)
+    set(WEB_SAVES ${CMAKE_SOURCE_DIR}/platform/web/saves.js)
+    set_property(TARGET wipeoutxl APPEND PROPERTY LINK_DEPENDS ${WEB_SHELL} ${WEB_VIEWPORT} ${WEB_FULLSCREEN} ${WEB_AUDIO} ${WEB_AUDIO_OUTPUT} ${WEB_PRESENTATION} ${WEB_SAVES})
     target_link_options(wipeoutxl PRIVATE
+        --emit-symbol-map
         --shell-file ${WEB_SHELL}
+        "SHELL:--pre-js '${WEB_VIEWPORT}'"
+        "SHELL:--pre-js '${WEB_FULLSCREEN}'"
+        "SHELL:--pre-js '${WEB_AUDIO}'"
+        "SHELL:--pre-js '${WEB_AUDIO_OUTPUT}'"
+        "SHELL:--pre-js '${WEB_PRESENTATION}'"
+        "SHELL:--pre-js '${WEB_SAVES}'"
         -sENVIRONMENT=web
         -sASYNCIFY -sASYNCIFY_STACK_SIZE=1048576
+        # Binaryen otherwise merges single-caller functions into very large
+        # Asyncify bodies. Older WebKit register allocators exhaust process
+        # memory while compiling them. Keep small-function optimization while
+        # bounding those merges; suspension coverage remains conservative.
+        "-sBINARYEN_EXTRA_PASSES=--inline-max-combined-binary-size=8192"
         -sSTACK_SIZE=8388608
-        -sINITIAL_MEMORY=268435456 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4294967296
-        -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2 -sGL_ENABLE_GET_PROC_ADDRESS=1
+        -sINITIAL_MEMORY=167772160 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4294967296
+        -sMIN_WEBGL_VERSION=2 -sMAX_WEBGL_VERSION=2
         -sINVOKE_RUN=0 -sEXIT_RUNTIME=0 -sFORCE_FILESYSTEM=1 -lidbfs.js
         "-sEXPORTED_FUNCTIONS=_main,_malloc,_free"
         "-sEXPORTED_RUNTIME_METHODS=callMain,FS,IDBFS,HEAPU8")

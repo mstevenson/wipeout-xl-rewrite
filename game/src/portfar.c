@@ -44,7 +44,8 @@ extern short      loTileCount, medTileCount, hiTileCount;
 
 static u_long   farTable[2][FAR_BUCKETS];
 static char     arena[2][ARENA_BYTES];
-static int      arenaUsed;
+static int      arenaUsed[2];
+static uint32_t arenaFrame[2];
 static char     nearArena[2][NEAR_BYTES];
 static int      nearUsed[2];
 static uint32_t nearFrame[2];
@@ -298,10 +299,26 @@ void PortFarProjectAny(double cx, double cy, double cz, PortFarVertex *out)
     GteRecordView(out->handle, cx, cy, cz);
 }
 
+/* The checkpoint boards can use the far renderer before PortFarDraw. Reset
+   once per game frame, before its first allocation or bucket insertion, so the
+   main pass cannot overwrite packets already linked by those early drawings. */
+static void BeginFarFrame(void)
+{
+    uint32_t now = GteFrameNumber();
+    int screen = CurrentScreen & 1;
+
+    if (arenaFrame[screen] != now) {
+        arenaFrame[screen] = now;
+        arenaUsed[screen] = 0;
+        ClearOTagR(farTable[screen], FAR_BUCKETS);
+    }
+}
+
 u_long *PortFarSlot(int entry, double depth)
 {
     int bucket;
 
+    BeginFarFrame();
     if (entry >= 0 && entry < FAR_ENTRY) {
         return OT[CurrentScreen] + entry;
     }
@@ -316,18 +333,18 @@ char *PortFarAlloc(int bytes)
 {
     char *p;
 
-    if (arenaUsed + bytes > ARENA_BYTES) {
+    BeginFarFrame();
+    if (arenaUsed[CurrentScreen] + bytes > ARENA_BYTES) {
         return NULL;
     }
-    p = arena[CurrentScreen] + arenaUsed;
-    arenaUsed += bytes;
+    p = arena[CurrentScreen] + arenaUsed[CurrentScreen];
+    arenaUsed[CurrentScreen] += bytes;
     return p;
 }
 
-/* Apart from the far view's arena: the game draws before PortFarDraw, which starts that afresh. It starts
-   afresh with the game's next frame (GteFrameNumber), not with PortFarDraw: the game goes on drawing objects
-   after PortFarDraw (explosions, rings, birds), and starting over there took packets already linked into the
-   frame's table for new ones, which could link the table into a loop that never ends. */
+/* Near packets have their own storage, with the same frame lifetime as the far
+   arena. Objects can be drawn both before and after PortFarDraw, so that pass
+   must not make either arena's linked packets available for reuse. */
 char *PortNearAlloc(int bytes)
 {
     int      screen = CurrentScreen & 1;
@@ -351,7 +368,7 @@ char *PortNearAlloc(int bytes)
 
 void PortFarRelease(char *end)
 {
-    arenaUsed = (int)(end - arena[CurrentScreen]);
+    arenaUsed[CurrentScreen] = (int)(end - arena[CurrentScreen]);
 }
 
 /* ---- the pass ---- */
@@ -564,8 +581,8 @@ int PortDrawTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView)
     }
 
     LinkArenas();
-    ClearOTagR(farTable[CurrentScreen], FAR_BUCKETS);
-    arenaUsed = 0;
+    BeginFarFrame();
+    char *roadStart = arena[CurrentScreen] + arenaUsed[CurrentScreen];
     farShips = 0;
     if (faceMarks) memset(faceMarks, 0, (size_t)faceMarkCount * sizeof(*faceMarks));
     PortView view;
@@ -588,7 +605,7 @@ int PortDrawTrack(TrackCamera *camera, AutoMeshData *autoMesh, int allView)
         }
         PortTrackFar(section, &view);
     }
-    PortTrackPackets(arena[CurrentScreen], arena[CurrentScreen] + arenaUsed);
+    PortTrackPackets(roadStart, arena[CurrentScreen] + arenaUsed[CurrentScreen]);
     AddPrims(OT[CurrentScreen] + FAR_ENTRY, farTable[CurrentScreen] + FAR_BUCKETS - 1, farTable[CurrentScreen]);
     /* Port: Full appends its extended road and scenery to this same table. */
     if (raisedFull) fullRoadDetail = trackDetail;
@@ -755,7 +772,7 @@ static void DrawFarTrack(TrackCamera *camera)
     int i, k;
 
     CameraView(camera, &view);
-    start = arena[CurrentScreen] + arenaUsed; /* (the track's packets, for the shadows: libgpu.c) */
+    start = arena[CurrentScreen] + arenaUsed[CurrentScreen]; /* (the track's packets, for the shadows: libgpu.c) */
     for (i = 0; i < track->sectionCount; i++) {
         if (fullRoadDetail && roadDetails[i]) continue;
         TrackSection *section = track->sections + i;
@@ -770,7 +787,7 @@ static void DrawFarTrack(TrackCamera *camera)
             else PortTrackFar(section, &view);
         }
     }
-    PortTrackPackets(start, arena[CurrentScreen] + arenaUsed);
+    PortTrackPackets(start, arena[CurrentScreen] + arenaUsed[CurrentScreen]);
 }
 
 static void DrawFarScenery(void)
@@ -1182,10 +1199,7 @@ void PortFarDraw(TrackCamera *camera, ShipData *ships, Object **shipShapes)
         frame++;
         return;
     }
-    if (!fullRoadDetail) {
-        ClearOTagR(farTable[CurrentScreen], FAR_BUCKETS);
-        arenaUsed = 0;
-    }
+    BeginFarFrame();
     farShips = 0;
     DrawFarTrack(camera);
     DrawFarScenery();

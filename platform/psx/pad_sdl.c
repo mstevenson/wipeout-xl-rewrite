@@ -809,6 +809,9 @@ void PsxPadSdlShutdown(void)
     int port;
     bool opened = false;
 
+    if (PortLinkRole() == LINK_SLAVE) {
+        return; /* Its input belongs to the first game, as in PsxPadSdlInit. */
+    }
     for (port = 0; port < GAMEPADS; port++) {
         if (gamepads[port]) {
             SDL_CloseGamepad(gamepads[port]);
@@ -1126,6 +1129,16 @@ static void rumble_tick(void)
                 break;
             }
         }
+    }
+}
+
+void PsxPadStopRumble(void)
+{
+    for (int player = 0; player < 2; player++) {
+        Rumble *r = &rumbles[player];
+        rumble_device(r->port, 0, 0, 0);
+        memset(r, 0, sizeof(*r));
+        r->port = -1;
     }
 }
 

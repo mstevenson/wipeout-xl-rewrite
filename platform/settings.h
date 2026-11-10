@@ -1,7 +1,7 @@
 /* The player's settings (settings.c): a small INI file in the user's data folder, changed from the
    debug console (debug_ui.cpp, the ~ key). Environment variables still override them for a
-   run (WIPEOUT_FAR_VIEW, WIPEOUT_FAR_FLARES, WIPEOUT_FADE, WIPEOUT_WIDESCREEN, WIPEOUT_FRAME_RATE, WIPEOUT_SAVE_DIR, WIPEOUT_RENDER_SCALE,
-   WIPEOUT_HD_PACK, WIPEOUT_RENDERER, WIPEOUT_MUSIC, WIPEOUT_TOUCH, WIPEOUT_SURROUND); the tests' hidden runs ignore the file. */
+   run (WIPEOUT_FAR_VIEW, WIPEOUT_FAR_FLARES, WIPEOUT_FADE, WIPEOUT_WIDESCREEN, WIPEOUT_FRAME_RATE, WIPEOUT_SAVE_DIR, WIPEOUT_RENDER_SCALE, WIPEOUT_DOWNSAMPLE, WIPEOUT_DOWNSAMPLE_STYLE,
+   WIPEOUT_HD_PACK, WIPEOUT_RENDERER, WIPEOUT_RENDER_PROFILE, WIPEOUT_MUSIC, WIPEOUT_TOUCH, WIPEOUT_SURROUND); the tests' hidden runs ignore the file. */
 #ifndef PORT_SETTINGS_H
 #define PORT_SETTINGS_H
 #include "render/renderer.h"
@@ -33,6 +33,8 @@ typedef struct PortSettings {
     int rumbleStrength;   /* ... how hard they shake, in percent (0: 100) */
     int negconPad;        /* which pad is in the first port: 0 whatever its controls look like, 1 a digital
                              pad, 2 a neGcon (psx/pad.h's PsxPadSetType) */
+    int downsample;       /* target pixels per console pixel; 0: off, 1: the profile's native size */
+    int downsampleStyle;  /* DOWNSAMPLE_BOX or DOWNSAMPLE_ADAPTIVE */
     int hdTextures;       /* the HD texture pack is drawn (hdtex.c) */
     char hdPackPath[1024]; /* ... the player's pack: its .zip or folder */
     int touchControls;    /* the touch controls (touch.h): TOUCH_AUTO, TOUCH_ON or TOUCH_OFF */
@@ -47,7 +49,11 @@ typedef struct PortSettings {
     int fullscreen;       /* the window was full screen when last left: the next start is too (video.c) */
     int noUpdateCheck;    /* 0: check GitHub once at launch, 1: stay offline */
     RenderSettings render; /* independent profiles; committed at game-frame boundaries */
+    int graphicsBackend; /* RenderBackend, or -1 for the platform default */
 } PortSettings;
+
+/* PortSettings.downsampleStyle: the target scale is in downsample; 0 there disables either style. */
+enum { DOWNSAMPLE_BOX, DOWNSAMPLE_ADAPTIVE };
 
 /* PortSettings.surround */
 enum {
@@ -70,6 +76,17 @@ extern PortSettings portSettings;
 
 int PortFrameRate(void); /* effective FRAME_RATE_* for the committed renderer */
 int PortFrameCap(int pal); /* effective timed presentation cap, or 0 if none */
+/* Equal Box footprints keep the native 2D pixel grid aligned. Resolution scales
+   count pixels along each axis: 2x to 1x averages four pixels, 4x to 1x sixteen. */
+static inline int PortDownsampleTarget(int rendering, int requested, int style)
+{
+    int target = requested < rendering ? requested : rendering;
+    if (target <= 0) return 0;
+    if (style == DOWNSAMPLE_BOX)
+        while (rendering % target) target--;
+    return target;
+}
+
 void PortSettingsLoad(void);
 int PortSettingsSave(void);
 const char *PortSettingsPath(void);  /* the file */

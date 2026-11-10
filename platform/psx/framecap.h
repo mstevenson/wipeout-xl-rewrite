@@ -57,7 +57,7 @@ typedef struct FrameCapFrame {
     int vram;             /* its video-memory snapshot (FrameCapVram) */
     FrameCapPrim *prims;
     int count, capacity;
-    uint8_t *jpeg;        /* the picture shown, at the framebuffer's scale, compressed (FrameCapPicture) */
+    uint8_t *jpeg;        /* resident compressed data, or NULL when backed by a saved picture */
     size_t jpegSize;
     unsigned pictureToken; /* (its compression on the way: framecap.c) */
     int pictureW, pictureH;
@@ -67,6 +67,7 @@ typedef struct FrameCapFrame {
 } FrameCapFrame;
 
 /* Recording (libgpu). */
+void FrameCapDisplayEnabled(int enabled); /* hidden GPU draws are not presented frames */
 void FrameCapTable(int offsetX, int offsetY, int areaX, int areaY, int areaW, int areaH);
 FrameCapPrim *FrameCapAdd(void); /* the next primitive's record (NULL when not recording); fill it in */
 void FrameCapVramChanged(void);
@@ -97,11 +98,14 @@ void FrameCapSave(void);
 
 /* The recording, oldest first. */
 int FrameCapFrameCount(void);
+int FrameCapPictureSkipped(int index); /* encoder overload; inspection records remain available */
 const FrameCapFrame *FrameCapFrameAt(int index);
+/* Materialized view, valid until the next FrameCapVram call or recorder clear. */
 const uint16_t *FrameCapVram(int snapshot);
 /* The picture frame `index` showed: RGB, top row first, *w x *h (the frame's pictureW x pictureH), or NULL (not
    shown, or still being compressed). Valid until the next call. */
 const uint8_t *FrameCapPicture(int index, int *w, int *h);
+int FrameCapPictureReady(int index);
 
 /* A primitive's triangle that covers a pixel, and what it puts there. */
 typedef struct FrameCapHit {

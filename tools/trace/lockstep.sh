@@ -7,7 +7,7 @@
 # pad script, scripted writes, loading-screen lengths and scanline-counter reads, and writes its trace to OUTPUT_DIR
 # (default /tmp/wipeoutxl-lockstep/NAME). Environment: WIPEOUT_BIN (the
 # executable, default build/mac/wipeoutxl, build/linux/ on Linux), WIPEOUT_XL_DISC (the PS1 disc .cue),
-# LOCKSTEP_FRAMES (frames to compare), WIPEOUT_RENDERER (defaults to ps1).
+# LOCKSTEP_FRAMES (frames to compare), WIPEOUT_RENDER_PROFILE (defaults to ps1).
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -32,7 +32,7 @@ mkdir -p "$out/save"
 autopilot=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(s.get("autopilot_until", "all") if s.get("autopilot", True) else "")' "$recording/scenario.json")
 
 WIPEOUT_HIDDEN=1 WIPEOUT_MUTE=1 WIPEOUT_FIXED_STEP=1 WIPEOUT_CD_SPEED=1 \
-WIPEOUT_RENDERER="${WIPEOUT_RENDERER:-ps1}" \
+WIPEOUT_RENDER_PROFILE="${WIPEOUT_RENDER_PROFILE:-ps1}" \
 WIPEOUT_AUTOPILOT=$autopilot \
 WIPEOUT_SAVE_DIR="$out/save/" \
 WIPEOUT_FRAMES="$fields" \

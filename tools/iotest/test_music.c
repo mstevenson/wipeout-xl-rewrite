@@ -113,7 +113,7 @@ static int16_t through_spu(int16_t cd, int cdVolume, int master)
 
 int main(void)
 {
-    char cueDir[1024];
+    const char *cue = test_disc_path();
     uint8_t ref[2352];
     int i;
 
@@ -121,8 +121,6 @@ int main(void)
         printf("test_music: disc not found, skipped\n");
         return 0;
     }
-    snprintf(cueDir, sizeof(cueDir), "%s", test_disc_path());
-    *strrchr(cueDir, '/') = 0;
     SpuInit();
     set_volumes();
     CHECK_EQ_INT(InitCD(cdTrackLocs), 12);
@@ -156,18 +154,16 @@ int main(void)
             for (k = 0; k < 4000; k++) {
                 int32_t lba = startPos + (int32_t)((startPhase + (unsigned)k) / 588);
                 unsigned phase = (startPhase + (unsigned)k) % 588;
-                char path[1100];
-                FILE *f;
                 int16_t l, r;
                 int track = lba < 63059 ? 2 : 3;
                 int32_t base = lba < 63059 ? 36584 : 63059;
 
                 if (phase == 0 || k == 0) {
-                    snprintf(path, sizeof(path), "%s/Wipeout XL (USA) (Track %02d).bin", cueDir, track);
-                    f = fopen(path, "rb");
-                    fseek(f, (long)(lba - base) * 2352, SEEK_SET);
-                    CHECK_EQ_INT((long)fread(ref, 1, 2352, f), 2352);
-                    fclose(f);
+                    if (!test_cdda_reference(cue, track, lba - base, ref)) {
+                        fprintf(stderr, "test_music: could not read the reference audio for track %d\n", track);
+                        test_io_stop();
+                        return 1;
+                    }
                 }
                 l = (int16_t)(ref[phase * 4] | ref[phase * 4 + 1] << 8);
                 r = (int16_t)(ref[phase * 4 + 2] | ref[phase * 4 + 3] << 8);

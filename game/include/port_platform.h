@@ -19,6 +19,7 @@ extern unsigned char PsxScratchpad[1024];
    again (an ordering table drawn there): for a wipe of video memory between two pictures that the player
    is not meant to see. */
 void PsxHoldPicture(void);
+void PsxStartupDisplay(int enabled); /* keep resident loaders hidden until both title buffers are ready */
 
 
 /* Frame interpolation (platform/psx/libgpu.c): the ordering tables Swap will draw when its fields have passed (the
@@ -64,6 +65,7 @@ void PortSetShieldFlash(int ship, int red, int green); /* shield tint at draw ti
 void PortWallSparkLight(const ShipData *ship, const VECTOR *pos, const Face *wall);
 void PortTagSparkStreak(const LINE_G2 *line);
 int PortLogoFields(int fields); /* how long a start-up logo is shown: the console's, or none (platform/main.c) */
+int PortStartupLoading(void); /* show startup loading messages unless both sequences are skipped */
 /* Widescreen (the settings): how far the picture reaches beyond each side of the console's 320 columns, in
    console pixels; 0 for the console's 4:3. A race's scene is shown wide (the game says so every frame it
    draws one, PortWideScene); a menu is too, its backdrop enlarged to fill the sides (PortWideBackdrop, each
@@ -100,6 +102,8 @@ void PortShipPackets(int ship, const void *start, const void *end, const CVECTOR
 void PortHudCentred(const void *start, const void *end);
 /* ... and all of this frame's HUD (a screen of text over the race, the results: its scene is shown wide). */
 void PortHudInPlace(void);
+/* Keep coloured thrust/energy texels readable while leaving black texels transparent. */
+void PortHudColourBars(const void *thrust, const void *energy, const void *table, int screen);
 /* ShakeScreen's jolt (a menu landing, a hit in a race): the display moved x units right (of 1/256 of the screen's
    width) and y lines down from where it rests. The console moves the picture on the TV (DISPENV.screen), which the
    port has no TV for; the window's picture moves as much from the next PutDispEnv on. */
@@ -161,6 +165,10 @@ int PortRegionFileInfo(const char *pathname, int *loc, int *size);
 int PortRegionRead(int loc, int sectors, void *buffer);
 /* ... and with the Sega Saturn's disc, everything the game reads, made from the Saturn's (platform/saturn.c). */
 const unsigned short *PortSaturnNativeSceneObjects(int trackNumber, int section, int *count);
+int PortSaturnDisc(void);
+int PortSaturnLightFrame(unsigned page, unsigned clut, int u, int v, int frame);
+/* Fit a font quad from 352 columns to 320 about its alignment anchor. */
+void PortSaturnFontQuad(void *quad, int anchorX);
 int PortSaturnFileInfo(const char *pathname, int *loc, int *size);
 int PortSaturnRead(int loc, int sectors, void *buffer);
 /* ... and with the PC CD-ROM version's files (platform/pc.c): whether they are in use, the files the game reads. */

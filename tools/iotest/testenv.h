@@ -8,6 +8,8 @@
 /* The .cue of the disc image (WIPEOUT_XL_DISC, else ../wipeout-xl next to the repository), or
    NULL if there is none; tests that need the disc skip themselves. */
 const char *test_disc_path(void);
+/* Read an audio sector directly from the raw BINARY file named by the cue. */
+int test_cdda_reference(const char *cue, int track, int sectorInTrack, uint8_t out[2352]);
 /* The extracted file tree of the same disc (WIPEOUT_XL_ROOT), or NULL. */
 const char *test_root_dir(void);
 /* Starts PsxIo on the disc with a fresh temporary save directory. */

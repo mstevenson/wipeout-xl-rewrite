@@ -1,7 +1,10 @@
-/* A slow split-screen presentation must not make the race clock run at half speed. */
+/* Slow presentations must not slow the single-player or split-screen race clock. */
 #define SDL_GetTicksNS TestTicksNS
 #define SDL_DelayPrecise TestDelayPrecise
-#include "../../platform/psx/libetc.c"
+#ifndef TIMING_SOURCE
+#define TIMING_SOURCE "../../platform/psx/libetc.c"
+#endif
+#include TIMING_SOURCE
 #include <assert.h>
 
 PortConfig portConfig;
@@ -16,6 +19,7 @@ static uint64_t now = 1000000000ull;
 static uint64_t presentationCost = 40000000ull;
 static int presentations, servicedFields, pumpedEvents, jitter;
 static uint64_t simulationCost;
+static int stallInterpolation;
 static int linkRole = LINK_MASTER, split = 1, interpolate, swapInterval;
 uint64_t TestTicksNS(void) { return now; }
 void TestDelayPrecise(uint64_t delay) { now += delay; }
@@ -29,7 +33,14 @@ void PortSwapInterval(int vsync) { swapInterval = vsync; }
 int PsxInterpolationTest(void) { return 0; }
 int PsxCanInterpolate(void) { return interpolate; }
 int PsxInterpolationOn(void) { return interpolate; }
-void PsxDrawInterpolated(void) { PsxShowDisplay(); }
+void PsxDrawInterpolated(void)
+{
+    if (stallInterpolation && presentations >= 100) {
+        now += 500000000ull;
+        stallInterpolation = 0;
+    }
+    PsxShowDisplay();
+}
 void PsxDrawInterpolatedTest(int picture, int total) {}
 int FrameCapFrozen(void) { return 0; }
 void FrameCapSave(void) {}
@@ -153,12 +164,45 @@ int main(void)
     elapsed = Run(50);
     assert(elapsed > 1.9 && elapsed < 2.15);
     portPal = 0;
-    split = 0;
-    Run(60); assert(presentations == 120); /* single-player presentation is unchanged */
+    split = 0; linkRole = LINK_NONE;
+    elapsed = Run(60); assert(elapsed > 1.9 && elapsed < 2.15);
+    assert(presentations > 30 && presentations < 60);
+    portPal = 1;
+    elapsed = Run(50); assert(elapsed > 1.9 && elapsed < 2.15);
+    portPal = 0;
+    presentationCost = 2000000ull;
+    Run(60); assert(presentations == 120); /* inexpensive pictures still show every field */
     split = 1; linkRole = LINK_SLAVE;
     Run(60); assert(presentations == 120); /* the master alone paces the split window */
     linkRole = LINK_MASTER; portConfig.fixedStep = 1;
     Run(60); assert(presentations == 120); /* deterministic captures never omit fields */
-    puts("split-screen NTSC/PAL race clocks keep their rate under presentation load: OK");
+    portConfig.fixedStep = 0; linkRole = LINK_NONE; split = 0; interpolate = 1;
+    portSettings.frameRateOverride = FRAME_RATE_UNCAPPED + 1;
+    const int costs[] = {8, 12, 20, 40};
+    for (int i = 0; i < 4; i++) {
+        int cost = costs[i];
+        presentationCost = (uint64_t)cost * 1000000ull;
+        elapsed = Run(300);
+        printf("uncapped %dms pictures: %.1f displayed FPS, %.2f race updates/sec\n",
+               cost, presentations / elapsed, 300 / elapsed);
+        assert(presentations / elapsed > 0.95 * 1000 / cost);
+        assert(elapsed > 9.9 && elapsed < 10.3);
+    }
+    presentationCost = 1000000ull;
+    for (int mode = 0; mode < 2; mode++) {
+        portSettings.frameRateOverride = (mode ? FRAME_RATE_CAPPED : FRAME_RATE_UNCAPPED) + 1;
+        portSettings.frameCapOverride = 300;
+        for (int pal = 0; pal < 2; pal++) {
+            portPal = pal;
+            stallInterpolation = 1;
+            elapsed = Run(pal ? 250 : 300);
+            printf("%s %s interpolation after a 500ms stall: %.1f displayed FPS, %.3f seconds\n",
+                   pal ? "PAL" : "NTSC", mode ? "capped" : "uncapped", presentations / elapsed, elapsed);
+            assert(!stallInterpolation);
+            assert(presentations / elapsed > (mode ? 260 : 700));
+            assert(elapsed > 9.9 && elapsed < 10.8);
+        }
+    }
+    puts("single-player and split-screen NTSC/PAL race clocks keep their rate under presentation load: OK");
     return 0;
 }

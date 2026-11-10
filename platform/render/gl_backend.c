@@ -2180,7 +2180,7 @@ void GpuPresentSplit(int x, int y, int w, int h, const uint8_t *lower, int lower
     }
     PortDrawableSize(&width, &height);
     /* the other game draws the lower half as wide, and hands it over at its size in pixels */
-    PortLinkSetBand(GpuShownMargin(x, w), width, height / 2);
+    PortLinkSetBand(GpuShownMargin(x, w), width, height / 2, portSettings.downsample, portSettings.downsampleStyle);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, windowFramebuffer);
     glDisable(GL_SCISSOR_TEST);
     glViewport(0, 0, width, height);
@@ -2269,4 +2269,3 @@ void GpuShowImage(const uint8_t *rgb, int width, int height)
     glBindFramebuffer(GL_FRAMEBUFFER, windowFramebuffer);
     PortVideoPresent();
 }
-

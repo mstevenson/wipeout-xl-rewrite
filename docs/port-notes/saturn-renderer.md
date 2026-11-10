@@ -2,7 +2,7 @@
 
 The global renderer now offers Sega Saturn, with independently saved snapping,
 affine mapping, RGB5 precision, mesh transparency and optional depth settings.
-`WIPEOUT_RENDERER=saturn` selects it explicitly; the automatic N64 track override
+`WIPEOUT_RENDER_PROFILE=saturn` selects it explicitly; the automatic N64 track override
 also accepts Saturn as its base. See [profile details and limits](../RENDERERS.md#saturn-profile).
 
 ## Changes
@@ -218,7 +218,7 @@ saves. Example from the repository root (create the output/save directories firs
 ```sh
 WIPEOUT_XL_DISC='../roms/Sega Saturn/WipEout 2097 (Europe).cue' \
 WIPEOUT_HIDDEN=1 WIPEOUT_MUTE=1 WIPEOUT_SKIP_INTRO=1 WIPEOUT_SKIP_LOGOS=1 \
-WIPEOUT_RENDERER=saturn WIPEOUT_AUTOPILOT=all \
+WIPEOUT_RENDER_PROFILE=saturn WIPEOUT_AUTOPILOT=all \
 WIPEOUT_SAVE_DIR=/tmp/saturn-validation-save \
 WIPEOUT_PADS=tools/bugtest/saturn_talon.pads \
 WIPEOUT_FIXED_STEP=1 WIPEOUT_FRAMES=6000 WIPEOUT_RENDER_SCALE=2 \

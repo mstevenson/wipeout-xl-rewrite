@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "platform.h"
+#include "controls.h"
 #include "psx/disc.h"
 #include "psx/gte.h"
 #include "psx/pad.h"
@@ -36,7 +37,8 @@ static void Usage(void)
             "             .bin tracks, a .bin alone, or an archive of either (.7z, .zip, .rar, .tar, .gz, ...);\n"
             "             without it, the one chosen last time, else a file dialog asks for it\n"
             "environment: WIPEOUT_XL_DISC, WIPEOUT_RENDER_SCALE (0 auto, else 1-12), WIPEOUT_HD_PACK (a texture pack's\n"
-            "  .zip or folder); tests: WIPEOUT_MUTE, WIPEOUT_HIDDEN,\n"
+            "  .zip or folder), WIPEOUT_DOWNSAMPLE (0 off, 1 PS1 native, 2-12 target scale),\n"
+            "  WIPEOUT_DOWNSAMPLE_STYLE (0 box, 1 adaptive); tests: WIPEOUT_MUTE, WIPEOUT_HIDDEN,\n"
             "  WIPEOUT_FIXED_STEP, WIPEOUT_FRAMES, WIPEOUT_CAPTURE_DIR, WIPEOUT_CAPTURE_EVERY, WIPEOUT_CAPTURE_FROM,\n"
             "  WIPEOUT_TRACE (trace file), WIPEOUT_PADS (pad script), WIPEOUT_VCOUNTS (counter reads),\n"
             "  WIPEOUT_CD_SPEED (drive speed-up; 1 = the console's, default 1000), WIPEOUT_SAVE_DIR (memory cards; default: the user's data folder),\n"
@@ -113,9 +115,11 @@ static int SDLCALL ImageJob(void *data)
 /* Runs a job on a thread of its own while the window says what is going on and how far it is (thousandths). */
 static void RunShowing(SDL_ThreadFunction run, DiscJob *job, const char *text, int (*progress)(void))
 {
-    SDL_Thread *thread = SDL_CreateThread(run, "disc", job);
+    SDL_Thread *thread;
     SDL_Event event;
 
+    SDL_SetAtomicInt(&job->done, 0);
+    thread = SDL_CreateThread(run, "disc", job);
     if (!thread) {
         run(job);
         return;
@@ -337,6 +341,9 @@ int main(int argc, char **argv)
     if (!PortVideoInit()) {
         return 1;
     }
+#ifdef __EMSCRIPTEN__
+    PortPrepareButtonGlyphs(); /* keep first-use rasterization out of the title sound */
+#endif
 #ifdef PORT_MOBILE
     if (!portConfig.discPath && !(portConfig.discPath = MobileDisc())) {
         return 1;
@@ -421,7 +428,8 @@ int main(int argc, char **argv)
         io.oneCard = SDL_getenv("WIPEOUT_TRACE") != NULL; /* (the console recordings were made with one card) */
         io.wavPath = SDL_getenv("WIPEOUT_WAV"); /* tests: the mixed audio of a fixed-step run */
 #ifdef __EMSCRIPTEN__
-        io.queueAudio = 1; /* the page's audio callback runs only while the game waits (psx_io.h) */
+        io.queueAudio = 1; /* video fields feed scheduled browser playback (psx_io.h) */
+        io.noDevice = portConfig.muted; /* fields already advance time; no dummy audio timer is needed */
 #else
         io.queueAudio = SDL_getenv("WIPEOUT_QUEUE_AUDIO") != NULL; /* tests: as the web does */
 #endif
@@ -513,6 +521,12 @@ int PortLogoFields(int fields)
 {
     /* the setting; never in the tests' recorded runs, which compare the console's start-up */
     return portSettings.skipLogos && !SDL_getenv("WIPEOUT_TRACE") ? 0 : fields;
+}
+
+int PortStartupLoading(void)
+{
+    /* With both startup sequences skipped, go straight to the title. */
+    return PortLogoFields(1) || !portSettings.skipIntro;
 }
 
 int PortFarViewEnabled(void)

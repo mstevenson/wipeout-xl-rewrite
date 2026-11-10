@@ -72,7 +72,7 @@ struct SaturnNativePoly;
 typedef struct GpuDrawState {
     int textured;
     int raw;           /* texture without colour modulation */
-    int semi;          /* -1 opaque, else blend mode 0-3 */
+    int semi;          /* -1 opaque, blend mode 0-3, or 4: Saturn screen-space mesh */
     int depth;         /* texture colours: 0 = 4-bit, 1 = 8-bit, 2 = 15-bit, 3 = the glyph page */
     int pageX, pageY;  /* texture page origin in video memory */
     int clutX, clutY;  /* palette origin */
@@ -96,7 +96,7 @@ typedef struct GpuDrawState {
     float shieldGlow[4]; /* shield tint and strength, for its own hull */
     int hullMotion; /* use object motion for this hull, including zero for missing history */
     int sparkStreak; /* wall-contact particle with extra HDR brightness for bloom */
-
+    int hudColourOverlay; /* coloured HUD fill attenuates the background; black stays transparent */
 } GpuDrawState;
 
 /* Derive material and geometry facts before a profile chooses rasterization.
