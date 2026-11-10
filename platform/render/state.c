@@ -858,11 +858,14 @@ void RgDrawArrays(int kind, int first, int count) {
     state.first = first;
     state.count = count;
     memset(state.images, 0, sizeof(state.images));
-    if (program == RENDER_GAME && gameAttachments[0] && state.pipeline.colourMask) {
+    if (program == RENDER_GAME && gameAttachments[0]) {
+        /* The depth prepass masks colour writes. Keep its attachments bound so
+           alternating depth and colour draws can stay in the same render pass. */
         state.pipeline.shader = RENDER_GAME_HDR;
         for (int i = 0; i < 3; i++) {
-            state.target.auxiliary[i] = images[gameAttachments[i]].native;
-            if (gameAttachments[i]) images[gameAttachments[i]].dirty = 1;
+            Image *image = &images[gameAttachments[i]];
+            state.target.auxiliary[i] = image->native;
+            if (image->native && state.pipeline.colourMask) image->dirty = 1;
         }
     }
     for (int i = 0; i < 5; i++) {

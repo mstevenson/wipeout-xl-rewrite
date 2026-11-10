@@ -31,6 +31,7 @@ static int CreateFake(RenderDevice *d, int api) {
     d->caps.maxTextureSize = 16384;
     d->caps.maxArrayLayers = 2048;
     d->caps.asyncReadback = 1;
+    d->caps.hdrTargets = 1;
     SDL_strlcpy(d->caps.deviceName, "test device", sizeof(d->caps.deviceName));
     liveDevices++;
     return 1;
@@ -128,7 +129,7 @@ static int ClearFake(RenderDevice *d, const RenderClear *c) {
 static int DrawFake(RenderDevice *d, const RenderDraw *c) {
     assert(((FakeImage *)c->target.colour)->api == Api(d));
     assert(((FakeBuffer *)c->vertices)->api == Api(d));
-    assert(c->uniforms.pass == 2);
+    assert(c->uniforms.pass == (c->pipeline.colourMask ? 2 : 3));
     return 1;
 }
 static int CopyFake(RenderDevice *d, const RenderCopy *c) { return 1; }
@@ -187,6 +188,39 @@ static void CheckPicture(void) {
     RgReadPixels(0, 0, 4, 3, RG_RGBA, RG_UNSIGNED_BYTE, pixels);
     GotRead(pixels, 4, 3, NULL);
     usedRead--;
+}
+static void CheckHdrDepthPass(RgHandle shader)
+{
+    RgHandle auxiliary[3];
+    RgGenTextures(3, auxiliary);
+    assert(RgAllocateImage(auxiliary[0], 4, 3, RENDER_RGBA16_FLOAT));
+    assert(RgAllocateImage(auxiliary[1], 4, 3, RENDER_RGBA8));
+    assert(RgAllocateImage(auxiliary[2], 4, 3, RENDER_RGBA16_FLOAT));
+    RgGameAttachments(auxiliary, 1.0f);
+
+    int pass = RgGetUniformLocation(shader, "pass");
+    RgUniform1i(pass, 3);
+    RgDepthMask(1);
+    RgColorMask(0, 0, 0, 0);
+    RgDrawArrays(RG_TRIANGLES, 0, 3);
+    assert(state.pipeline.shader == RENDER_GAME_HDR);
+    RenderTarget depthTarget = state.target;
+    for (int i = 0; i < 3; i++) {
+        assert(depthTarget.auxiliary[i] == images[auxiliary[i]].native);
+        assert(!images[auxiliary[i]].dirty);
+    }
+
+    RgUniform1i(pass, 2);
+    RgDepthMask(0);
+    RgColorMask(1, 1, 1, 1);
+    RgDrawArrays(RG_TRIANGLES, 0, 3);
+    assert(state.pipeline.shader == RENDER_GAME_HDR);
+    assert(!memcmp(depthTarget.auxiliary, state.target.auxiliary, sizeof(depthTarget.auxiliary)));
+    for (int i = 0; i < 3; i++) assert(images[auxiliary[i]].dirty);
+
+    RgGameAttachments(NULL, 0);
+    RgDeleteTextures(3, auxiliary);
+    puts("Modern depth and colour draws share HDR attachments with colour writes masked in the prepass: OK");
 }
 int main(void) {
     assert(RenderDefaultBackend() == RENDER_METAL);
@@ -274,6 +308,7 @@ int main(void) {
     }
     assert(!RenderRequestBackend((RenderBackend)99));
     assert(RenderActiveBackend() == RENDER_METAL);
+    CheckHdrDepthPass(shader);
     RenderStop();
     assert(!liveDevices && !liveImages && !liveBuffers && !liveReads);
     /* Large mutable color images use GPU authority, preserving both full
