@@ -13,6 +13,9 @@ struct SParticle {
 
 #define PARTICLE_COUNT 128
 
+/* Port: wall sparks use the original white and orange streaks with an HDR tag. */
+enum { WALL_SPARK_WHITE = 8, WALL_SPARK_ORANGE };
+
 /* A billboard explosion (table of 32). */
 typedef struct Explosion {
     int   x, y, z;

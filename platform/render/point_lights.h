@@ -3,8 +3,8 @@
 #define RENDER_POINT_LIGHTS_H
 #include <stdint.h>
 
-/* 30 projectiles, 32 explosions and two lights for each of 15 ships. */
-enum { GPU_POINT_LIGHTS = 16, GPU_LIGHT_SOURCES = 96 };
+/* 30 projectiles, 32 explosions, and engine, shield and wall spark lights for 15 ships. */
+enum { GPU_POINT_LIGHTS = 16, GPU_LIGHT_SOURCES = 112 };
 enum { GPU_SHIELD_LIGHT_BASE = 4096 }; /* one source ID per ship, in ship slot order */
 typedef struct GpuPointLight {
     float position[3], radius;

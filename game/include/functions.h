@@ -618,7 +618,7 @@ WADFILE *openwadfilenvc(char *name);
 /* sparks.c */
 SParticle *InitParticle(void);
 void AddRandomParticles(SParticle *particles, int count, VECTOR *pos, VECTOR *vel);
-void AddScrapingParticles(SParticle *particles, int count, VECTOR *pos, VECTOR *vel);
+void AddWallSparks(SParticle *particles, int count, VECTOR *pos, VECTOR *vel, int type);
 void AddSnow(SParticle *particles, int unused, VECTOR *camera);
 void AddRain(SParticle *particles, int unused, VECTOR *camera);
 void AddExplodingParticles(SParticle *particles, int count, VECTOR *pos);

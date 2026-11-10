@@ -2429,8 +2429,32 @@ static void ModernHdr(void)
     shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
     assert(HdrRed(shown, 14, 11) > 8 && HdrRed(shown, 42, 11) == 0);
 
-    /* Both an explicit opt-out and an unavailable half-float target use SDR. */
+    /* Only tagged spark lines emit, and their HDR boost follows bloom even with dynamic lights off. */
     portSettings.render.modern.weaponLights = 0;
+    for (int enabled = 0; enabled <= 1; enabled++) {
+        portSettings.render.modern.bloom = enabled;
+        RenderCommit();
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0);
+        GpuDrawState spark = {.semi = 0, .sparkStreak = 1};
+        GpuVertex a = {.x = 8, .y = 16, .r = 128, .a = 255}, b = a;
+        b.x = 24;
+        GpuLine(&spark, &a, &b);
+        a.x += 32; b.x += 32;
+        spark.sparkStreak = 0;
+        GpuLine(&spark, &a, &b);
+        shown = GpuReadPicture(0, 0, 64, 32, 0, 64, 32);
+        assert(HdrRed(shown, 48, 16) == 64 && HdrRed(shown, 48, 17) == 0);
+        if (enabled) {
+            assert(HdrRed(shown, 16, 16) > 230 && HdrRed(shown, 16, 17) > 20);
+        } else {
+            assert(HdrRed(shown, 16, 16) == 64 && HdrRed(shown, 16, 17) == 0);
+        }
+        int outW, outH;
+        const uint8_t *raw = GpuReadArea(0, 0, 64, 32, &outW, &outH);
+        assert(HdrRed(raw, 16, 16) == 64 && HdrRed(raw, 16, 17) == 0);
+    }
+
+    /* Both an explicit opt-out and an unavailable half-float target use SDR. */
     for (int enabled = 0; enabled <= 1; enabled++) {
         portSettings.render.modern.bloom = enabled;
         RenderCommit();
@@ -2447,7 +2471,7 @@ static void ModernHdr(void)
     glDeleteFramebuffers(1, &framebuffer);
     glDeleteTextures(1, &colour);
     glDeleteRenderbuffers(1, &depthBuffer);
-    puts("Modern HDR: overbright nearest and filtered materials, fixture mask, HUD, depth, smooth high-scale bloom, "
+    puts("Modern HDR: overbright nearest and filtered materials, fixture mask, spark bloom, HUD, depth, smooth high-scale bloom, "
          "tonemapper switching, legacy blends, widescreen, SDR fallback and raw VRAM: OK");
 }
 

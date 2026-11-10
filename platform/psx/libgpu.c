@@ -2101,6 +2101,30 @@ static void Polygon(const uint32_t *w, uint32_t code)
     }
 }
 
+/* Spark packets stay tagged through presentation redraws of this geometry frame. */
+static const LINE_G2 *sparkStreaks[128];
+static uint32_t sparkStreakFrame;
+static int sparkStreakCount;
+
+void PortTagSparkStreak(const LINE_G2 *line)
+{
+    uint32_t frame = GteFrameRecorded();
+    if (sparkStreakFrame != frame) {
+        sparkStreakFrame = frame;
+        sparkStreakCount = 0;
+    }
+    if (sparkStreakCount < SDL_arraysize(sparkStreaks)) sparkStreaks[sparkStreakCount++] = line;
+}
+
+static int SparkStreak(const uint32_t *packet)
+{
+    if (sparkStreakFrame != GteFrameRecorded()) return 0;
+    for (int i = 0; i < sparkStreakCount; i++) {
+        if ((const void *)sparkStreaks[i] == packet) return 1;
+    }
+    return 0;
+}
+
 static void Line(const uint32_t *w, uint32_t code, int words)
 {
     int gouraud = (code & 0x10) != 0, poly = (code & 0x08) != 0, semi = (code & 0x02) != 0;
@@ -2109,6 +2133,7 @@ static void Line(const uint32_t *w, uint32_t code, int words)
     int k = 0;
 
     StateFor(&draw, 0, semi, 0);
+    draw.sparkStreak = SparkStreak(w - 1);
     memset(&a, 0, sizeof(a));
     Colour(&a, w[k++]);
     {

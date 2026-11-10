@@ -131,7 +131,8 @@ textures. HUD and menu art use their own brightness.
 
 **Dynamic lights** (`modern_weapon_lights`, on by default) adds coloured,
 unshadowed point lights to rockets, missiles, plasma shots and electrobolts,
-plus fading explosion flashes. Each live ship emits subtle blue light from its
+plus fading explosion flashes and flickering orange light from wall sparks.
+Each live ship emits subtle blue light from its
 engine. An active shield lights nearby surfaces and casts soft light onto its
 ship's hull. The light brings out the hull texture in shadow and brightens at
 grazing angles. Both effects follow the shield's hit flashes.
@@ -153,9 +154,10 @@ accumulates HDR highlights in linear light before tone mapping. It works with
 or without HDR bloom.
 
 **HDR bloom** (`modern_bloom`, on by default) uses the light above SDR white to
-add glow to Modern races. It also boosts the animated neon in Phenitia Park
-and a tunnel bulb in Gare d'Europa on PlayStation tracks. The renderer adds
-the glow in linear light and maps the highlights to SDR for the window and
+add glow to Modern races. Wall spark streaks have bright cores that feed bloom
+independently of Dynamic lights. Bloom also boosts the animated neon in
+Phenitia Park and a tunnel bulb in Gare d'Europa on PlayStation tracks. The
+renderer adds the glow in linear light and maps the highlights to SDR for the window and
 frame captures. Opaque HUD pixels retain their original colours. Systems
 without a renderable half-float scene target use the SDR path. Set
 `WIPEOUT_MODERN_BLOOM=0` to disable it for one run or `WIPEOUT_MODERN_BLOOM=1`

@@ -91,6 +91,8 @@ void AddPrim(u_long *ot, void *p)
     linkedCount++;
 }
 
+void PortTagSparkStreak(const LINE_G2 *line) { (void)line; }
+
 /* ---- symbols of the console executable ---- */
 static struct { char name[48]; uint32_t address; } symbols[4000];
 static int symbolCount;
@@ -576,6 +578,10 @@ static void RunParticles(World *w, int trials)
         }
         memcpy(MipsPointer(emuTable), nativeTable, sizeof(nativeTable));
         /* the console record is the same bytes (no pointers in it) */
+        for (i = 0; i < 128; i += 2) {
+            if (nativeTable[i].type == 1) nativeTable[i].type = WALL_SPARK_WHITE;
+            if (nativeTable[i].type == 2) nativeTable[i].type = WALL_SPARK_ORANGE;
+        }
         ClearOts(emuOt);
         memset(nativeOt, 0, sizeof(nativeOt));
         linkedCount = 0;
@@ -584,6 +590,12 @@ static void RunParticles(World *w, int trials)
         MipsCall(Sym("AsmDrawParticles"), emuTable, emuCamera, (uint32_t)mode, 0, 0, 0);
         GteSetup();
         AsmDrawParticles(nativeTable, &cam.native[0], mode);
+
+        /* The port tags wall sparks without changing the original packets or state updates. */
+        for (i = 0; i < 128; i += 2) {
+            if (nativeTable[i].type == WALL_SPARK_WHITE) nativeTable[i].type = 1;
+            if (nativeTable[i].type == WALL_SPARK_ORANGE) nativeTable[i].type = 2;
+        }
 
         /* the table afterwards, except the tag words of the packets (they hold links) */
         for (i = 0; i < 128; i++) {

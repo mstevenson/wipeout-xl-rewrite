@@ -143,3 +143,50 @@ The only game source edit names the existing shield light ID base in
 and simulation are unchanged. Compiler diagnostics were clean and the MIPS
 oracle matched all three functions in the file against the pre-change revision.
 The original `B0` snapshot was unavailable.
+
+## Wall sparks
+
+`NewWingCollision`, `WingCollision` and `NoseCollision` in `collide.c` call
+`PortWallSparkLight` after spawning their wall-contact particles. The hook,
+declared in `port_platform.h`, saves one contact point per ship in port-owned
+state. It keeps the light slightly inside the course so it can illuminate
+the face even when the particle origin penetrates the wall. The collision and
+particle code still use the same inputs and random sequence.
+
+`PortCaptureWeaponLights` adds the orange light for seven game frames, with
+deterministic intensity flicker and a quadratic fade. Repeated contact updates
+the position and refreshes the lifetime. The source pool now holds 112 records
+for a possible 107 sources, with the same sixteen-light draw budget. No game
+record layouts, raw offsets, file formats or protected functions changed.
+
+The macOS build, CPU and OpenGL regression suites, and diagnostics for both
+changed game source files passed. The MIPS oracle comparison with the
+pre-change revision reported the three collision hooks and the new light
+capture code as the only differences. The original `B0` snapshot was absent.
+A scripted Talon's Reach replay on the US disc showed orange spill on the
+road and barriers in Modern with bloom disabled. All 312 captured frames of
+the same replay in the PlayStation profile were pixel-identical before and
+after the change.
+
+The point light radius was reduced by 30%, from 1,100 to 770 track units.
+The collision routines now call `AddWallSparks` for their original white and
+orange bursts. `sparks.c` shares the spawn loop with `AddRandomParticles`,
+which the MIPS oracle matched to the previous revision. Two new `SParticle`
+type values distinguish the wall streaks without changing the record layout.
+`AsmDrawParticles` maps them to the original streak colours and tags the linked
+line packets. The other emitters keep their existing types. The frame-scoped
+tags travel through the line decoder and shared vertex stream. Modern raises
+the tagged line colour in the HDR target when bloom is on. The SDR draw uses
+the original line colour and blend mode.
+
+The MIPS comparison also identified the three wall collision functions,
+`AsmDrawParticles`, and the replacement of `AddScrapingParticles` by
+`AddWallSparks`. The differences correspond to the wall-only type codes and
+the metadata hooks. No raw offsets, pointer widths or file records changed.
+
+The macOS build, CPU and OpenGL suites, and diagnostics passed. The retail
+renderer comparison matched 155,522 packets across 11,212 checks, including
+both wall spark colours mapped to their original types. The harness needed
+local link stubs for four pre-existing native-renderer references. The
+Talon's Reach replay showed bright spark cores and halos with bloom on, and
+all 312 PlayStation frames again matched the earlier build.

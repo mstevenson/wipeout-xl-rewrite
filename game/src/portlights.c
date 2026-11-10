@@ -1,16 +1,38 @@
-/* Port: read-only weapon/effect/ship metadata for enhanced presentation. No game state is changed. */
+/* Port: weapon, effect and ship lights for enhanced presentation. No game state is changed. */
 #include "functions.h"
 #include "weapon.h"
 #include "sparks.h"
 #include "../../platform/render/point_lights.h"
 
 extern ShipData *shipIndex;
+extern TrackData *track;
 extern int ownShip;
 extern Explosion explosions[];
 
 static struct {
     int red, green;
 } shieldFlash[15];
+
+enum { WALL_SPARK_LIFE = 7 };
+static struct WallSpark {
+    uint64_t endFrame;
+    double x, y, z;
+} wallSparks[15];
+
+void PortWallSparkLight(const ShipData *ship, const VECTOR *pos, const Face *wall)
+{
+    const VECTOR *vertex = &track->vertices[wall->vertex[0]];
+    double nx = wall->normal.vx / 4096.0;
+    double ny = wall->normal.vy / 4096.0;
+    double nz = wall->normal.vz / 4096.0;
+    double distance = (pos->vx - (double)vertex->vx) * nx + (pos->vy - (double)vertex->vy) * ny +
+                      (pos->vz - (double)vertex->vz) * nz;
+    /* Keep the light on the racing side of the wall even when the sparks start inside it. */
+    double inset = distance < 160 ? 160 - distance : 0;
+    wallSparks[ship - shipIndex] = (struct WallSpark){
+        PortGameFrames() + WALL_SPARK_LIFE, pos->vx + nx * inset, pos->vy + ny * inset, pos->vz + nz * inset
+    };
+}
 
 void PortSetShieldFlash(int ship, int red, int green)
 {
@@ -107,6 +129,18 @@ void PortCaptureWeaponLights(void)
                                       1600, idle * 0.08f + red, idle * 0.32f + green,
                                       idle + red * 0.12f, 1.8f);
         }
+    }
+    uint64_t frame = PortGameFrames();
+    for (int i = 0; shipIndex && i < 15; i++) {
+        const struct WallSpark *spark = &wallSparks[i];
+        if (spark->endFrame <= frame) continue;
+        int life = (int)(spark->endFrame - frame);
+        /* Vary sustained contact too, without advancing the game's random sequence. */
+        uint32_t noise = ((uint32_t)frame + 17u * (unsigned)i) * 0x9e3779b9u;
+        float flicker = 0.3f + 0.7f * ((noise >> 16) & 255) / 255.0f;
+        float fade = life / (float)WALL_SPARK_LIFE;
+        sources[count++] = Light(3072u + (unsigned)i, life, spark->x, spark->y, spark->z,
+                                  770, 1, 0.38f, 0.075f, 3.2f * flicker * fade * fade);
     }
     PsxCaptureLights(sources, count);
 }

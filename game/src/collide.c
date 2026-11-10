@@ -1,4 +1,5 @@
 #include "functions.h"
+#include "sparks.h"
 #include "ships.h"
 #include "track.h"
 #include "include_asm_g8.h"
@@ -678,8 +679,9 @@ void NewWingCollision(ShipData *playerShip, Face *facePtr, int direction, int al
     reaction.vx = playerShip->vpivot.vx >> 6;
     reaction.vy = playerShip->vpivot.vy >> 6;
     reaction.vz = playerShip->vpivot.vz >> 6;
-    AddScrapingParticles(particleSlots, 8, &wingPos, &reaction);
-    AddRandomParticles(particleSlots, 8, &wingPos, &reaction);
+    AddWallSparks(particleSlots, 8, &wingPos, &reaction, WALL_SPARK_ORANGE);
+    AddWallSparks(particleSlots, 8, &wingPos, &reaction, WALL_SPARK_WHITE);
+    PortWallSparkLight(playerShip, &wingPos, facePtr); /* Port: light the scrape in Modern. */
 }
 
 
@@ -739,7 +741,8 @@ void WingCollision(ShipData *playerShip, Face *facePtr, int direction, int alpha
   reaction.vx = playerShip->vpivot.vx >> 6;
   reaction.vy = playerShip->vpivot.vy >> 6;
   reaction.vz = playerShip->vpivot.vz >> 6;
-  AddRandomParticles(particleSlots, 8, &wingPos, &reaction);
+  AddWallSparks(particleSlots, 8, &wingPos, &reaction, WALL_SPARK_WHITE);
+  PortWallSparkLight(playerShip, &wingPos, facePtr);
 }
 
 
@@ -792,7 +795,8 @@ void NoseCollision(ShipData *playerShip, Face *facePtr, int direction, int alpha
   reaction.vx = playerShip->vpivot.vx >> 6;
   reaction.vy = playerShip->vpivot.vy >> 6;
   reaction.vz = playerShip->vpivot.vz >> 6;
-  AddRandomParticles(particleSlots, 8, &nosePos, &reaction);
+  AddWallSparks(particleSlots, 8, &nosePos, &reaction, WALL_SPARK_WHITE);
+  PortWallSparkLight(playerShip, &nosePos, facePtr);
 }
 
 

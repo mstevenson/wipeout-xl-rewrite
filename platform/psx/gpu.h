@@ -95,6 +95,7 @@ typedef struct GpuDrawState {
     const struct GpuLightSet *pointLights; /* immutable for this draw pass */
     float shieldGlow[4]; /* shield tint and strength, for its own hull */
     int hullMotion; /* use object motion for this hull, including zero for missing history */
+    int sparkStreak; /* wall-contact particle with extra HDR brightness for bloom */
 
 } GpuDrawState;
 

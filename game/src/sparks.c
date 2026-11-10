@@ -44,7 +44,8 @@ SParticle *InitParticle(void)
 }
 
 
-void AddRandomParticles(SParticle *particles, int count, VECTOR *pos, VECTOR *vel)
+/* Port: the two original spark emitters differ only in their streak type. */
+static void AddSparks(SParticle *particles, int count, VECTOR *pos, VECTOR *vel, int type)
 {
     int i;
 
@@ -59,32 +60,22 @@ void AddRandomParticles(SParticle *particles, int count, VECTOR *pos, VECTOR *ve
             particles[i].vel.vy = (newRand() & 0x3F) - 32;
             particles[i].vel.vz = (newRand() & 0x3F) - 32 + vel->vz;
             particles[i].life = 7;
-            particles[i].type = 1;
+            particles[i].type = (char)type;
             particles[i].flags = 0;
         }
     }
 }
 
 
-void AddScrapingParticles(SParticle *particles, int count, VECTOR *pos, VECTOR *vel)
+void AddRandomParticles(SParticle *particles, int count, VECTOR *pos, VECTOR *vel)
 {
-    int i;
+    AddSparks(particles, count, pos, vel, 1);
+}
 
-    for (; count > 0; count--) {
-        i = snowCount;
-        snowCount = (i + 1) % PARTICLE_COUNT;
-        if (i >= 0) {
-            particles[i].pos.vx = pos->vx;
-            particles[i].pos.vy = pos->vy;
-            particles[i].pos.vz = pos->vz;
-            particles[i].vel.vx = (newRand() & 0x3F) - 32 + vel->vx;
-            particles[i].vel.vy = (newRand() & 0x3F) - 32;
-            particles[i].vel.vz = (newRand() & 0x3F) - 32 + vel->vz;
-            particles[i].life = 7;
-            particles[i].type = 2;
-            particles[i].flags = 0;
-        }
-    }
+
+void AddWallSparks(SParticle *particles, int count, VECTOR *pos, VECTOR *vel, int type)
+{
+    AddSparks(particles, count, pos, vel, type);
 }
 
 

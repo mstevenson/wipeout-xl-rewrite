@@ -9,6 +9,11 @@ WeaponData *weaponIndex = weapons;
 static ShipData ships[15];
 static TrackSection section;
 ShipData *shipIndex = ships;
+static VECTOR wallVertex;
+static TrackData course = {.vertices = &wallVertex};
+TrackData *track = &course;
+static uint64_t frame;
+uint64_t PortGameFrames(void) { return frame; }
 int ownShip, portPal;
 Explosion explosions[EXPLOSION_COUNT];
 static Skeleton rotation, camera;
@@ -129,8 +134,27 @@ int main(void)
     for (int i = 0; i < 30; i++) weapons[i] = before[0];
     for (int i = 0; i < EXPLOSION_COUNT; i++) explosions[i] = effects[0];
     PortCaptureWeaponLights(); assert(capturedCount == 92);
+    Face wall = {.normal = {4096, 0, 0}};
+    VECTOR contact = {90, 400, 500};
+    wallVertex.vx = 100;
+    for (int i = 0; i < 15; i++) PortWallSparkLight(&ships[i], &contact, &wall);
+    PortCaptureWeaponLights(); assert(capturedCount == 107);
     for (int i = 0; i < capturedCount; i++)
         for (int j = 0; j < i; j++) assert(captured[i].id != captured[j].id);
+    GpuLightSource firstSpark = captured[92];
+    assert(firstSpark.light.radius == 770);
+    assert(firstSpark.light.position[0] == 500 && firstSpark.light.position[1] == 420 && firstSpark.light.position[2] == -160);
+    assert(firstSpark.light.colour[0] > firstSpark.light.colour[1] && firstSpark.light.colour[1] > firstSpark.light.colour[2]);
+    frame++;
+    PortWallSparkLight(&ships[0], &contact, &wall);
+    PortCaptureWeaponLights(); assert(capturedCount == 107);
+    assert(captured[92].id == firstSpark.id && captured[92].life == firstSpark.life);
+    assert(captured[92].light.intensity != firstSpark.light.intensity);
+    frame += WALL_SPARK_LIFE - 1;
+    PortCaptureWeaponLights(); assert(capturedCount == 93);
+    assert(captured[92].life == 1 && captured[92].light.intensity < firstSpark.light.intensity);
+    frame++;
+    PortCaptureWeaponLights(); assert(capturedCount == 92);
     cameraPtr = NULL; PortCaptureWeaponLights(); assert(!capturedCount);
-    puts("Weapon light sources: projectiles, explosions, engine offsets, active shields, view transform, full pools and read-only state: OK");
+    puts("Dynamic light sources: projectiles, explosions, engine offsets, active shields, wall sparks, view transform, full pools and read-only state: OK");
 }

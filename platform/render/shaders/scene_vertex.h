@@ -73,9 +73,9 @@
     "    filterBounds = filterBoundsIn;\n"
     /* Filter mode, address flags, PS1 light, and blending mode (-1 for opaque). */
     "    materialFlags = ivec4(int((modeIn.w >> 1u) & 3u), int((modeIn.z >> 2u) & 7u),\n"
-    "                          int((modeIn.z >> 5u) & 1u), int(modeIn.w >> 4u) - 1);\n"
+    "                          int((modeIn.z >> 5u) & 1u), int((modeIn.w >> 4u) & 7u) - 1);\n"
 #ifdef RENDER_AUX_FLAGS
-    "    auxFlags = int((modeIn.z >> 6u) | ((modeIn.w & 8u) >> 1u));\n"
+    "    auxFlags = int((modeIn.z >> 6u) | ((modeIn.w & 8u) >> 1u) | ((modeIn.w & 128u) >> 4u));\n"
     "    emissionUv = emissionUvIn;\n"
     "    shutterDelta = shutterDeltaIn;\n"
 #endif

@@ -58,6 +58,7 @@
 #define RENDER_AUX_FLAGS
 #define RENDER_AUX_COLOUR \
     "uniform bool hdrActive;\n" \
+    "uniform float sparkGain;\n" \
     "flat in int auxFlags;\n" \
     "flat in ivec4 emissionUv;\n" \
     "layout(location = 1) out vec4 hdrColour;\n" \
@@ -65,11 +66,14 @@
     "layout(location = 3) out vec4 hullVelocity;\n" \
     "in vec3 vViewPosition;\n" \
     "in vec3 shutterDelta;\n" \
+    "bool BoostSpark() { return (auxFlags & 8) != 0 && sparkGain > 1.0; }\n" \
     "vec3 HdrMaterial(vec3 rgb, float coverage) {\n" \
+    "    if (BoostSpark()) return rgb * sparkGain;\n" \
     "    return (auxFlags & 2) != 0 ? min(rgb, vec3(coverage)) : rgb;\n" \
     "}\n" \
     "void WriteAux(vec4 c, float covered) {\n" \
-    "    bool overlay = (auxFlags & 2) != 0;\n" \
+    /* A spark without a precise projection still belongs to the scene. */ \
+    "    bool overlay = (auxFlags & 2) != 0 && !BoostSpark();\n" \
     "    bool emits = (auxFlags & 1) != 0;\n" \
     "    if (emissionUv.z > 0) {\n" \
     "        vec2 t = vTexel.xy / vTexel.z;\n" \
@@ -94,7 +98,7 @@ static const char *modernFragmentSource =
 #include "shaders/material_fragment.h"
 ;
 static RenderProgram modernProgram;
-static GLint uniformWorldBrightness, uniformHdrActive;
+static GLint uniformWorldBrightness, uniformHdrActive, uniformSparkGain;
 static GLint uniformLightCount, uniformLightPosition, uniformLightColour, uniformShieldGlow;
 
 static void Lights(const void *profile, const GpuLightSet *lights, const float shieldGlow[4])
@@ -125,6 +129,7 @@ static void Bind(const void *profile, int hdrActive)
     const ModernRenderSettings *settings = profile;
     glUniform1f(uniformWorldBrightness, settings->brightness / (float)MODERN_BRIGHTNESS_MAX);
     glUniform1i(uniformHdrActive, hdrActive);
+    glUniform1f(uniformSparkGain, settings->bloom ? 8.0f : 1.0f);
 }
 
 static RenderProgram *ModernScene(void)
@@ -134,6 +139,7 @@ static RenderProgram *ModernScene(void)
         GLuint program = modernProgram.program;
         uniformWorldBrightness = glGetUniformLocation(program, "worldBrightness");
         uniformHdrActive = glGetUniformLocation(program, "hdrActive");
+        uniformSparkGain = glGetUniformLocation(program, "sparkGain");
         uniformLightCount = glGetUniformLocation(program, "lightCount");
         uniformLightPosition = glGetUniformLocation(program, "lightPosition");
         uniformLightColour = glGetUniformLocation(program, "lightColour");

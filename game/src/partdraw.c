@@ -15,11 +15,13 @@ static void SetStreakColour(LINE_G2 *line, int type, int level)
 {
     switch (type) {
     case 1:
+    case WALL_SPARK_WHITE:
         line->r0 = line->g0 = line->b0 = (u_char)level;
         level = (int)((u_int)level >> 1);
         line->r1 = line->g1 = line->b1 = (u_char)level;
         break;
     case 2:
+    case WALL_SPARK_ORANGE:
         line->r0 = (u_char)level;
         level = (int)((u_int)level >> 2);
         line->g0 = (u_char)level;
@@ -160,6 +162,9 @@ void AsmDrawParticles(SParticle *particles, Skeleton *camera, int mode)
                     }
                 }
                 AddPrim(ordering + depth, line);
+                /* Port: the Modern bloom pass boosts the wall streak's HDR colour. */
+                if (particle->type == WALL_SPARK_WHITE || particle->type == WALL_SPARK_ORANGE)
+                    PortTagSparkStreak(line);
             }
         }
     }

@@ -1218,9 +1218,10 @@ static void Add(const GpuVertex *v, unsigned shade)
     out->mode[2] = (uint8_t)(primitiveState.depth | (primitiveState.textureFlags >> 2) |
                              (primitiveState.ps1Light ? 32 : 0) |
                              (primitiveState.emission.enabled ? 64 : 0) | (primitiveState.screenOverlay ? 128 : 0));
-    /* Depth bias, sampling rule, hull motion and blend mode + 1. */
+    /* Depth bias, sampling rule, hull motion, blend mode + 1, spark streak. */
     out->mode[3] = (uint8_t)((v->backFacing || v->exactDepth) | (primitiveState.filtered << 1) |
-                             (primitiveState.hullMotion ? 8 : 0) | ((primitiveState.semi + 1) << 4));
+                             (primitiveState.hullMotion ? 8 : 0) | ((primitiveState.semi + 1) << 4) |
+                             (primitiveState.sparkStreak ? 128 : 0));
     for (int i = 0; i < 4; i++) out->filterBounds[i] = (int16_t)primitiveFilterBounds[i];
     memcpy(out->hd, primitiveHd, sizeof(out->hd));
     memcpy(out->hdTexels, primitiveHdTexels, sizeof(out->hdTexels));
