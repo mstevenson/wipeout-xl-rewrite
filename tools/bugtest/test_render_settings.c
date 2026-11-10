@@ -112,6 +112,8 @@ static void ModernProfile(void)
     assert(RenderCurrent()->settings.modern.brightness == 85);
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.bloom);
+    assert(RenderResourcesFor(RenderCurrent()).cameraBlur);
+    assert(RenderCurrent()->settings.modern.cameraBlurAmount == 100);
     assert(PortRenderGeometry().trackDetail == RENDER_TRACK_NATIVE);
     assert(RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
@@ -127,6 +129,14 @@ static void ModernProfile(void)
     assert(RenderResourcesFor(RenderCurrent()).hdr); /* lights work without bloom */
     assert(RenderSet(&portSettings.render, "modern_weapon_lights", "0") && RenderCommit());
     assert(!RenderResourcesFor(RenderCurrent()).hdr);
+    assert(RenderResourcesFor(RenderCurrent()).cameraBlur);
+    assert(RenderSet(&portSettings.render, "modern_camera_blur_strength", "0") && RenderCommit());
+    assert(!RenderResourcesFor(RenderCurrent()).cameraBlur);
+    assert(RenderSet(&portSettings.render, "modern_camera_blur_strength", "300") && RenderCommit());
+    assert(RenderResourcesFor(RenderCurrent()).cameraBlur);
+    assert(RenderSet(&portSettings.render, "modern_camera_blur_strength", "301") && !RenderCommit());
+    assert(RenderSet(&portSettings.render, "modern_camera_blur", "0") && RenderCommit());
+    assert(!RenderResourcesFor(RenderCurrent()).cameraBlur);
     assert(RenderSet(&portSettings.render, "modern_smooth_track_lighting", "0") && RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bilinear", "2") && !RenderCommit());
     assert(RenderSet(&portSettings.render, "modern_bilinear", "-1") && !RenderCommit());
@@ -150,6 +160,7 @@ static void ModernProfile(void)
     assert(strstr(saved, "modern_weapon_lights = 0\n"));
     assert(strstr(saved, "modern_smooth_track_lighting = 0\n"));
     assert(strstr(saved, "modern_track_detail = high\n"));
+    assert(strstr(saved, "modern_camera_blur_strength = 300\n"));
     SDL_free(saved);
     PortSettingsLoad();
     assert(RenderCurrent()->id == RENDER_MODERN && RenderScale(RenderCurrent()) == 3);
@@ -157,6 +168,7 @@ static void ModernProfile(void)
     assert(!RenderCurrent()->settings.modern.bilinear);
     assert(!RenderCurrent()->settings.modern.bloom);
     assert(!RenderCurrent()->settings.modern.weaponLights);
+    assert(!RenderCurrent()->settings.modern.cameraBlur && RenderCurrent()->settings.modern.cameraBlurAmount == 300);
     assert(!RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(PortRenderGeometry().trackDetail == RENDER_TRACK_HIGH);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
@@ -167,6 +179,7 @@ static void ModernProfile(void)
     assert(RenderCurrent()->settings.modern.bilinear);
     assert(RenderCurrent()->settings.modern.brightness == MODERN_BRIGHTNESS_DEFAULT);
     assert(RenderCurrent()->settings.modern.bloom);
+    assert(RenderCurrent()->settings.modern.cameraBlur && RenderCurrent()->settings.modern.cameraBlurAmount == 100);
     assert(RenderGeometryFor(RenderCurrent()).smoothTrackLighting);
     assert(RenderCurrent()->settings.modern.tonemapper == MODERN_TONEMAP_SOFT_SHADOWS);
 }
@@ -200,7 +213,7 @@ static void ModernCustomDistance(void)
     assert(RenderSet(&portSettings.render, "modern_custom_distance", "1") && RenderCommit());
     assert(RenderSceneFor(RenderCurrent())->fadeFar == MODERN_DISTANCE_MIN);
     assert(RenderSet(&portSettings.render, "modern_custom_distance", "9999999999") && RenderCommit());
-    assert(RenderSceneFor(RenderCurrent())->fadeFar == MODERN_DISTANCE_MAX);
+    assert(RenderSceneFor(RenderCurrent())->fadeFar == 150000);
     assert(RenderSet(&portSettings.render, "modern_custom_distance", "invalid") && !RenderCommit());
     RenderFrame ps1 = RenderSnapshot(RENDER_PS1, &portSettings.render);
     assert(!RenderUsesExtendedView(&ps1) && !RenderSceneFor(&ps1)->fade);
@@ -307,7 +320,7 @@ static void ResourcePolicyIsolation(void)
         {"ps1_quantize_vertices", "0"}, {"ps1_depth", "1"}, {"pc_lighting", "0"},
         {"pc_bilinear", "0"}, {"n64_three_point", "0"}, {"n64_dither", "0"},
         {"saturn_affine_textures", "0"}, {"saturn_mesh", "0"}, {"saturn_camera_aligned_sky", "1"},
-        {"modern_bilinear", "0"}, {"modern_brightness", "50"}, {"modern_bloom", "0"},
+        {"modern_bilinear", "0"}, {"modern_brightness", "50"}, {"modern_bloom", "0"}, {"modern_camera_blur", "0"},
         {"modern_tonemapper", "pbr_neutral_soft_shadows"}, {"modern_smooth_track_lighting", "0"}, {"modern_weapon_lights", "0"}
     };
     const RenderMaterial cases[] = {
@@ -329,6 +342,12 @@ static void ResourcePolicyIsolation(void)
         RenderMaterial road = {.textured = 1, .perspective = 1, .smoothTrackLighting = 1};
         assert(!!(RenderPrepare(&frame, &road).shade & SHADE_AFFINE_COLOUR) == (id != RENDER_MODERN));
         assert(resources.hdr == (id == RENDER_MODERN));
+        assert(resources.motionShutterSeconds == (id == RENDER_MODERN ? 0.008f : 0.0f));
+        assert(resources.motionSoloOnly == (id == RENDER_MODERN));
+        assert(RenderFrameResources(&frame, 0, 0).cameraBlur == (id == RENDER_MODERN));
+        assert(!RenderFrameResources(&frame, 1, 0).cameraBlur);
+        assert(!RenderFrameResources(&frame, 0, 1).cameraBlur);
+        assert(RenderFrameResources(&frame, 1, 0).hdr == resources.hdr);
         assert(resources.hdTexturesAtNativeScale == (id == RENDER_MODERN));
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
             RenderStyle style = RenderPrepare(&frame, &cases[i]);
@@ -648,8 +667,9 @@ int main(void)
         assert(RenderPacingSetting(&portSettings.render, renderer)->rate ==
                (modern ? FRAME_RATE_VSYNC : FRAME_RATE_CONSOLE));
         const RenderScene *scene = RenderSceneSetting(&portSettings.render, renderer);
-        assert(scene->farView == modern && scene->fade == modern && scene->farFlares == modern);
+        assert(!scene->farView && scene->fade == modern && scene->farFlares == modern);
     }
+    assert(portSettings.render.modern.customDistance == 100000);
     assert(portSettings.render.pc.rgb565);
     assert(portSettings.render.pc.drawDistance == 1);
     assert(!portSettings.render.pc.correctMenuAspect);

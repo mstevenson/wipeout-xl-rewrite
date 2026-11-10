@@ -37,6 +37,7 @@
 #include "../link.h"
 #include "../platform.h"
 #include "../settings.h"
+#include "../trace.h"
 
 #include "gl_pipeline.h"
 #include <math.h>
@@ -80,12 +81,13 @@ static GLuint wideFramebuffer, wideColour, wideDepth;
 /* The HDR draw FBO shares SDR colour and depth, keeping the draw buffer
    configuration stable across batches. The auxiliary FBO seeds and copies HDR. */
 typedef struct SceneHdr {
-    GLuint textures[2], framebuffer, drawFramebuffer;
+    GLuint textures[2], velocity, framebuffer, drawFramebuffer;
     unsigned bands;
-    int unavailable;
+    int unavailable, velocityUnavailable, velocityActive;
 } SceneHdr;
 static SceneHdr sceneHdr, wideHdr;
-static const GLenum hdrDrawBuffers[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
+static const GLenum hdrDrawBuffers[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1,
+                                         GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3};
 static int wideDirty;                          /* drawn into since its middle was copied to video memory's */
 static int wideHdrDirty;                       /* HDR needs its own copy only for narrow presentation */
 static int areaWide;                           /* the draw area is in the screen's columns: drawn wide */
@@ -113,6 +115,7 @@ typedef struct BatchVertex {
     int16_t hdTexels[4]; /* ... the texels of the page it covers, x, y, w, h */
     float view[4]; /* xyz and eligibility for surface lighting */
     int16_t emissionUv[4]; /* source emission centre and half-size; width zero means whole face */
+    float shutterDelta[3];
 } BatchVertex;
 static BatchVertex batch[BATCH_VERTICES];
 static int primitiveFilterBounds[4];
@@ -124,6 +127,12 @@ typedef struct PictureOwner {
     int valid, race;
 } PictureOwner;
 static PictureOwner pictureOwners[2];
+static struct {
+    RenderMotionPicture picture;
+    GLuint framebuffer;
+    uint64_t revision, pass;
+    int wide, ready;
+} motionPictures[2];
 static float batchLeft, batchTop, batchRight, batchBottom;
 
 /* Both screen revisions share a clock, so a crop spanning them can use the newer one.
@@ -229,6 +238,7 @@ static void DeleteHdr(SceneHdr *hdr)
     if (hdr->drawFramebuffer) glDeleteFramebuffers(1, &hdr->drawFramebuffer);
     if (hdr->framebuffer) glDeleteFramebuffers(1, &hdr->framebuffer);
     if (hdr->textures[0] || hdr->textures[1]) glDeleteTextures(2, hdr->textures);
+    if (hdr->velocity) glDeleteTextures(1, &hdr->velocity);
     *hdr = (SceneHdr){0};
 }
 
@@ -242,8 +252,8 @@ static int CreateHdr(SceneHdr *hdr, GLuint sdr, GLuint depth, int width)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->framebuffer);
     for (int i = 0; i < 2; i++) {
         glBindTexture(GL_TEXTURE_2D, hdr->textures[i]);
-        glTexImage2D(GL_TEXTURE_2D, 0, i ? GL_RG8 : GL_RGBA16F, width, PixelY(VRAM_HEIGHT),
-                     0, i ? GL_RG : GL_RGBA, i ? GL_UNSIGNED_BYTE : GL_HALF_FLOAT, NULL);
+        glTexImage2D(GL_TEXTURE_2D, 0, i ? GL_RGBA8 : GL_RGBA16F, width, PixelY(VRAM_HEIGHT),
+                     0, GL_RGBA, i ? GL_UNSIGNED_BYTE : GL_HALF_FLOAT, NULL);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0 + i, GL_TEXTURE_2D, hdr->textures[i], 0);
@@ -265,6 +275,66 @@ static int CreateHdr(SceneHdr *hdr, GLuint sdr, GLuint depth, int width)
     return 0;
 }
 
+/* Attach velocity to the same passes that draw and clear scene coverage. */
+static void CreateVelocity(SceneHdr *hdr, int width)
+{
+    if (hdr->velocity || hdr->velocityUnavailable) return;
+    glActiveTexture(GL_TEXTURE0);
+    glGenTextures(1, &hdr->velocity);
+    glBindTexture(GL_TEXTURE_2D, hdr->velocity);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, PixelY(VRAM_HEIGHT),
+                 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->framebuffer);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, hdr->velocity, 0);
+    glDrawBuffers(3, hdrDrawBuffers);
+    int ready = glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->drawFramebuffer);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, hdr->velocity, 0);
+    glDrawBuffers(4, hdrDrawBuffers);
+    if (ready && glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+        const GLfloat zero[4] = {0};
+        glDisable(GL_SCISSOR_TEST);
+        glClearBufferfv(GL_COLOR, 3, zero);
+        return;
+    }
+
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, 0, 0);
+    glDrawBuffers(3, hdrDrawBuffers);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->framebuffer);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, 0, 0);
+    glDrawBuffers(2, hdrDrawBuffers);
+    glDeleteTextures(1, &hdr->velocity);
+    hdr->velocity = 0;
+    hdr->velocityUnavailable = 1;
+    SDL_Log("Motion vector target unavailable at %dx%d", width, PixelY(VRAM_HEIGHT));
+}
+
+/* Retain storage for buffered pictures, but write motion only when requested. */
+static void SetVelocity(SceneHdr *hdr, int width, int enabled)
+{
+    if (enabled) CreateVelocity(hdr, width);
+    enabled = enabled && hdr->velocity != 0;
+    if (enabled == hdr->velocityActive || !hdr->framebuffer) return;
+    hdr->velocityActive = enabled;
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->framebuffer);
+    glDrawBuffers(enabled ? 3 : 2, hdrDrawBuffers);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->drawFramebuffer);
+    glDrawBuffers(enabled ? 4 : 3, hdrDrawBuffers);
+    if (enabled) {
+        const GLfloat zero[4] = {0};
+        glDisable(GL_SCISSOR_TEST);
+        glClearBufferfv(GL_COLOR, 3, zero);
+    }
+}
+
+static RenderResources FrameResources(void)
+{
+    return RenderFrameResources(RenderCurrent(), PortLinkRole() != LINK_NONE, PortTracing());
+}
+
 static unsigned HdrBands(float top, float bottom)
 {
     return ((top < 256 && bottom > 0) ? 1u : 0u) |
@@ -282,10 +352,14 @@ static void SeedHdrRect(const SceneHdr *hdr, GLuint sdr, int left, int top, int 
 static void ClearHdr(const SceneHdr *hdr, int y, int h, const GLfloat sdr[4])
 {
     if (!(hdr->bands & HdrBands(y, y + h))) return;
-    const GLfloat mask[4] = {0};
+    const GLfloat mask[4] = {0, 0, 0, 1};
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, hdr->framebuffer);
     glClearBufferfv(GL_COLOR, 0, sdr);
     glClearBufferfv(GL_COLOR, 1, mask);
+    if (hdr->velocityActive) {
+        const GLfloat zero[4] = {0};
+        glClearBufferfv(GL_COLOR, 2, zero);
+    }
 }
 
 static void SeedHdrBands(SceneHdr *hdr, GLuint sdr, unsigned bands, int width)
@@ -313,7 +387,7 @@ static void BlitHdr(const SceneHdr *src, const SceneHdr *dst, int x, int y, int 
     glDrawBuffers(2, maskOnly);
     glBlitFramebuffer(x, y, right, bottom, leftTo, topTo, rightTo, bottomTo, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
-    glDrawBuffers(2, hdrDrawBuffers);
+    glDrawBuffers(dst->velocityActive ? 3 : 2, hdrDrawBuffers);
 }
 
 /* Preserve both display buffers when adding or removing widescreen columns. */
@@ -351,6 +425,11 @@ void GpuRendererShutdown(void)
     scene = NULL;
     DeleteHdr(&sceneHdr);
     DeleteHdr(&wideHdr);
+    for (int i = 0; i < 2; i++) {
+        glDeleteFramebuffers(1, &motionPictures[i].framebuffer);
+        glDeleteTextures(1, &motionPictures[i].picture.depth);
+    }
+    memset(motionPictures, 0, sizeof(motionPictures));
     RenderGlSeedShutdown();
     wideHdrDirty = 0;
 }
@@ -405,6 +484,8 @@ int GpuInit(void)
     glVertexAttribPointer(10, 4, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, view));
     glEnableVertexAttribArray(9);
     glVertexAttribIPointer(9, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, emissionUv));
+    glEnableVertexAttribArray(11);
+    glVertexAttribPointer(11, 3, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, shutterDelta));
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -798,7 +879,7 @@ static int SameState(const GpuDrawState *a, const GpuDrawState *b)
 
 /* The premultiplied blend every fragment says how much of what is behind stays in (the shader's Out), or the
    console's subtraction; the framebuffer's alpha stays as it is. */
-static void SetBlend(int subtract)
+static void SetBlend(int subtract, int auxiliary)
 {
     if (!Blended(&batchState)) {
         glDisable(GL_BLEND); /* (the shader writes the colour itself: coverage 1, no fade) */
@@ -806,17 +887,20 @@ static void SetBlend(int subtract)
     }
     glEnable(GL_BLEND);
     glBlendEquation(subtract ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD);
-    glBlendFuncSeparate(GL_ONE, subtract ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA, GL_ZERO, GL_ONE);
+    /* A subtractive HUD fragment lowers auxiliary alpha to mark its coverage.
+       Subtractive scene colour has zero alpha and still preserves destination alpha. */
+    glBlendFuncSeparate(GL_ONE, subtract ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA,
+                        subtract && auxiliary ? GL_ONE : GL_ZERO, GL_ONE);
 }
 
 /* The depth buffer's slack: what is drawn after may be this much farther (a fraction of its depth) than what is
    drawn before at that pixel and still be drawn over it, as in the game's order. */
 #define DEPTH_SLACK 0.02f
 
-static void DrawBatch(int pass)
+static void DrawBatch(int pass, int auxiliary)
 {
     glUniform1i(scene->uniformPass, pass);
-    SetBlend(pass == 2);
+    SetBlend(pass == 2, auxiliary);
     glDrawArrays(batchPoints ? GL_POINTS : GL_TRIANGLES, 0, batchCount);
 }
 
@@ -831,7 +915,7 @@ static void Flush(void)
         return;
     }
     const RenderFrame *render = RenderCurrent();
-    RenderResources resources = RenderResourcesFor(render);
+    RenderResources resources = FrameResources();
     UsePipeline(render->id);
     int fullWide = areaWide && areaX == 0 && areaW == SCREEN_COLUMNS;
     float left = SDL_max(batchLeft, fullWide ? -wideMargin : areaX);
@@ -844,11 +928,15 @@ static void Flush(void)
     unsigned bands = right > left && left < SCREEN_COLUMNS + (areaWide ? wideMargin : 0) && bottom > top
                          ? HdrBands(top, bottom) : 0;
     int writeHdr = 0;
-    if (bands && resources.hdr && GpuRaceWide()) {
+    if (!resources.cameraBlur) SetVelocity(hdr, 0, 0);
+    if (bands && (resources.hdr || resources.cameraBlur) && GpuRaceWide()) {
         int width = PixelX(areaWide ? WideWidth() : VRAM_WIDTH);
         writeHdr = CreateHdr(hdr, areaWide ? wideColour : colour, areaWide ? wideDepth : depthBuffer, width);
-        if (writeHdr) SeedHdrBands(hdr, areaWide ? wideColour : colour, bands,
-                                   areaWide ? width : PixelX(SCREEN_COLUMNS));
+        if (writeHdr) {
+            SetVelocity(hdr, width, resources.cameraBlur);
+            SeedHdrBands(hdr, areaWide ? wideColour : colour, bands,
+                         areaWide ? width : PixelX(SCREEN_COLUMNS));
+        }
     }
     if (!writeHdr) hdr->bands &= ~bands;
     glUseProgram(scene->program);
@@ -904,10 +992,10 @@ static void Flush(void)
     if (s->semi == 2) {
         /* the console's subtraction: what is opaque (texels without the semi-transparency bit) drawn first, then
            the rest subtracted */
-        DrawBatch(1);
-        DrawBatch(2);
+        DrawBatch(1, writeHdr);
+        DrawBatch(2, writeHdr);
     } else {
-        DrawBatch(0);
+        DrawBatch(0, writeHdr);
     }
     glDisable(GL_DEPTH_TEST);
 #if !defined(__EMSCRIPTEN__) && !defined(PORT_GL_LINKED)
@@ -1104,6 +1192,8 @@ static void Add(const GpuVertex *v, unsigned shade)
     out->x = v->x;
     out->y = v->y;
     memcpy(out->view, v->view, sizeof(v->view));
+    if (primitiveState.hullMotion) memcpy(out->shutterDelta, v->shutterDelta, sizeof(out->shutterDelta));
+    else memset(out->shutterDelta, 0, sizeof(out->shutterDelta));
     out->view[3] = v->w > 0 && v->view[2] != 0 && !v->noDepth &&
                    primitiveState.semi < 0 && !primitiveState.raw && primitiveState.pointLights != NULL;
     out->w = v->w > 0.0f && v->noDepth ? -v->w : v->w; /* (the vertex shader's position.z) */
@@ -1128,9 +1218,9 @@ static void Add(const GpuVertex *v, unsigned shade)
     out->mode[2] = (uint8_t)(primitiveState.depth | (primitiveState.textureFlags >> 2) |
                              (primitiveState.ps1Light ? 32 : 0) |
                              (primitiveState.emission.enabled ? 64 : 0) | (primitiveState.screenOverlay ? 128 : 0));
-    /* Depth bias, sampling rule and blend mode + 1. */
+    /* Depth bias, sampling rule, hull motion and blend mode + 1. */
     out->mode[3] = (uint8_t)((v->backFacing || v->exactDepth) | (primitiveState.filtered << 1) |
-                             (primitiveState.semi + 1) << 4);
+                             (primitiveState.hullMotion ? 8 : 0) | ((primitiveState.semi + 1) << 4));
     for (int i = 0; i < 4; i++) out->filterBounds[i] = (int16_t)primitiveFilterBounds[i];
     memcpy(out->hd, primitiveHd, sizeof(out->hd));
     memcpy(out->hdTexels, primitiveHdTexels, sizeof(out->hdTexels));
@@ -1380,6 +1470,10 @@ static void Clear(int x, int y, int w, int h, GLbitfield buffers, int seedHdr, u
     /* Every cleared render pass needs its own sky, including interpolated
        pictures, which call GpuClearArea rather than GpuClearDepth. */
     drawPass++;
+    if (!FrameResources().cameraBlur) {
+        SetVelocity(&sceneHdr, 0, 0);
+        SetVelocity(&wideHdr, 0, 0);
+    }
     if (buffers & GL_COLOR_BUFFER_BIT) {
         if (w > 0) PictureChanged(y, h);
         RememberPicture(x, y, SDL_min(x + w, SCREEN_COLUMNS) - x, h);
@@ -1416,11 +1510,71 @@ void GpuClearArea(int x, int y, int w, int h, uint8_t r, uint8_t g, uint8_t b)
 
 void GpuClearDepth(int x, int y, int w, int h, int mainTable)
 {
-    const RenderFrame *render = RenderCurrent();
-    int seedHdr = mainTable && RenderResourcesFor(render).hdr &&
+    RenderResources resources = FrameResources();
+    int seedHdr = mainTable && (resources.hdr || resources.cameraBlur) &&
                   GpuRaceWide() && (sceneHdr.bands || wideHdr.bands);
     if (seedHdr && w > 0) PictureChanged(y, h);
     Clear(x, y, w, h, GL_DEPTH_BUFFER_BIT, seedHdr, 0, 0, 0);
+}
+
+void GpuCaptureCameraMotion(int x, int y, int w, int h, const GpuCameraMotion *motion, int hudOnly)
+{
+    if (x != 0 || w != SCREEN_COLUMNS || y < 0 || h <= 0 || y + h > VRAM_HEIGHT ||
+        y / 256 != (y + h - 1) / 256) return;
+
+    Flush();
+    int band = y / 256;
+    int wide = wideMargin != 0;
+    int top = PixelY(y), width = PixelX(wide ? WideWidth() : w), height = PixelY(y + h) - top;
+    __typeof__(motionPictures[0]) *snapshot = &motionPictures[band];
+    RenderMotionPicture *picture = &snapshot->picture;
+    if (hudOnly) {
+        /* The next table clears depth but draws HUD over the same world. */
+        if (snapshot->revision && snapshot->pass + 1 == drawPass && snapshot->wide == wide &&
+            picture->top == top && picture->width == width && picture->height == height)
+            snapshot->revision = pictureRevision[band];
+        return;
+    }
+
+    snapshot->revision = 0;
+    GLuint velocity = (wide ? &wideHdr : &sceneHdr)->velocity;
+    if (!motion || !velocity) return;
+    if (!picture->depth) {
+        glGenTextures(1, &picture->depth);
+        glGenFramebuffers(1, &snapshot->framebuffer);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, snapshot->framebuffer);
+    if (picture->width != width || picture->height != height) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, picture->depth);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, width, height,
+                     0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, picture->depth, 0);
+        const GLenum none = GL_NONE;
+        glDrawBuffers(1, &none);
+        glReadBuffer(GL_NONE);
+        snapshot->ready = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        picture->width = width;
+        picture->height = height;
+    }
+    if (snapshot->ready) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, wide ? wideFramebuffer : framebuffer);
+        glDisable(GL_SCISSOR_TEST);
+        glBlitFramebuffer(0, top, width, top + height, 0, 0, width, height, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        picture->top = top;
+        picture->velocity = velocity;
+        picture->projection[0] = motion->centreX * ScaleX() + (wide ? PixelX(wideMargin) : 0);
+        picture->projection[1] = motion->centreY * ScaleY();
+        picture->projection[2] = motion->focal * ScaleX();
+        picture->projection[3] = motion->focal * ScaleY();
+        memcpy(picture->earlier, motion->earlier, sizeof(picture->earlier));
+        snapshot->wide = wide;
+        snapshot->pass = drawPass;
+        snapshot->revision = pictureRevision[band];
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
 }
 
 /* Reads drawn pixels back into video memory (15-bit, each the framebuffer's
@@ -1634,7 +1788,7 @@ static void BlitShown(int wide, int left, int top, int right, int bottom, int x0
         revision = SDL_max(pictureRevision[0], pictureRevision[1]);
     RenderPresent p = {wide ? wideColour : colour, wide ? wideFramebuffer : framebuffer,
                        revision, scale, owner->valid ? owner->race : GpuRaceWide(),
-                       left, top, right, bottom, x0, y0, x1, y1, 0, 0, 0};
+                       left, top, right, bottom, x0, y0, x1, y1, 0, 0, 0, NULL};
     const SceneHdr *hdr = wide ? &wideHdr : &sceneHdr;
     unsigned bands = (top < PixelY(256) ? 1u : 0u) | (bottom > PixelY(256) ? 2u : 0u);
     if ((hdr->bands & bands) == bands && (wide || right <= PixelX(SCREEN_COLUMNS))) {
@@ -1642,6 +1796,13 @@ static void BlitShown(int wide, int left, int top, int right, int bottom, int x0
         p.hdrMask = hdr->textures[1];
         if (wide) p.hdrWidth = PixelX(WideWidth());
     }
+    const __typeof__(motionPictures[0]) *snapshot = &motionPictures[buffer];
+    const RenderMotionPicture *motion = &snapshot->picture;
+    if (p.hdrMask && hdr->velocity && hdr->velocity == motion->velocity &&
+        snapshot->revision && snapshot->revision == revision && snapshot->wide == wide &&
+        left >= motion->left && right <= motion->left + motion->width &&
+        top >= motion->top && bottom <= motion->top + motion->height)
+        p.motion = motion;
     const RenderPipeline *next = RenderGlPipeline(shown->id);
     /* Presenting an older buffer neither compiles a scene shader nor evicts the
        drawing renderer. Release resources once neither path uses their owner. */

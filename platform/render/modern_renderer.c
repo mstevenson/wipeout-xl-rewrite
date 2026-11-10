@@ -31,7 +31,10 @@ static RenderGeometry Geometry(const void *profile)
 static RenderResources Resources(const void *profile)
 {
     const ModernRenderSettings *settings = profile;
-    return (RenderResources){.hdTexturesAtNativeScale = 1, .hdr = settings->bloom || settings->weaponLights};
+    return (RenderResources){.hdTexturesAtNativeScale = 1,
+                             .hdr = settings->bloom || settings->weaponLights,
+                             .cameraBlur = settings->cameraBlur && settings->cameraBlurAmount > 0,
+                             .motionSoloOnly = 1, .motionShutterSeconds = 0.008f};
 }
 
 static RenderPacketPolicy Packets(const void *profile)

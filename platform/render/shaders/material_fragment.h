@@ -88,7 +88,7 @@
 #endif
     "    fragment = BlendMaterial(col * fade, cov * fade, blended);\n"
 #ifdef RENDER_AUX_COLOUR
-    "    if (hdrActive) WriteAux(BlendMaterial(HdrMaterial(unclamped, cov) * fade, cov * fade, blended));\n"
+    "    if (hdrActive) WriteAux(BlendMaterial(HdrMaterial(unclamped, cov) * fade, cov * fade, blended), cov * fade);\n"
 #endif
     "}\n"
     "ivec2 WindowUV(ivec2 uv) {\n"
@@ -212,7 +212,7 @@
     "        vec3 hdrSemi = HdrMaterial(semi.rgb, semi.a);\n"
     "        float semiWeight = semiMode == 0 ? 0.5 : (semiMode == 3 ? 0.25 : 1.0);\n"
     "        float coverage = opaque.a + (semiMode == 0 ? semi.a * 0.5 : 0.0);\n"
-    "        WriteAux(vec4(hdrOpaque + hdrSemi * semiWeight, coverage) * fade);\n"
+    "        WriteAux(vec4(hdrOpaque + hdrSemi * semiWeight, coverage) * fade, (opaque.a + semi.a) * fade);\n"
     "    }\n"
 #endif
     /* RGB is premultiplied by coverage: cap SDR tinted colours at coverage. */

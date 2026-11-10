@@ -44,6 +44,9 @@ static void ResetRenderSettings(void)
 }
 static int n64Track;
 int portPal;
+static int testLinkRole, testTracing;
+int PortLinkRole(void) { return testLinkRole; }
+int PortTracing(void) { return testTracing; }
 static int testWindowWidth = 1280, testWindowHeight = 960;
 void PortDrawableSize(int *w, int *h) { *w = testWindowWidth; *h = testWindowHeight; }
 void HdTexSetScale(int value) { (void)value; }
@@ -2583,6 +2586,181 @@ static void ModernWeaponLights(void)
     puts("Modern dynamic lights: diffuse falloff, shield-lit hull textures in darkness and hit tint, filtered/nearest, HUD/sky/shadow exclusion, bloom independence, HDR/SDR and profile isolation: OK");
 }
 
+static void MotionQuad(const GpuDrawState *draw, int x, int y, int w, int h, float depth, int red, int green, float dy)
+{
+    GpuVertex v[4];
+    for (int i = 0; i < 4; i++) {
+        v[i] = (GpuVertex){.x = x + (i & 1) * w, .y = y + (i >> 1) * h, .w = depth,
+                           .r = red, .g = green, .b = green, .a = 255,
+                           .view = {0, 0, depth}, .shutterDelta = {0, dy, 0}};
+    }
+    GpuTriangles(draw, v, 3);
+    GpuTriangles(draw, v + 1, 3);
+}
+
+static void ModernMotionResources(void)
+{
+    wideMargin = areaWide = wideDirty = 0;
+    portPal = 0;
+    scale = rasterX = rasterY = 1;
+    assert(CreateFramebuffer());
+    ResetRenderSettings();
+    portSettings.render.selection = RENDER_MODERN;
+    RenderCommit();
+    PortWideScene();
+    GpuSetDrawArea(0, 0, 320, 240, 0, 0);
+    const GpuDrawState solid = {.semi = -1};
+    /* A fresh linked or traced race must never allocate the velocity target. */
+    for (int state = 0; state < 2; state++) {
+        testLinkRole = state == 0 ? LINK_MASTER : LINK_NONE;
+        testTracing = state == 1;
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0);
+        MotionQuad(&solid, 20, 20, 40, 40, 100, 200, 100, 0);
+        GpuFlush();
+        assert(sceneHdr.framebuffer && !sceneHdr.velocity);
+    }
+    testTracing = 0;
+    /* Check actual draw-buffer routing across opt-out, link, trace and re-enable. */
+    for (int state = 0; state < 5; state++) {
+        portSettings.render.modern.cameraBlur = state != 1;
+        testLinkRole = state == 2 ? LINK_MASTER : LINK_NONE;
+        testTracing = state == 3;
+        RenderCommit();
+        GpuClearArea(0, 0, 320, 240, 0, 0, 0);
+        MotionQuad(&solid, 20, 20, 40, 40, 100, 200, 100, 0);
+        GpuFlush();
+        int enabled = state == 0 || state == 4;
+        GLint buffer;
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneHdr.drawFramebuffer);
+        glGetIntegerv(GL_DRAW_BUFFER3, &buffer);
+        assert(buffer == (enabled ? GL_COLOR_ATTACHMENT3 : GL_NONE));
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneHdr.framebuffer);
+        glGetIntegerv(GL_DRAW_BUFFER2, &buffer);
+        assert(buffer == (enabled ? GL_COLOR_ATTACHMENT2 : GL_NONE));
+        assert(sceneHdr.velocity && sceneHdr.velocityActive == enabled);
+        assert(glGetError() == GL_NO_ERROR);
+    }
+    GpuRendererShutdown();
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &colour);
+    glDeleteRenderbuffers(1, &depthBuffer);
+    puts("Modern motion resources: link/trace allocation bypass and blur toggle draw-buffer routing: OK");
+}
+
+static void ModernCameraBlur(int renderScale)
+{
+    wideMargin = areaWide = wideDirty = 0;
+    portPal = 0;
+    scale = renderScale; rasterX = rasterY = renderScale;
+    assert(CreateFramebuffer());
+    ResetRenderSettings();
+    portSettings.render.selection = RENDER_MODERN;
+    portSettings.render.modern.resample = 0;
+    portSettings.render.modern.weaponLights = 0;
+    portSettings.render.modern.tonemapper = MODERN_TONEMAP_ORIGINAL;
+    RenderCommit();
+    PortWideScene();
+    const GpuDrawState solid = {.semi = -1}, additive = {.semi = 1};
+    const GpuDrawState hull = {.semi = -1, .hullMotion = 1};
+    const GpuCameraMotion motion = {
+        .earlier = {{1, 0, 0, -10}, {0, 1, 0, 0}, {0, 0, 1, 0}},
+        .centreX = 160, .focal = 160
+    };
+    static uint8_t sharp[352 * 240 * 4], blurred[352 * 240 * 4];
+
+    for (int wide = 0; wide <= 1; wide++) {
+        int margin = wide * 16, width = 320 + margin * 2, y = wide * 256;
+        size_t bytes = (size_t)width * 240 * 4;
+        SetWideMargin(margin);
+        portSettings.render.modern.bloom = wide;
+        RenderCommit();
+        GpuSetDrawArea(0, y, 320, 240, 0, y);
+        GpuClearArea(0, y, 320, 240, 0, 0, 0);
+        MotionQuad(&solid, -margin, y + 16, width, 64, 100, 32, 32, 0);
+        MotionQuad(&solid, 20, y + 16, 4, 64, 100, 200, 200, 0);
+        /* Two hulls at the same depth. Their contrasting stripes should
+           stay sharp at zero screen motion and streak during lateral motion. */
+        MotionQuad(&hull, 112, y + 16, 16, 64, 60, 64, 20, 0);
+        MotionQuad(&hull, 117, y + 16, 4, 64, 60, 220, 30, 0);
+        MotionQuad(&hull, 140, y + 16, 16, 64, 60, 64, 20, -10);
+        MotionQuad(&hull, 140, y + 41, 16, 4, 60, 220, 30, -10);
+        /* The points have identical SDR values. Only the right point has
+           accumulated radiance above display white. */
+        MotionQuad(&solid, 190, y + 44, 1, 1, 80, 255, 255, 0);
+        MotionQuad(&solid, 220, y + 44, 1, 1, 80, 255, 255, 0);
+        for (int i = 0; i < 3; i++)
+            MotionQuad(&additive, 220, y + 44, 1, 1, 80, 255, 255, 0);
+        MotionQuad(&solid, -margin, y + 80, width, 64, 6400, 32, 32, 0);
+        MotionQuad(&solid, 20, y + 80, 4, 64, 6400, 200, 200, 0);
+        GpuCameraMotion view = motion;
+        view.centreY = y + 120;
+        GpuCaptureCameraMotion(0, y, 320, 240, &view, 0);
+
+        /* The second table clears depth. Keep the scene snapshot across HUD draws. */
+        GpuClearDepth(0, y, 320, 240, 0);
+        for (int mode = -1; mode <= 3; mode++) {
+            GpuDrawState hud = {.semi = mode};
+            MotionQuad(&hud, 40 + 12 * (mode + 1), y + 16, 4, 64, 0, 120, 0, 0);
+        }
+        GpuCaptureCameraMotion(0, y, 320, 240, NULL, 1);
+        const uint8_t *pixels = GpuReadPicture(0, y, 320, 240, margin, width, 240);
+        memcpy(blurred, pixels, bytes);
+        assert(!memcmp(blurred, GpuReadPicture(0, y, 320, 240, margin, width, 240), bytes));
+
+        /* A cut can reuse the texture and must still match the opt-out exactly. */
+        pictureOwners[wide].render.settings.modern.cameraBlur = 0;
+        memcpy(sharp, GpuReadPicture(0, y, 320, 240, margin, width, 240), bytes);
+        ModernRenderSettings *profile = &pictureOwners[wide].render.settings.modern;
+        profile->cameraBlur = 1;
+        profile->cameraBlurAmount = 0;
+        assert(!memcmp(sharp, GpuReadPicture(0, y, 320, 240, margin, width, 240), bytes));
+
+        /* The default reaches two pixels into the track. At 50%, it reaches one. */
+        int outerEdge = (40 * width + margin + 18) * 4;
+        assert(blurred[outerEdge] > sharp[outerEdge]);
+        profile->cameraBlurAmount = 50;
+        assert(GpuReadPicture(0, y, 320, 240, margin, width, 240)[outerEdge] == sharp[outerEdge]);
+        profile->cameraBlurAmount = MODERN_BLUR_DEFAULT;
+        assert(!memcmp(blurred, GpuReadPicture(0, y, 320, 240, margin, width, 240), bytes));
+
+        int edge = (40 * width + margin + 19) * 4;
+        assert(blurred[edge] > sharp[edge]);
+        int hullRegion = (40 * width + margin + 108) * 4;
+        assert(!memcmp(blurred + hullRegion, sharp + hullRegion, 24 * 4));
+        int movingStripeEdge = (39 * width + margin + 148) * 4;
+        assert(blurred[movingStripeEdge] > sharp[movingStripeEdge]);
+        int outsideSide = (30 * width + margin + 139) * 4;
+        assert(blurred[outsideSide] == sharp[outsideSide]); /* perpendicular to the hull sweep */
+        int outsideFront = (14 * width + margin + 148) * 4;
+        assert(blurred[outsideFront] > sharp[outsideFront]); /* outside the original polygon, over sky */
+        assert(!memcmp(blurred + 90 * width * 4, sharp + 90 * width * 4, 150 * width * 4));
+        if (!wide) { /* bloom is off, so this difference comes from radiance in the motion gather */
+            int point = (44 * width + 190) * 4, streak = point - 2 * 4;
+            assert(sharp[point] == 255 && sharp[point + 30 * 4] == 255);
+            assert(blurred[streak] > sharp[streak]);
+            assert(blurred[streak + 30 * 4] > blurred[streak] + 32);
+            profile->weaponLights = 1; /* enable the HDR tone mapper, still with bloom off */
+            const uint8_t *mapped = GpuReadPicture(0, y, 320, 240, margin, width, 240);
+            assert(mapped[streak + 30 * 4] > mapped[streak] + 32);
+            profile->weaponLights = 0;
+        }
+        for (int mode = -1; mode <= 3; mode++) {
+            int x = 40 + 12 * (mode + 1) + margin;
+            assert(!memcmp(blurred + (40 * width + x - 2) * 4,
+                           sharp + (40 * width + x - 2) * 4, 8 * 4));
+        }
+        GpuCaptureCameraMotion(0, y, 320, 240, NULL, 0);
+        assert(!memcmp(sharp, GpuReadPicture(0, y, 320, 240, margin, width, 240), bytes));
+        assert(glGetError() == GL_NO_ERROR);
+    }
+    SetWideMargin(0);
+    GpuRendererShutdown();
+    glDeleteFramebuffers(1, &framebuffer);
+    glDeleteTextures(1, &colour);
+    glDeleteRenderbuffers(1, &depthBuffer);
+    printf("Modern camera blur at %dx: silhouette trails, HDR streaks, strength, stationary hull and HUD, cuts and widescreen: OK\n", renderScale);
+}
+
 int main(void)
 {
     ResetRenderSettings();
@@ -2618,7 +2796,8 @@ int main(void)
     glVertexAttribIPointer(8, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, filterBounds));
     glVertexAttribIPointer(9, 4, GL_SHORT, sizeof(BatchVertex), (void *)offsetof(BatchVertex, emissionUv));
     glVertexAttribPointer(10, 4, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, view));
-    for (int i = 0; i < 11; i++) glEnableVertexAttribArray((GLuint)i);
+    glVertexAttribPointer(11, 3, GL_FLOAT, GL_FALSE, sizeof(BatchVertex), (void *)offsetof(BatchVertex, shutterDelta));
+    for (int i = 0; i < 12; i++) glEnableVertexAttribArray((GLuint)i);
 
     glGenTextures(1, &vramTexture); glBindTexture(GL_TEXTURE_2D, vramTexture);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_R16UI, 1024, 1024, 0, GL_RED_INTEGER, GL_UNSIGNED_SHORT, words);
@@ -2753,6 +2932,9 @@ int main(void)
     ProfileNativeResolution();
     ModernHdr();
     ModernWeaponLights();
+    ModernMotionResources();
+    ModernCameraBlur(1);
+    ModernCameraBlur(3);
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
     puts("Production GL shaders: N64 three-point, optional bilinear native/HD, bounds/wrapping/windows, coverage/blend passes and default PS1 sampling: OK");
     return 0;

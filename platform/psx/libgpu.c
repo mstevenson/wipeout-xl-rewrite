@@ -1064,6 +1064,7 @@ static void Vertex(GpuVertex *v, uint32_t xy, const GtePrecise *precise)
     int x = (int32_t)(xy << 21) >> 21, y = (int32_t)(xy << 5) >> 21;
     GtePrecise moved;
 
+    memset(v->shutterDelta, 0, sizeof(v->shutterDelta));
     if (precise && interpolating && GteInterpolate(precise, interpolationAlong, &moved)) {
         double view[3];
         if (GteViewAt(precise, interpolationAlong, view)) {
@@ -1138,10 +1139,11 @@ typedef struct ShieldPackets {
     float glow[4];
 } ShieldPackets;
 
-typedef struct ShipLightRange {
+typedef struct ShipPackets {
     PacketRange hull;
     CVECTOR previous;
-} ShipLightRange;
+    int hasPreviousLight;
+} ShipPackets;
 
 static struct {
     uint32_t frame;
@@ -1162,7 +1164,7 @@ typedef struct TrackPackets {
     int reorderExhaust;
     ShieldPackets shields[SHIELD_DRAWS];
     int shieldCount;
-    ShipLightRange shipLights[SHIP_EXHAUSTS];
+    ShipPackets ships[SHIP_EXHAUSTS];
 } TrackPackets;
 static TrackPackets building;      /* the frame being built's */
 static TrackPackets tableTrack[4]; /* ... the tables drawn's (a table is drawn again between frames) */
@@ -1198,13 +1200,16 @@ void PortShieldPackets(int ship, const void *start, const void *end)
 void PortShipPackets(int ship, const void *start, const void *end, const CVECTOR *roadLight)
 {
     if (start == end) return;
+    ShipPackets *packets = &building.ships[ship];
+    *packets = (ShipPackets){.hull = {start, end}};
     for (int i = 0; i < building.shieldCount; i++) {
         if (building.shields[i].ship == ship) building.shields[i].hull = (PacketRange){start, end};
     }
     if (!roadLight) return;
     uint32_t frame = GteFrameRecorded();
     if (shipLightHistory[ship].frame && shipLightHistory[ship].frame + 1 == frame) {
-        building.shipLights[ship] = (ShipLightRange){{start, end}, shipLightHistory[ship].colour};
+        packets->previous = shipLightHistory[ship].colour;
+        packets->hasPreviousLight = 1;
     }
     shipLightHistory[ship].frame = frame;
     shipLightHistory[ship].colour = *roadLight;
@@ -1215,11 +1220,11 @@ void PortShipPackets(int ship, const void *start, const void *end, const CVECTOR
 static void BlendShipLight(const uint32_t *packet, GpuVertex *vertices, int count)
 {
     if (!interpolating || walkTrack < 0) return;
-    const ShipLightRange *lights = tableTrack[walkTrack].shipLights;
+    const ShipPackets *ships = tableTrack[walkTrack].ships;
     for (int i = 0; i < SHIP_EXHAUSTS; i++) {
-        if (!PacketInRange(packet, lights[i].hull)) continue;
+        if (!ships[i].hasPreviousLight || !PacketInRange(packet, ships[i].hull)) continue;
         float along = GtePresentationAlong(interpolationAlong);
-        CVECTOR past = lights[i].previous;
+        CVECTOR past = ships[i].previous;
         uint8_t r = (uint8_t)(past.r + (vertices[0].r - past.r) * along + 0.5f);
         uint8_t g = (uint8_t)(past.g + (vertices[0].g - past.g) * along + 0.5f);
         uint8_t b = (uint8_t)(past.b + (vertices[0].b - past.b) * along + 0.5f);
@@ -1657,6 +1662,9 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back,
             out[cut] = in[i];
             for (k = 0; k < 3; k++) {
                 out[cut].view[k] = in[i].view[k] + (in[j].view[k] - in[i].view[k]) * t;
+                if (draw->hullMotion)
+                    out[cut].v.shutterDelta[k] = (float)(in[i].v.shutterDelta[k] +
+                        (in[j].v.shutterDelta[k] - in[i].v.shutterDelta[k]) * t);
             }
             out[cut].view[2] = plane;
             out[cut].depth = in[i].depth + (in[j].depth - in[i].depth) * t;
@@ -1893,6 +1901,28 @@ static int SaturnFlare(const uint32_t *w, GpuDrawState *draw, GpuVertex v[4], in
     return 1;
 }
 
+static float CameraShutterFraction(void);
+static int CameraBlurOn(void);
+
+static int HullMotion(const uint32_t *packet, GpuVertex *vertices, int count)
+{
+    if (walkTrack < 0 || !CameraBlurOn()) return 0;
+    const ShipPackets *ships = tableTrack[walkTrack].ships;
+    for (int i = 0; i < SHIP_EXHAUSTS; i++) {
+        if (!PacketInRange(packet, ships[i].hull)) continue;
+        if (!GteResolvedBound() || resolvedMask != (1u << count) - 1) return 1;
+        float shutter = CameraShutterFraction();
+        float delta[4][3];
+        for (int k = 0; k < count; k++) {
+            if (!GteVertexShutter(&resolved[k], shutter, delta[k])) return 1;
+        }
+        for (int k = 0; k < count; k++)
+            memcpy(vertices[k].shutterDelta, delta[k], sizeof(delta[k]));
+        return 1;
+    }
+    return 0;
+}
+
 static void Polygon(const uint32_t *w, uint32_t code)
 {
     int gouraud = (code & 0x10) != 0, quad = (code & 0x08) != 0, textured = (code & 0x04) != 0;
@@ -1942,6 +1972,7 @@ static void Polygon(const uint32_t *w, uint32_t code)
                 draw.emission.enabled = 0;
         }
     }
+    draw.hullMotion = HullMotion(w - 1, v, count);
     draw.pointLights = !ShadowPacket(w) ? &drawnLights : NULL;
     if (draw.pointLights && draw.semi < 0 && !draw.raw) ShieldHullGlow(w - 1, draw.shieldGlow);
     RenderPacketPolicy policy = RenderPacketPolicyFor(RenderCurrent());
@@ -2635,7 +2666,7 @@ static void DrawAnchored(u_long *p, int margin, int half)
 static struct {
     u_long *table, *second, *hudEntry;
     int left, top, width, height, offsetX, offsetY;
-    int background;
+    int background, cameraCut;
     uint8_t r, g, b;
 } upcoming;
 static uint64_t frameDrawnTicks;
@@ -2657,8 +2688,14 @@ static int TableDraws(u_long *table)
     return 0;
 }
 
-void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env)
+static int CameraBlurOn(void)
 {
+    return RenderFrameResources(RenderCurrent(), PortLinkRole() != LINK_NONE, PortTracing()).cameraBlur;
+}
+
+void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env, int cameraCut)
+{
+    if (CameraBlurOn()) GteKeepPast(1);
     if (table) {
         PrepareTrackTable(table);
         preparedTrackTable = table;
@@ -2671,6 +2708,7 @@ void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV 
     upcoming.table = table;
     upcoming.second = second;
     upcoming.hudEntry = hudFirst;
+    upcoming.cameraCut = cameraCut;
     upcoming.left = env->clip.x;
     upcoming.top = env->clip.y;
     upcoming.width = env->clip.w;
@@ -2717,7 +2755,7 @@ int PsxInterpolationOn(void)
         }
     }
     on = on && !PortTracing();
-    GteKeepPast(on);
+    GteKeepPast(on || CameraBlurOn());
     return on;
 }
 
@@ -2759,13 +2797,37 @@ void PsxDrawInterpolatedTest(int k, int n)
     PsxDrawInterpolatedAt(((float)(PsxFieldCount() - frameDrawnField - 1) + (float)k / (float)n) / 2.0f);
 }
 
+static float CameraShutterFraction(void)
+{
+    /* Fixed-step runs advance two emulated fields per game frame. */
+    float seconds = RenderResourcesFor(RenderCurrent()).motionShutterSeconds;
+    return seconds * (portConfig.fixedStep ? (portPal ? 25.0f : 30000.0f / 1001.0f)
+                                           : 1.0e9f / (float)frameTicks);
+}
+
+static void CaptureCameraBlur(float along, int hudOnly)
+{
+    if (!CameraBlurOn() || !GpuRaceWide()) return;
+
+    GpuCameraMotion motion;
+    const GpuCameraMotion *view = NULL;
+    if (!hudOnly && !upcoming.cameraCut && !holdPicture &&
+        GteCameraShutter(along, CameraShutterFraction(), motion.earlier)) {
+        motion.centreX = (float)(int32_t)GteReadControl(24) / 65536.0f + state.offsetX;
+        motion.centreY = (float)(int32_t)GteReadControl(25) / 65536.0f + state.offsetY;
+        motion.focal = (float)(uint16_t)GteReadControl(26);
+        if (motion.focal > 0.0f) view = &motion;
+    }
+    GpuCaptureCameraMotion(upcoming.left, upcoming.top, upcoming.width, upcoming.height, view, hudOnly);
+}
+
 static void DrawInterpolated(float along)
 {
     u_long *savedHudEntry = hudEntry, *savedHudTable = hudTable;
     __typeof__(state) saved = state;
 
     interpolating = 1;
-    interpolationAlong = along < 0.0f ? 0.0f : along > 1.0f ? 1.0f : along;
+    interpolationAlong = CameraBlurOn() && upcoming.cameraCut ? 1.0f : SDL_clamp(along, 0.0f, 1.0f);
     DrawLights(interpolationAlong);
     GpuInterpolating(1);
     state.areaLeft = upcoming.left;
@@ -2784,6 +2846,7 @@ static void DrawInterpolated(float along)
         DrawTableAgain(upcoming.second);
     }
     GpuFlush();
+    CaptureCameraBlur(interpolationAlong, 0);
     hudEntry = savedHudEntry;
     hudTable = savedHudTable;
     state = saved;
@@ -2868,6 +2931,7 @@ void DrawOTag(u_long *p)
     u_long *node;
     int tracing = PortTracing() && pendingCount < PENDING_TABLES, inHud = p == hudTable;
     int mainTable = p == upcoming.table;
+    int secondTable = drawnFrame.pending && p == drawnFrame.second;
 
     DrawLights(1.0f);
     WalkTable(p, 1);
@@ -2911,13 +2975,11 @@ void DrawOTag(u_long *p)
     drawnSinceRead = 1;
     if (PortLinkSplit() && !tracing) {
         DrawAnchored(p, PortScreenMargin(), 1);
-        GteFrameDrawn();
-        return;
+        goto finish;
     }
     if (PortScreenMargin() && GpuRaceWide() && !tracing) {
         DrawAnchored(p, PortScreenMargin(), 0);
-        GteFrameDrawn();
-        return;
+        goto finish;
     }
 
     if (tracing) {
@@ -2941,6 +3003,9 @@ void DrawOTag(u_long *p)
         PortTraceEvent(TRACE_TABLE, pending[pendingCount].nodes, pending[pendingCount].count);
         pendingCount++;
     }
+
+finish:
+    if (mainTable || secondTable) CaptureCameraBlur(1.0f, secondTable && !mainTable);
     GteFrameDrawn();
 }
 

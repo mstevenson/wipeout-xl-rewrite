@@ -267,6 +267,8 @@ static void ShieldOrdering(void)
     WalkTable(&ot[3], 1);
     PsxCaptureLights(NULL, 0);
     assert(tableTrack[walkTrack].shields[0].lastHull == &hull[0].tag);
+    assert(PacketInRange(&hull[1].tag, tableTrack[walkTrack].ships[3].hull));
+    assert(PacketInRange(&other.tag, tableTrack[walkTrack].ships[2].hull));
     assert(!HoldShield(&other.tag));
     state.texpage = 0x220;
     assert(HoldShield(&shield[0].tag));
@@ -295,11 +297,13 @@ static void ShieldOrdering(void)
     PortShieldPackets(3, &nextShield, &nextShield + 1);
     PortShipPackets(3, &nextHull, &nextHull + 1, NULL);
     DRAWENV env = {0};
-    PsxUpcomingTables(&ot[3], NULL, ot, &env);
+    PsxUpcomingTables(&ot[3], NULL, ot, &env, 0);
     for (int presentation = 0; presentation < 4; presentation++) {
         WalkTable(&ot[3], presentation == 3);
         assert(heldShieldCount == 1);
         assert(heldShields[0].pending->lastHull == &nextHull.tag);
+        assert(PacketInRange(&nextHull.tag, tableTrack[walkTrack].ships[3].hull));
+        assert(!PacketInRange(&hull[0].tag, tableTrack[walkTrack].ships[3].hull));
         assert(!HoldShield(&shield[0].tag));
         assert(HoldShield(&nextShield.tag));
         assert(SceneSprite(&nextShield.tag) && SceneSprite(&nextHull.tag));
@@ -309,7 +313,7 @@ static void ShieldOrdering(void)
     /* Expiration must also be visible on the very first interpolated picture. */
     ClearOTagR(ot, 4);
     AddPrim(&ot[1], &nextHull);
-    PsxUpcomingTables(&ot[3], NULL, ot, &env);
+    PsxUpcomingTables(&ot[3], NULL, ot, &env, 0);
     WalkTable(&ot[3], 0);
     assert(!heldShieldCount && !HoldShield(&nextShield.tag));
     WalkTable(&ot[3], 1);
@@ -441,14 +445,24 @@ static void PointLightSnapshots(void)
         .light = {.position = {0, 0, 1000}, .radius = 2000, .colour = {1, .3f, .1f}, .intensity = 4}};
     for (int frame = 0; frame < 3; frame++) {
         GteClearPrecise();
-        for (int i = 0; i < 8; i++) {
-            GteKeyNext(0, 200 + i);
+        for (int i = 0; i < 64; i++) {
+            GteKeyNext(0, GTE_KEY_WORLD | (200 + i));
             uint32_t h = GteRecordProjection(i, 0, 0, 500, 1);
-            GteRecordView(h, (i & 1) * 100 + (frame == 2 ? 1000000 : 0), ((i >> 1) & 1) * 100, 500 + ((i >> 2) & 1) * 100);
+            float shift = frame == 2 ? 1000000.0f : frame * 100.0f;
+            GteRecordView(h, (i & 3) * 100 + shift, ((i >> 2) & 3) * 100, 500 + (i >> 4) * 100);
         }
         GteKeyNext(0, 999);
         uint32_t vertexHandle = GteRecordProjection(100, 0, 0, 1000, 1);
         GteRecordView(vertexHandle, frame * 100, 0, 1000);
+        float earlier[3][4];
+        assert(GteCameraShutter(.5f, .25f, earlier) == (frame == 1));
+        if (frame == 1) {
+            for (int row = 0; row < 3; row++) {
+                for (int col = 0; col < 3; col++)
+                    assert(SDL_fabsf(earlier[row][col] - (row == col)) < .001f);
+                assert(SDL_fabsf(earlier[row][3] - (row == 0 ? -25.0f : 0.0f)) < .001f);
+            }
+        }
         source.light.position[0] = frame * 100;
         source.life = 20 - frame;
         PsxCaptureLights(&source, 1);
@@ -506,6 +520,15 @@ static void ShipLightInterpolation(void)
             uint32_t h = GteRecordProjection(i, 0, 0, 500, 1);
             GteRecordView(h, (i & 1) * 100, ((i >> 1) & 1) * 100, 500 + ((i >> 2) & 1) * 100);
         }
+        short *x[] = {&hull.x0, &hull.x1, &hull.x2};
+        short *y[] = {&hull.y0, &hull.y1, &hull.y2};
+        for (int k = 0; k < 3; k++) {
+            uint32_t xy = (uint16_t)*x[k] | ((uint32_t)(uint16_t)*y[k] << 16);
+            GteKeyNext(0, 500 + k);
+            uint32_t h = GteRecordProjection(xy, *x[k], *y[k], 1000, 1);
+            GteRecordView(h, k * 100 + (frame == 1 ? 100 : 0), k * 50, 1000);
+            GteBindPrecise(x[k], h);
+        }
         ClearOTagR(&ot, 1);
         AddPrim(&ot, &hull);
         hull.r0 = 32 + frame * 64;
@@ -519,14 +542,26 @@ static void ShipLightInterpolation(void)
         clippedCount = 0;
         Polygon(packet, hull.code);
         assert(clippedCount == 3 && clipped[0].r == (frame == 1 ? 64 : hull.r0));
+        assert(lastDraw.hullMotion == (frame != 2));
+        for (int k = 0; k < 3; k++) {
+            float want = frame == 1 ? -100.0f * CameraShutterFraction() : 0.0f;
+            assert(fabsf(clipped[k].shutterDelta[0] - want) < .001f);
+            assert(clipped[k].shutterDelta[1] == 0.0f && clipped[k].shutterDelta[2] == 0.0f);
+        }
         interpolating = 0;
         clippedCount = 0;
         Polygon(packet, hull.code);
         assert(clippedCount == 3 && clipped[0].r == hull.r0);
+        assert(lastDraw.hullMotion == (frame != 2));
+        for (int k = 0; k < 3; k++) {
+            float want = frame == 1 ? -100.0f * CameraShutterFraction() : 0.0f;
+            assert(fabsf(clipped[k].shutterDelta[0] - want) < .001f);
+            assert(clipped[k].shutterDelta[1] == 0.0f && clipped[k].shutterDelta[2] == 0.0f);
+        }
     }
     GteKeepPast(0);
     GteClearPrecise();
-    puts("Ship tint follows interpolated presentation and ignores stale ship samples: OK");
+    puts("Ship tint and shutter motion follow the same hull across presentation and ignore stale samples: OK");
 }
 
 static void SaturnSkyInterpolation(void)

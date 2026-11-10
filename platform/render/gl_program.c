@@ -41,6 +41,7 @@ int RenderGlProgramInit(RenderProgram *s, const char *vertexSource, const char *
     glBindAttribLocation(s->program, 8, "filterBoundsIn");
     glBindAttribLocation(s->program, 9, "emissionUvIn");
     glBindAttribLocation(s->program, 10, "viewPositionIn");
+    glBindAttribLocation(s->program, 11, "shutterDeltaIn");
     glLinkProgram(s->program);
     glDeleteShader(vertex);
     glDeleteShader(fragment);
@@ -151,9 +152,11 @@ void RenderGlSeedHdr(GLuint source, GLuint target, int x, int y, int w, int h)
             "uniform sampler2D source;\n"
             "layout(location = 0) out vec4 colour;\n"
             "layout(location = 1) out vec4 coverage;\n"
+            "layout(location = 2) out vec4 velocity;\n"
             "void main() {\n"
             "    colour = vec4(texelFetch(source, ivec2(gl_FragCoord.xy), 0).rgb, 1.0);\n"
-            "    coverage = vec4(0.0);\n"
+            "    coverage = vec4(0.0, 0.0, 0.0, 1.0);\n"
+            "    velocity = vec4(0.0);\n"
             "}\n";
         if (!RenderGlProgramInit(&seedProgram, vertex, fragment)) abort();
         glUniform1i(glGetUniformLocation(seedProgram.program, "source"), 0);

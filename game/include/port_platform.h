@@ -23,8 +23,9 @@ void PsxHoldPicture(void);
 
 /* Frame interpolation (platform/psx/libgpu.c): the ordering tables Swap will draw when its fields have passed (the
    second may be NULL), the first entry of the HUD's in the first, and the drawing environment they go to. While
-   the fields pass the display shows them moving from the frame before. */
-void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env);
+   the fields pass the display shows them moving from the frame before. A camera
+   mode change marks the frame as a cut for Modern's camera blur. */
+void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env, int cameraCut);
 
 /* The HUD's place in the ordering tables Swap draws next: the last entry of the first and the start of
    the second (drawn at half size in a split window, platform/link.c). */

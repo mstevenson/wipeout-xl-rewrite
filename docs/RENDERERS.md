@@ -26,15 +26,15 @@ presentation preserves the 4:3 base aspect ratio. Switching profiles also switch
 resolution. Modern defaults to Auto and uses the PlayStation base dimensions.
 The four hardware profiles default to 1×.
 Widescreen, the HD textures toggle, and the choice of texture pack are shared. Each profile saves its **Draw distance**
-choice, Full-mode fade toggle and range, and distant engine flare toggle. Modern defaults to
-**Full** with both effects enabled. The four hardware profiles default to
-**Native** with scenery fade off.
+choice, Full-mode fade toggle and range, and distant engine flare toggle. Modern
+defaults to **Custom** and has both Full-mode effects enabled by default. The four
+hardware profiles default to **Native** with scenery fade off.
 `WIPEOUT_FAR_VIEW`, `WIPEOUT_FADE`, and `WIPEOUT_FAR_FLARES`
 override these preferences for the current run. For Modern, `WIPEOUT_FAR_VIEW=0`
 selects **Custom**, which uses its own fade range.
 
 Modern's **Custom** slider sets the distance from the camera in world units.
-The range is 20,000 to 100,000 and defaults to 96,000. Scenery always fades
+The range is 20,000 to 150,000 and defaults to 100,000. Scenery always fades
 into the sky over the last third of that distance. A saved Modern Native
 selection opens as Custom.
 
@@ -141,6 +141,16 @@ shadow decals and translucent effects do not receive this lighting. Lights
 follow interpolated geometry and are independent for linked players. This
 setting works with HDR bloom off; without half-float targets it uses SDR.
 Lights do not cast shadows and can illuminate through nearby walls.
+
+**Camera motion blur** (`modern_camera_blur`, on by default) streaks nearby
+scenery as the camera moves in solo races. Ship hulls blur according to their
+own screen motion, so ships holding position in the view stay sharp. The HUD
+and the first frame after a camera cut stay sharp. Under **Graphics → Modern**,
+**Blur amount** (`modern_camera_blur_strength`) ranges from 0% to 300% and
+defaults to 100%, which corresponds to a 12 ms reference exposure. The
+screen-space filter extends moving silhouettes over their background and
+accumulates HDR highlights in linear light before tone mapping. It works with
+or without HDR bloom.
 
 **HDR bloom** (`modern_bloom`, on by default) uses the light above SDR white to
 add glow to Modern races. It also boosts the animated neon in Phenitia Park

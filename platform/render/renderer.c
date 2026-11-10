@@ -159,6 +159,14 @@ RenderResources RenderResourcesFor(const RenderFrame *frame)
     return renderer->resources ? renderer->resources(RenderProfile(frame)) : (RenderResources){0};
 }
 
+/* Session facts restrict optional motion transport without selecting a profile. */
+RenderResources RenderFrameResources(const RenderFrame *frame, int linked, int tracing)
+{
+    RenderResources resources = RenderResourcesFor(frame);
+    if (tracing || (linked && resources.motionSoloOnly)) resources.cameraBlur = 0;
+    return resources;
+}
+
 RenderPacketPolicy RenderPacketPolicyFor(const RenderFrame *frame)
 {
     const Renderer *renderer = frame->profile->renderer;
@@ -279,6 +287,7 @@ static const struct {
     OPTION("modern_bilinear", modern.bilinear),
     OPTION("modern_resample", modern.resample),
     OPTION("modern_bloom", modern.bloom),
+    OPTION("modern_camera_blur", modern.cameraBlur),
     OPTION("modern_weapon_lights", modern.weaponLights),
     OPTION("modern_smooth_track_lighting", modern.smoothTrackLighting),
     OPTION("saturn_quantize_vertices", saturn.quantizeVertices), OPTION("saturn_affine_textures", saturn.affineTextures),
@@ -384,6 +393,13 @@ int RenderSet(RenderSettings *s, const char *key, const char *value)
             s->modern.brightness = (int)brightness;
         return 1;
     }
+    if (!strcmp(key, "modern_camera_blur_strength")) {
+        char *end;
+        long amount = strtol(value, &end, 10);
+        if (end != value && !*end && amount >= 0 && amount <= MODERN_BLUR_MAX)
+            s->modern.cameraBlurAmount = (int)amount;
+        return 1;
+    }
     if (!strcmp(key, "modern_custom_distance")) {
         char *end;
         long distance = strtol(value, &end, 10);
@@ -436,6 +452,7 @@ void RenderSave(FILE *file, const RenderSettings *s)
     fprintf(file, "pc_draw_distance = %d\n", s->pc.drawDistance);
     fprintf(file, "modern_brightness = %d\n", s->modern.brightness);
     fprintf(file, "modern_custom_distance = %d\n", s->modern.customDistance);
+    fprintf(file, "modern_camera_blur_strength = %d\n", s->modern.cameraBlurAmount);
     unsigned tonemapper = s->modern.tonemapper;
     if (tonemapper >= sizeof(tonemapperKeys) / sizeof(tonemapperKeys[0]))
         tonemapper = MODERN_TONEMAP_SOFT_SHADOWS;

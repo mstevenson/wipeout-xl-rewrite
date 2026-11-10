@@ -173,17 +173,13 @@ int main()
     Key(ImGuiKey_Enter); Key(ImGuiKey_Home); Key(ImGuiKey_Enter);
     assert(portSettings.render.n64Selection == RENDER_MODERN && RenderCurrent()->id == RENDER_MODERN);
     assert(PortRenderGeometry().trackDetail == RENDER_TRACK_NATIVE);
-    assert(RenderSceneFor(RenderCurrent())->farView);
+    assert(!RenderSceneFor(RenderCurrent())->farView);
+    assert(RenderSceneFor(RenderCurrent())->fadeFar == MODERN_DISTANCE_DEFAULT);
     Focus("##Track Detail", RENDER_MODERN);
     Key(ImGuiKey_Enter); Key(ImGuiKey_DownArrow); Key(ImGuiKey_Enter);
     assert(PortRenderGeometry().trackDetail == RENDER_TRACK_MEDIUM);
     Key(ImGuiKey_Enter); Key(ImGuiKey_DownArrow); Key(ImGuiKey_Enter);
     assert(PortRenderGeometry().trackDetail == RENDER_TRACK_HIGH);
-    Focus("##Draw distance", RENDER_MODERN);
-    Key(ImGuiKey_Enter); Key(ImGuiKey_UpArrow); Key(ImGuiKey_Enter);
-    assert(!RenderSceneFor(RenderCurrent())->farView);
-    assert(RenderSceneFor(RenderCurrent())->fadeFar == MODERN_DISTANCE_DEFAULT);
-    assert(portSettings.render.modern.trackDetail == RENDER_TRACK_HIGH);
     Focus("##Custom distance", RENDER_MODERN);
     Key(ImGuiKey_Space); Key(ImGuiKey_LeftArrow); Key(ImGuiKey_Space);
     int customDistance = portSettings.render.modern.customDistance;
@@ -193,6 +189,7 @@ int main()
     Focus("##Draw distance", RENDER_MODERN);
     Key(ImGuiKey_Enter); Key(ImGuiKey_DownArrow); Key(ImGuiKey_Enter);
     assert(RenderSceneFor(RenderCurrent())->farView);
+    assert(portSettings.render.modern.trackDetail == RENDER_TRACK_HIGH);
     assert(RenderCurrent()->settings.modern.bilinear);
     Activate("Bilinear texture filtering", RENDER_MODERN);
     assert(!RenderCurrent()->settings.modern.bilinear);
@@ -226,7 +223,8 @@ int main()
     assert(portSettings.render.modern.customDistance == MODERN_DISTANCE_DEFAULT);
     assert(PortFrameRate() == FRAME_RATE_VSYNC);
     scene = RenderSceneFor(RenderCurrent());
-    assert(scene->farView && scene->fade && scene->farFlares);
+    assert(!scene->farView && scene->fade && scene->farFlares);
+    assert(scene->fadeFar == MODERN_DISTANCE_DEFAULT);
     n64Track = 0; RenderCommit(); Frame();
     assert(RenderCurrent()->id == RENDER_PC);
     windowWidth = 360; Frame(); Layout();

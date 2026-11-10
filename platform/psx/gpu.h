@@ -64,6 +64,7 @@ typedef struct GpuVertex {
     int world;     /* view-space provenance, even for affine billboards drawn with w == 0 */
     float view[3]; /* true view-space position, independent of depth bias */
     float saturnShade[3]; /* additive RGB5 offsets, retained at native clipping intersections */
+    float shutterDelta[3]; /* view-space displacement to the shutter-open position */
 } GpuVertex;
 
 /* How a primitive is drawn. */
@@ -93,6 +94,7 @@ typedef struct GpuDrawState {
     int smoothTrackLighting;
     const struct GpuLightSet *pointLights; /* immutable for this draw pass */
     float shieldGlow[4]; /* shield tint and strength, for its own hull */
+    int hullMotion; /* use object motion for this hull, including zero for missing history */
 
 } GpuDrawState;
 
@@ -138,6 +140,13 @@ void GpuPresentInterpolated(int x, int y, int w, int h);
 void GpuDisplayShake(int x, int y);
 /* What is drawn while on is such a picture. */
 void GpuInterpolating(int on);
+typedef struct GpuCameraMotion {
+    float earlier[3][4];
+    float centreX, centreY, focal;
+} GpuCameraMotion;
+/* Snapshot world depth at the end of the scene table. A following HUD table
+   retains the snapshot while advancing the colour revision. */
+void GpuCaptureCameraMotion(int x, int y, int w, int h, const GpuCameraMotion *motion, int hudOnly);
 /* Two players on one machine (link.c): the area (x, y, w, h) of video memory in the upper half of the
    window and another picture (RGBA, rows from the bottom; lowerNew: changed since the last call) in the
    lower half; and an area read back at the framebuffer's scale (RGBA, rows from the bottom). */

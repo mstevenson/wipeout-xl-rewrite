@@ -47,13 +47,14 @@ typedef struct SaturnRenderSettings {
 } SaturnRenderSettings;
 enum { MODERN_BRIGHTNESS_MIN = 50, MODERN_BRIGHTNESS_DEFAULT = 85, MODERN_BRIGHTNESS_MAX = 100 };
 enum { MODERN_TONEMAP_ORIGINAL, MODERN_TONEMAP_SOFT_SHADOWS };
-enum { MODERN_DISTANCE_MIN = 20000, MODERN_DISTANCE_DEFAULT = 96000, MODERN_DISTANCE_MAX = 100000 };
+enum { MODERN_BLUR_DEFAULT = 100, MODERN_BLUR_MAX = 300 };
+enum { MODERN_DISTANCE_MIN = 20000, MODERN_DISTANCE_DEFAULT = 100000, MODERN_DISTANCE_MAX = 150000 };
 typedef struct ModernRenderSettings {
     int resample, scale, brightness, bilinear, bloom, tonemapper, smoothTrackLighting, weaponLights;
     RenderPacing pacing;
     RenderScene scene;
     int trackDetail;
-    int customDistance;
+    int customDistance, cameraBlur, cameraBlurAmount;
 } ModernRenderSettings;
 typedef struct RenderSettings {
     RendererId selection; /* explicit environment override; AUTO uses the saved settings */
@@ -75,7 +76,7 @@ typedef struct RenderSettings {
     {1,1,1,1,1,1,1,RENDER_HARDWARE_DEFAULTS}, \
     {1,1,1,1,0,0,0,1,RENDER_HARDWARE_DEFAULTS}, \
     {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1,1, \
-        {FRAME_RATE_VSYNC, FRAME_CAP_DEFAULT}, RENDER_SCENE_DEFAULTS(1, 1, 1), RENDER_TRACK_NATIVE, MODERN_DISTANCE_DEFAULT}, 0 }
+        {FRAME_RATE_VSYNC, FRAME_CAP_DEFAULT}, RENDER_SCENE_DEFAULTS(0, 1, 1), RENDER_TRACK_NATIVE, MODERN_DISTANCE_DEFAULT, 1, MODERN_BLUR_DEFAULT}, 0 }
 
 /* Immutable for a game frame. The source track is independent of an explicit renderer choice. */
 typedef union RenderProfileSettings {
@@ -119,7 +120,9 @@ static inline unsigned RenderBaseShade(const RenderMaterial *material)
 }
 /* Optional resources/operations requested by the profile, implemented by shared transport. */
 typedef struct RenderResources {
-    int hdTexturesAtNativeScale, hdr;
+    int hdTexturesAtNativeScale, hdr, cameraBlur;
+    int motionSoloOnly;
+    float motionShutterSeconds; /* profile-owned exposure sampled by motion transport */
 } RenderResources;
 typedef struct RenderPacketPolicy {
     int nativeQuads, nativeSky, shadowMask, smoothTrackLighting;
@@ -153,6 +156,7 @@ void RenderNativeSize(RendererId id, int pal, int *width, int *height);
 RenderGeometry RenderGeometryFor(const RenderFrame *frame);
 RenderStyle RenderPrepare(const RenderFrame *frame, const RenderMaterial *material);
 RenderResources RenderResourcesFor(const RenderFrame *frame);
+RenderResources RenderFrameResources(const RenderFrame *frame, int linked, int tracing);
 RenderPacketPolicy RenderPacketPolicyFor(const RenderFrame *frame);
 RenderFrame RenderSnapshot(RendererId id, const RenderSettings *settings);
 const RenderFrame *RenderCurrent(void);

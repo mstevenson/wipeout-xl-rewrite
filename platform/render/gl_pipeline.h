@@ -15,6 +15,13 @@ typedef struct RenderProgram {
     GLint uniformVram, uniformGlyphs, uniformPortPages, uniformHdAtlas, uniformPass, uniformTarget;
     GLint uniformDepthPull, uniformDepthPass, uniformOrigin, uniformPointSize, uniformNativeGrid;
 } RenderProgram;
+typedef struct RenderMotionPicture {
+    GLuint depth, velocity;
+    int left, top, width, height;
+    float projection[4]; /* principal point and focal length, in framebuffer pixels */
+    float earlier[3][4];
+} RenderMotionPicture;
+
 /* Immutable source identity and crop. Revision changes whenever scene pixels change. */
 typedef struct RenderPresent {
     GLuint texture, framebuffer;
@@ -22,6 +29,7 @@ typedef struct RenderPresent {
     int scale, race, left, top, right, bottom, x0, y0, x1, y1;
     GLuint hdrTexture, hdrMask;
     int hdrWidth; /* Full wide picture, shared by the window crop and recorder. */
+    const RenderMotionPicture *motion;
 } RenderPresent;
 /* Source pixels only. Each effect adds its own settings to this cache key. */
 typedef struct RenderPictureKey {

@@ -21,6 +21,8 @@
     "flat out int auxFlags;\n"
     "in ivec4 emissionUvIn;\n"
     "flat out ivec4 emissionUv;\n"
+    "in vec3 shutterDeltaIn;\n"
+    "out vec3 shutterDelta;\n"
 #endif
     "flat out uvec4 hd;\n"
     "flat out ivec4 hdTexels;\n"
@@ -79,7 +81,8 @@
     "    addressFlags = int((modeIn.z >> 2u) & 7u);\n"
     "    ps1Light = int((modeIn.z >> 5u) & 1u);\n"
 #ifdef RENDER_AUX_FLAGS
-    "    auxFlags = int(modeIn.z >> 6u);\n"
+    "    auxFlags = int((modeIn.z >> 6u) | ((modeIn.w & 8u) >> 1u));\n"
     "    emissionUv = emissionUvIn;\n"
+    "    shutterDelta = shutterDeltaIn;\n"
 #endif
     "}\n"

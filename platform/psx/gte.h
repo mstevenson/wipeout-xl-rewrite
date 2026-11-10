@@ -127,6 +127,10 @@ void GteInterpolateSky(const GtePrecise *p, float along, GtePrecise *out);
    GteNearPlane, libgpu.c). 0 when the vertex has no view-space position. */
 /* Fraction allowed for external presentation metadata; uses the geometry camera-cut guard. */
 float GtePresentationAlong(float along);
+/* Maps view-space positions in the presented picture back by shutter game frames. */
+int GteCameraShutter(float along, float shutter, float earlier[3][4]);
+/* View-space displacement to the shutter-open position, using the same vertex in the past frame. */
+int GteVertexShutter(const GtePrecise *p, float shutter, float delta[3]);
 int GteViewAt(const GtePrecise *p, float along, double view[3]);
 /* The nearest depth the GTE projects (half the projection distance), and a view-space point there or beyond
    projected: its screen position. */

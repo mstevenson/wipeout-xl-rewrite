@@ -289,6 +289,13 @@ static bool ProfileSettings(RenderSettings *s, RendererId edit)
         changed |= Check("Dynamic lights", &s->modern.weaponLights,
             "Projectiles, explosions, engines and active shields illuminate nearby surfaces. "
             "These lights do not cast shadows. Works with bloom off.");
+        changed |= Check("Camera motion blur", &s->modern.cameraBlur,
+            "Blurs scenery as the camera moves and ships as they move across the view. Keeps the HUD sharp.");
+        ImGui::BeginDisabled(!s->modern.cameraBlur);
+        changed |= ImGui::SliderInt("Blur amount", &s->modern.cameraBlurAmount, 0, MODERN_BLUR_MAX,
+                                    "%d%%", ImGuiSliderFlags_NoInput);
+        Tooltip("Controls how far moving scenery and ships streak across the screen.");
+        ImGui::EndDisabled();
         const char *bloomTooltip = "Adds glow from overbright surfaces and track lights during races.";
         if (s->modernBloomOverride)
             bloomTooltip = RenderModernBloom(s)
