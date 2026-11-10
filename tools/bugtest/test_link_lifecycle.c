@@ -14,7 +14,7 @@ int main(void)
     portSettings.render = (RenderSettings)RENDER_DEFAULTS;
     portSettings.render.selection = RENDER_N64;
     portSettings.render.ps1.dither = 0;
-    portSettings.render.n64.divot = 0;
+    portSettings.render.n64.dedither = 0;
     RenderSettings expected = portSettings.render;
     PortLinkField();
     role = LINK_SLAVE; memset(&portSettings.render, 0, sizeof(portSettings.render)); PortLinkField();

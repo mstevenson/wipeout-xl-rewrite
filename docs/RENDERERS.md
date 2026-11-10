@@ -84,7 +84,7 @@ linked games share the main player's presentation policy.
 | PS1 | Vertex snapping, affine textures, RGB5 precision and eligible primitive dithering on; depth enhancement off (ordering tables); nearest display scaling |
 | Saturn | Vertex snapping, affine textures, undithered RGB5 colour and checkerboard transparency on; original sky scrolling; depth enhancement off; nearest display scaling |
 | PC | Bilinear texture filtering, dithered RGB565, scenery/ship lighting, depth and linear display resampling on |
-| N64 | Three-point filtering, RGB5 precision, magic-square dithering, VI dedithering, approximate divot filtering and linear display resampling on; depth always on |
+| N64 | Three-point filtering, RGB5 precision, magic-square dithering, VI dedithering and linear display resampling on; depth always on |
 | Modern | Auto resolution, full-precision projection, perspective-correct world textures, bilinear world texture filtering, depth and linear display resampling |
 
 Snapping and colour precision are independent. Dithering requires RGB5 precision;
@@ -369,7 +369,7 @@ cmake --build build/mac -j 2
 The CPU suite covers settings/UI, frame boundaries, packets, lighting, captures,
 material lookup and linked players. The GPU suite covers independent renderer
 linking, production shaders, switches, resource ownership, HD addressing and all
-64 N64 settings combinations against reference RGBA output across crops, scales,
+32 N64 settings combinations against reference RGBA output across crops, scales,
 flips and readbacks. Recorded results and blocked checks are in the
 [consolidated change record](port-notes/renderer-changes.md) and
 [architecture refactor notes](port-notes/renderer-consolidation.md).

@@ -250,7 +250,7 @@ static void ProfileIsolation(void)
     const char *keys[] = {
         "ps1_quantize_vertices", "ps1_affine_textures", "ps1_colour_precision", "ps1_dither", "ps1_depth",
         "pc_bilinear", "pc_lighting", "pc_depth", "n64_three_point", "n64_colour_precision",
-        "n64_dither", "n64_dedither", "n64_divot", "n64_resample"
+        "n64_dither", "n64_dedither", "n64_resample"
     };
     const RenderMaterial materials[] = {
         {.textured = 1, .dither = 1, .ui = 1}, /* XL HUD */
@@ -701,19 +701,22 @@ int main(void)
     assert(RenderDepth(RenderCurrent()));
     SDL_UnsetEnvironmentVariable(env, "WIPEOUT_DEPTH_BUFFER");
     n64 = 0;
-    LoadPlatformSettings("ps1_quantize_vertices = 0\nps1_dither = 0\npc_bilinear = 0\nn64_divot = 0\n");
+    LoadPlatformSettings("ps1_quantize_vertices = 0\nps1_dither = 0\npc_bilinear = 0\nn64_dedither = 0\nn64_divot = 1\n");
     assert(RenderCurrent()->id == RENDER_PS1);
     assert(!portSettings.render.ps1.dither && !portSettings.render.ps1.quantizeVertices);
-    assert(!portSettings.render.pc.bilinear && !portSettings.render.n64.divot);
+    assert(!portSettings.render.pc.bilinear && !portSettings.render.n64.dedither);
     portSettings.render.selection = RENDER_PC;
     assert(RenderCurrent()->id == RENDER_PS1); /* pending changes cannot split a frame */
     assert(RenderCommit() && (RenderCurrent()->id == RENDER_PC));
     assert(!RenderCommit());
     RenderDefaults(&portSettings.render, RENDER_PC);
-    assert(portSettings.render.pc.bilinear && !portSettings.render.n64.divot && !portSettings.render.ps1.dither);
+    assert(portSettings.render.pc.bilinear && !portSettings.render.n64.dedither && !portSettings.render.ps1.dither);
     portSettings.render.selection = RENDER_AUTO;
     portSettings.render.ps1Selection = RENDER_PC;
     assert(PortSettingsSave());
+    char *saved = SDL_LoadFile(PortSettingsPath(), NULL);
+    assert(saved && !strstr(saved, "n64_divot"));
+    SDL_free(saved);
     RenderSettings expected = portSettings.render;
     PortSettingsLoad();
     assert(!memcmp(&expected, &portSettings.render, sizeof(expected)));

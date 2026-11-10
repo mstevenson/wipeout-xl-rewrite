@@ -49,22 +49,21 @@ edges. Integer GTE state and explicitly flat geometry's rejection remain unchang
 1. Magic-square thresholds quantize RGB to five bits, anchored to native pixels.
 2. A 3×3 dedither filter reconstructs low colour bits (constant grey 100 reconstructs
    to 100 in the interior after quantization to alternating RGB5 values 12/13).
-3. An approximate horizontal median filter removes high-contrast divots, followed
-   by optional linear display resampling. Gamma correction stays off.
+3. Optional linear display resampling scales the picture. Gamma correction stays off.
 
 Separate buffers preserve VRAM and prevent repeated captures compounding filters.
 Cached output is reused for matching source revision, crop, scale and processing
-settings; destination size/orientation do not require reprocessing. Only enabled
-stages run; one pass needs one target, multiple passes two. Returning to one frees
-the second. With precision and divot off, processing bypasses allocations; final
-resampling still applies and clamps to the source crop. Texture filtering is independent.
+settings. Changes to destination size or orientation reuse the processed image.
+Quantization uses one target and dedithering uses a second. Turning off dedithering
+with precision enabled releases the second target. With precision off, final
+resampling can clamp to the source crop without allocating either target.
+Texture filtering is independent.
 
 This approximates VI output: there are no RDP coverage/hidden bits, exact VI scaling
-registers, full fixed-point rounding or per-write RGB5 feedback. Divot eligibility
-uses colour discontinuities. Whole-scene dithering includes XL's HUD rather than
-replaying N64 orthographic dither-disable state. Higher resolutions add geometry
-detail while filter/dither spacing stays at native pixels. XL simulation, ships
-and effects also prevent a whole-frame N64 match.
+registers, full fixed-point rounding or per-write RGB5 feedback. Whole-scene
+dithering includes XL's HUD. Higher resolutions add geometry detail while
+filter/dither spacing stays at native pixels. XL simulation, ships and effects
+also prevent a whole-frame N64 match.
 
 ## Evidence and limits
 

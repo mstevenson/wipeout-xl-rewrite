@@ -1,7 +1,6 @@
 /* Private to n64_gl.c. N64 presentation is independent of other renderers.
-   Quantize after scene blending, then reconstruct colour bits and remove isolated divots.
-   This port has no RDP coverage/hidden-bit buffer: divot eligibility is estimated from colour
-   discontinuities, and final resampling uses GL's linear filter. See docs/N64_RENDERING.md. */
+   Quantize after scene blending, then optionally reconstruct colour bits.
+   Final resampling uses GL's linear filter. See docs/N64_RENDERING.md. */
 static const char *n64ViVertex =
     "void main() {\n"
     "    vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
@@ -18,7 +17,6 @@ static const char *n64ViFragment =
     "uniform sampler2D source;\n"
     "uniform ivec4 region;\n" /* source x/y, output width/height */
     "uniform int stage;\n"
-    "uniform int precisionOn;\n"
     "uniform int ditherOn;\n"
     "uniform int pixelScale;\n"
     "uniform ivec4 displayRegion;\n" /* destination origin and signed size for direct resampling */
@@ -27,7 +25,7 @@ static const char *n64ViFragment =
     "    return texelFetch(source, region.xy + clamp(p, ivec2(0), region.zw - 1), 0).rgb;\n"
     "}\n"
     "void main() {\n"
-    "    if (stage == 3) {\n"
+    "    if (stage == 2) {\n"
     "        vec2 at = vec2(region.xy) + (gl_FragCoord.xy - vec2(displayRegion.xy))\n"
     "            * vec2(region.zw) / vec2(displayRegion.zw);\n"
     "        at = clamp(at, vec2(region.xy) + 0.5, vec2(region.xy + region.zw) - 0.5);\n"
@@ -36,7 +34,7 @@ static const char *n64ViFragment =
     "    }\n"
     "    ivec2 p = ivec2(gl_FragCoord.xy);\n"
     "    vec3 c = Sample(p);\n"
-    "    if (stage == 0 && precisionOn != 0) {\n"
+    "    if (stage == 0) {\n"
     "        const int magic[16] = int[16](0,6,1,7, 4,2,5,3, 3,5,2,4, 7,1,6,0);\n"
     "        ivec2 native = ((p + ivec2(region.x, 0)) / pixelScale) & 3;\n"
     "        vec3 rgb = floor(c * 255.0 + 0.5);\n"
@@ -55,17 +53,6 @@ static const char *n64ViFragment =
     "            }\n"
     "        }\n"
     "        c = clamp((five * 8.0 + adjustment) / 255.0, 0.0, 1.0);\n"
-    "    } else if (stage == 2) {\n"
-    "        vec3 l = Sample(p - ivec2(pixelScale, 0));\n"
-    "        vec3 r = Sample(p + ivec2(pixelScale, 0));\n"
-    /* No real coverage is available. Only filter a high-contrast, isolated horizontal spike;
-       never median-filter every pixel (which erases texture details on fully covered surfaces). */
-    "        vec3 sides = abs(l - r);\n"
-    "        vec3 delta = min(abs(c - l), abs(c - r));\n"
-    "        if (max(max(sides.r,sides.g),sides.b) < 8.0/255.0 &&\n"
-    "            max(max(delta.r,delta.g),delta.b) > 32.0/255.0) {\n"
-    "            c = max(min(l,c), min(max(l,c),r));\n"
-    "        }\n"
     "    }\n"
     "    fragment = vec4(c, 1.0);\n" /* ROM disables gamma correction. */
     "}\n";

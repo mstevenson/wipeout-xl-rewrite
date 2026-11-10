@@ -48,7 +48,7 @@ static void Layout()
     assert(selectors && selectors->ColumnsCount == 4);
     for (int i = 0; i < 4; i++) assert(selectors->Columns[i].IsVisibleX);
     for (int i = 0; i < table->ColumnsCount; i++) {
-        float minimum = ImGui::CalcTextSize("VI divot filtering (approximate)").x +
+        float minimum = ImGui::CalcTextSize("Engine flares on distant ships").x +
             ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
         assert(table->Columns[i].WidthGiven >= minimum);
         if (table->Columns[i].IsVisibleX)
@@ -150,10 +150,10 @@ int main()
     const LimitedDistanceText pcAdjusted = LimitedDistance(&portSettings.render, RENDER_PC);
     assert(!strcmp(pcAdjusted.label, "Native (F3 level 2)"));
     assert(strstr(pcAdjusted.limits, "45 sections") && strstr(pcAdjusted.limits, "29000 world units"));
-    Activate("VI divot filtering (approximate)", RENDER_N64);
-    assert(!portSettings.render.n64.divot);
+    Activate("VI dedithering", RENDER_N64);
+    assert(!portSettings.render.n64.dedither);
     Activate("Restore renderer defaults", RENDER_PC);
-    assert(portSettings.render.pc.bilinear && !portSettings.render.n64.divot);
+    assert(portSettings.render.pc.bilinear && !portSettings.render.n64.dedither);
     assert(portSettings.render.pc.rgb565);
     assert(portSettings.render.pc.drawDistance == 1);
     assert(!portSettings.render.pc.correctMenuAspect);

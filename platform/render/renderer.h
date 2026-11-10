@@ -36,7 +36,7 @@ typedef struct PcRenderSettings {
     RenderScene scene;
 } PcRenderSettings;
 typedef struct N64RenderSettings {
-    int threePoint, colourPrecision, dither, dedither, divot, resample, scale;
+    int threePoint, colourPrecision, dither, dedither, resample, scale;
     RenderPacing pacing;
     RenderScene scene;
 } N64RenderSettings;
@@ -73,7 +73,7 @@ typedef struct RenderSettings {
 #define RENDER_DEFAULTS { RENDER_AUTO, RENDER_PS1, RENDER_PC, RENDER_N64, RENDER_SATURN, 1, \
     {1,1,1,1,0,0,1,RENDER_HARDWARE_DEFAULTS}, \
     {1,1,1,1,1,1,1,0,RENDER_HARDWARE_DEFAULTS}, \
-    {1,1,1,1,1,1,1,RENDER_HARDWARE_DEFAULTS}, \
+    {1,1,1,1,1,1,RENDER_HARDWARE_DEFAULTS}, \
     {1,1,1,1,0,0,0,1,RENDER_HARDWARE_DEFAULTS}, \
     {1,0,MODERN_BRIGHTNESS_DEFAULT,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1,1, \
         {FRAME_RATE_VSYNC, FRAME_CAP_DEFAULT}, RENDER_SCENE_DEFAULTS(0, 1, 1), RENDER_TRACK_NATIVE, MODERN_DISTANCE_DEFAULT, 1, MODERN_BLUR_DEFAULT}, 0 }

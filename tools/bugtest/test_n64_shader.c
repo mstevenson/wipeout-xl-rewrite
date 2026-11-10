@@ -330,7 +330,7 @@ static void FullColourProfiles(void)
                 RenderMaterial m = {.fullColour = 1, .textured = 1, .dither = 1, .ui = !spatial};
                 settings.ps1 = (Ps1RenderSettings){other, other, other, other, other};
                 settings.pc = (PcRenderSettings){other, other, other};
-                settings.n64 = (N64RenderSettings){other, other, other, other, other, other};
+                settings.n64 = (N64RenderSettings){other, other, other, other, other};
                 if (id == RENDER_PS1) settings.ps1 = (Ps1RenderSettings){enabled, enabled, enabled, enabled, enabled};
                 if (id == RENDER_PC) settings.pc = (PcRenderSettings){enabled, enabled, enabled};
                 if (id == RENDER_N64) settings.n64.threePoint = enabled;
@@ -1541,8 +1541,7 @@ static void N64Materials(void)
 static GLuint TestN64Picture(GLuint source, int x, int y, int width, int height,
                              const N64RenderSettings *settings, int pixelScale)
 {
-    N64ViPasses passes = N64ViStages(settings);
-    return N64Picture(source, x, y, width, height, settings, pixelScale, &passes);
+    return N64Picture(source, x, y, width, height, settings, pixelScale, N64ViPassCount(settings));
 }
 
 static void ViFiltering(void)
@@ -1583,7 +1582,7 @@ static void ViFiltering(void)
     }
     /* Precision, dithering and reconstruction have independently observable output. */
     N64RenderSettings options = portSettings.render.n64;
-    options.dedither = options.divot = options.dither = 0;
+    options.dedither = options.dither = 0;
     shown = TestN64Picture(input, 0, 0, 16, 16, &options, scale);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, shown);
     glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
@@ -1599,7 +1598,7 @@ static void ViFiltering(void)
     glBindFramebuffer(GL_READ_FRAMEBUFFER, raw);
     glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     assert(pixels[(8 * 16 + 8) * 4] == 100); /* precision off also bypasses inapplicable dedither */
-    /* Approximate divot correction removes isolated high-contrast holes. */
+    /* Isolated dark pixels survive the default RGB5 and dedither passes. */
     memset(source, 128, sizeof(source));
     memset(source + (8 * 16 + 8) * 4, 0, 3);
     glBindTexture(GL_TEXTURE_2D, input);
@@ -1607,12 +1606,7 @@ static void ViFiltering(void)
     shown = TestN64Picture(input, 0, 0, 16, 16, &portSettings.render.n64, scale);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, shown);
     glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    assert(pixels[(8 * 16 + 8) * 4] == 127);
-    options = portSettings.render.n64; options.divot = 0;
-    shown = TestN64Picture(input, 0, 0, 16, 16, &options, scale);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, shown);
-    glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-    assert(pixels[(8 * 16 + 8) * 4] == 8); /* hole retained without divot correction */
+    assert(pixels[(8 * 16 + 8) * 4] == 8);
     /* The display wrapper uses VI for N64 races only and never modifies its source. */
     memset(source, 128, sizeof(source));
     for (int y = 0; y < 16; y++) for (int x = 8; x < 16; x++)
@@ -1657,7 +1651,7 @@ static void ViFiltering(void)
     /* Explicit PS1/PC selection on an N64 track must bypass every N64 display control. */
     for (int id = RENDER_PS1; id <= RENDER_PC; id++) for (int other = 0; other < 2; other++) {
         portSettings.render.selection = (RendererId)id;
-        portSettings.render.n64 = (N64RenderSettings){other, other, other, other, other, other};
+        portSettings.render.n64 = (N64RenderSettings){other, other, other, other, other};
         n64Track = sceneWide = 1; RenderCommit();
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
         BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
@@ -1694,8 +1688,8 @@ static GLuint ViTarget(GLuint *texture, int width, int height, const uint8_t *pi
     return target;
 }
 
-/* Frozen pre-optimization scheduler: three RGBA8 passes, including disabled copy stages.
-   Keep this independent of N64Picture's pass selection and ping-pong bookkeeping. */
+/* Reference scheduler: two RGBA8 passes, including copies for disabled stages.
+   Keep this independent of N64Picture's pass selection and target bookkeeping. */
 static void ViReference(GLuint source, int x, int y, int width, int height,
                         GLuint destination, int outWidth, int outHeight, int flip,
                         const N64RenderSettings *settings)
@@ -1708,19 +1702,16 @@ static void ViReference(GLuint source, int x, int y, int width, int height,
     glViewport(0, 0, width, height);
     glUniform1i(glGetUniformLocation(n64ViProgram, "source"), 0);
     glUniform1i(glGetUniformLocation(n64ViProgram, "pixelScale"), scale);
-    glUniform1i(glGetUniformLocation(n64ViProgram, "precisionOn"), settings->colourPrecision);
     glUniform1i(glGetUniformLocation(n64ViProgram, "ditherOn"), settings->dither);
-    for (int pass = 0; pass < 3; pass++) {
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, targets[pass & 1]);
-        glBindTexture(GL_TEXTURE_2D, pass ? textures[(pass - 1) & 1] : source);
+    for (int pass = 0; pass < 2; pass++) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, targets[pass]);
+        glBindTexture(GL_TEXTURE_2D, pass ? textures[0] : source);
         glUniform4i(glGetUniformLocation(n64ViProgram, "region"), pass ? 0 : x, pass ? 0 : y, width, height);
-        int stage = pass;
-        if ((pass == 1 && (!settings->dedither || !settings->colourPrecision)) ||
-            (pass == 2 && !settings->divot)) stage = -1;
+        int stage = settings->colourPrecision && (!pass || settings->dedither) ? pass : -1;
         glUniform1i(glGetUniformLocation(n64ViProgram, "stage"), stage);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, targets[0]);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, targets[1]);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
     glBlitFramebuffer(0, 0, width, height, 0, flip ? outHeight : 0, outWidth, flip ? 0 : outHeight,
                       GL_COLOR_BUFFER_BIT, settings->resample ? GL_LINEAR : GL_NEAREST);
@@ -1759,14 +1750,14 @@ static void ViPasses(void)
     portSettings.render.selection = RENDER_AUTO;
     for (int testScale = 1; testScale <= 2; testScale++) {
         scale = testScale;
-        for (int bits = 0; bits < 64; bits++) {
+        for (int bits = 0; bits < 32; bits++) {
             N64RenderSettings options = {bits & 1, (bits >> 1) & 1, (bits >> 2) & 1,
-                                        (bits >> 3) & 1, (bits >> 4) & 1, (bits >> 5) & 1};
+                                        (bits >> 3) & 1, (bits >> 4) & 1};
             portSettings.render.n64 = options; RenderCommit();
             /* Present/readback must use the drawn picture's settings, even after a commit. */
             RememberPicture(0, 0, 320, 512);
             portSettings.render.n64.colourPrecision = !options.colourPrecision; RenderCommit();
-            int passes = options.colourPrecision + (options.colourPrecision && options.dedither) + options.divot;
+            int passes = options.colourPrecision + (options.colourPrecision && options.dedither);
             for (int c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
                 const int *r = cases[c];
                 for (int wide = 0; wide <= 1; wide++) {
@@ -1784,7 +1775,7 @@ static void ViPasses(void)
                         assert(!!n64ViTexture[1] == (passes > 1));
                         assert(!!n64ViFramebuffer[1] == (passes > 1));
                         GLint targetWidth, targetHeight;
-                        for (int i = 0; i < SDL_min(passes, 2); i++) {
+                        for (int i = 0; i < passes; i++) {
                             glBindTexture(GL_TEXTURE_2D, n64ViTexture[i]);
                             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &targetWidth);
                             glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &targetHeight);
@@ -1811,7 +1802,7 @@ static void ViPasses(void)
     glDeleteTextures(1, &input); glDeleteTextures(1, &output);
     glDeleteFramebuffers(1, &raw); glDeleteFramebuffers(1, &destination);
     portSettings.render = saved; memset(pictureOwners, 0, sizeof(pictureOwners)); n64Track = sceneWide = 0; RenderCommit();
-    puts("N64 VI: all 64 settings combinations match the old three-pass RGBA output; enabled-pass counts, crops, scaling, flips, wide/readback and snapshots: OK");
+    puts("N64 VI: all 32 settings combinations match reference RGBA output; enabled-pass counts, crops, scaling, flips, wide/readback and snapshots: OK");
 }
 
 static void ViResampling(void)
@@ -1839,7 +1830,7 @@ static void ViResampling(void)
         PictureChanged(0, VRAM_HEIGHT);
         colour = input; framebuffer = raw; scale = testScale;
         ResetRenderSettings();
-        portSettings.render.n64 = (N64RenderSettings){1, 0, 1, 1, 0, 1};
+        portSettings.render.n64 = (N64RenderSettings){1, 0, 1, 1, 1};
         memset(pictureOwners, 0, sizeof(pictureOwners)); n64Track = sceneWide = 1; RenderCommit();
         for (int c = 0; c < sizeof(sizes) / sizeof(sizes[0]); c++) for (int flip = 0; flip <= 1; flip++) {
             int x = 53 * scale, y = 240 * scale, w = 320 * scale, h = 240 * scale;
@@ -1936,7 +1927,7 @@ static void RendererLifecycle(void)
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
         drawCalls = 0;
         BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
-        assert(drawCalls == (repeat ? 0 : 3));
+        assert(drawCalls == (repeat ? 0 : 2));
         assert(!pipeline && !scene && !n64Program.program); /* presentation needs only VI */
     }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
@@ -1946,7 +1937,7 @@ static void RendererLifecycle(void)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
     drawCalls = 0;
     BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
-    assert(drawCalls == 3);
+    assert(drawCalls == 2);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, destination);
     glReadPixels(0, 0, 16, 16, GL_RGBA, GL_UNSIGNED_BYTE, after);
     assert(memcmp(before, after, sizeof(before)));
@@ -1977,7 +1968,7 @@ static void RendererLifecycle(void)
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
         drawCalls = 0;
         BlitShown(0, 0, 0, 16, 16, 0, 0, 16, 16);
-        assert(drawCalls == 3 && n64ViProgram && !n64Program.program);
+        assert(drawCalls == 2 && n64ViProgram && !n64Program.program);
         UsePipeline(cycle & 1 ? RENDER_PS1 : RENDER_PC);
         drawingProgram = scene->program;
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
@@ -2016,7 +2007,7 @@ static void ScreenBufferOwnership(void)
         n64Track = sceneWide = 1; PictureChanged(0, VRAM_HEIGHT);
         memset(pictureOwners, 0, sizeof(pictureOwners));
         portSettings.render.selection = direction ? RENDER_N64 : RENDER_PS1;
-        portSettings.render.n64 = (N64RenderSettings){1,1,1,1,1,1};
+        portSettings.render.n64 = (N64RenderSettings){1,1,1,1,1};
         RenderCommit(); RememberPicture(0, 0, 320, 256);
         RenderFrame front = pictureOwners[0].render;
         uint64_t frontRevision = pictureRevision[0];
@@ -2081,7 +2072,7 @@ static void ScreenBufferOwnership(void)
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
             drawCalls = 0;
             BlitShown(0, 0, 248, 16, 264, 0, 0, 16, 16);
-            assert(drawCalls == (repeat ? 0 : 3));
+            assert(drawCalls == (repeat ? 0 : 2));
         }
     }
     GpuClearDepth(0, 248, 16, 16, 0);
@@ -2095,7 +2086,7 @@ static void ScreenBufferOwnership(void)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destination);
     drawCalls = 0;
     BlitShown(0, 0, 248, 16, 264, 0, 0, 16, 16);
-    assert(drawCalls == 3);
+    assert(drawCalls == 2);
     SetWideMargin(0);
     assert(glGetError() == GL_NO_ERROR);
     GpuRendererShutdown();

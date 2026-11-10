@@ -689,14 +689,14 @@ static void RendererBoundaries(void)
         frameClears = flushes = 0;
         if (id != RENDER_PS1) portSettings.render.ps1.dither ^= 1;
         if (id != RENDER_PC) portSettings.render.pc.depth ^= 1;
-        if (id != RENDER_N64) portSettings.render.n64.divot ^= 1;
+        if (id != RENDER_N64) portSettings.render.n64.dedither ^= 1;
         PsxRendererBoundary();
         assert(flushes == 1 && frameClears == 0 && drawnFrame.pending);
         assert(upcoming.table == table && shownTables.table == table);
         assert(!memcmp(RenderCommittedSettings(), &portSettings.render, sizeof(RenderSettings)));
         if (id == RENDER_PS1) portSettings.render.ps1.dither ^= 1;
         if (id == RENDER_PC) portSettings.render.pc.depth ^= 1;
-        if (id == RENDER_N64) portSettings.render.n64.divot ^= 1;
+        if (id == RENDER_N64) portSettings.render.n64.dedither ^= 1;
         PsxRendererBoundary();
         assert(flushes == 2 && frameClears == 1 && !drawnFrame.pending);
         assert(!upcoming.table && !shownTables.table);

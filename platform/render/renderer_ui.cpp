@@ -110,9 +110,6 @@ static bool N64Settings(N64RenderSettings *s)
         "Approximates the N64 Video Interface's recovery of finer colour shades from neighbouring pixels, "
         "reducing visible dithering in the scene and race HUD. Requires RGB5 framebuffer precision.");
     ImGui::EndDisabled();
-    changed |= Check("VI divot filtering (approximate)", &s->divot,
-        "Approximates the N64 Video Interface's removal of isolated pixel gaps by filtering high-contrast "
-        "horizontal spikes. Also affects the race HUD and can soften small details.");
     return changed;
 }
 
@@ -395,7 +392,7 @@ bool RenderSettingsUi(RenderSettings *s)
 
     /* Keep platform columns horizontal, with scrolling on smaller windows or larger fonts. */
     const ImGuiStyle &style = ImGui::GetStyle();
-    float panelWidth = ImGui::CalcTextSize("VI divot filtering (approximate)").x +
+    float panelWidth = ImGui::CalcTextSize("Engine flares on distant ships").x +
         ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + style.CellPadding.x * 2;
     float width = panelWidth * profiles;
     if (width < ImGui::GetContentRegionAvail().x) width = ImGui::GetContentRegionAvail().x;

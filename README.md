@@ -208,8 +208,8 @@ see [implementation and fidelity limits](docs/RENDERERS.md#saturn-profile).
 PS1 exposes vertex snapping, affine mapping, colour precision,
 dithering and optional depth buffering. PC exposes filtering, lighting and depth,
 plus [dithered RGB565 and the original PC draw-distance levels](docs/RENDERERS.md#pc-profile).
-N64 exposes three-point filtering, RGB5 precision, dithering and VI filters;
-its depth buffering is always enabled.
+N64 exposes three-point filtering, RGB5 precision, dithering and VI dedithering.
+Its depth buffering is always enabled.
 Choose **Modern** for Auto resolution, depth testing, and Nearest or Bilinear
 filtering of world textures. Bilinear is the default. Its independent
 **Dynamic lights** toggle adds coloured light from projectiles and explosion flashes,

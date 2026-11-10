@@ -29,23 +29,13 @@ static RenderProgram *N64Scene(void)
 
 static GLuint n64ViProgram, n64ViArray, n64ViTexture[2], n64ViFramebuffer[2];
 static int n64ViWidth, n64ViHeight;
-static struct { GLint source, pixelScale, precisionOn, ditherOn, region, stage, displayRegion; } viUniform;
+static struct { GLint source, pixelScale, ditherOn, region, stage, displayRegion; } viUniform;
 
-typedef struct N64ViPasses {
-    int stages[3], count;
-} N64ViPasses;
-
-static N64ViPasses N64ViStages(const N64RenderSettings *settings)
+static int N64ViPassCount(const N64RenderSettings *settings)
 {
     /* Dithering and dedithering have no effect without RGB5 precision.
        Resampling is handled during final presentation, independently of these passes. */
-    N64ViPasses passes = {0};
-    if (settings->colourPrecision) {
-        passes.stages[passes.count++] = 0;
-        if (settings->dedither) passes.stages[passes.count++] = 1;
-    }
-    if (settings->divot) passes.stages[passes.count++] = 2;
-    return passes;
+    return settings->colourPrecision ? 1 + !!settings->dedither : 0;
 }
 
 static void N64ViInit(void)
@@ -64,7 +54,6 @@ static void N64ViInit(void)
         if (!linked) { SDL_Log("N64 VI program failed to link"); abort(); }
         viUniform.source = glGetUniformLocation(n64ViProgram, "source");
         viUniform.pixelScale = glGetUniformLocation(n64ViProgram, "pixelScale");
-        viUniform.precisionOn = glGetUniformLocation(n64ViProgram, "precisionOn");
         viUniform.ditherOn = glGetUniformLocation(n64ViProgram, "ditherOn");
         viUniform.region = glGetUniformLocation(n64ViProgram, "region");
         viUniform.stage = glGetUniformLocation(n64ViProgram, "stage");
@@ -75,25 +64,23 @@ static void N64ViInit(void)
 
 /* Returns zero when the source can be displayed directly, without allocating VI buffers. */
 static GLuint N64Picture(GLuint source, int x, int y, int width, int height, const N64RenderSettings *settings, int pixelScale,
-                         const N64ViPasses *passes)
+                         int passes)
 {
     GLint previousProgram;
 
-    if (!passes->count) {
+    if (!passes) {
         return 0;
     }
     glGetIntegerv(GL_CURRENT_PROGRAM, &previousProgram);
     N64ViInit();
-    int targets = SDL_min(2, passes->count);
-    /* A single enabled pass needs no ping-pong target. Release it when settings
-       switch back to one pass, and recreate it lazily if another pass is enabled. */
-    if (targets == 1 && n64ViTexture[1]) {
+    /* Release the second target when dedithering is disabled and recreate it lazily. */
+    if (passes == 1 && n64ViTexture[1]) {
         glDeleteTextures(1, &n64ViTexture[1]);
         glDeleteFramebuffers(1, &n64ViFramebuffer[1]);
         n64ViTexture[1] = n64ViFramebuffer[1] = 0;
     }
     glActiveTexture(GL_TEXTURE0);
-    for (int i = 0; i < targets; i++) {
+    for (int i = 0; i < passes; i++) {
         if (!n64ViTexture[i] || n64ViWidth != width || n64ViHeight != height) {
             if (!RenderGlResizeTarget(&n64ViTexture[i], &n64ViFramebuffer[i], width, height,
                                       GL_RGBA8, GL_UNSIGNED_BYTE, GL_NEAREST)) {
@@ -107,20 +94,18 @@ static GLuint N64Picture(GLuint source, int x, int y, int width, int height, con
     glViewport(0, 0, width, height);
     glUniform1i(viUniform.source, 0);
     glUniform1i(viUniform.pixelScale, pixelScale);
-    glUniform1i(viUniform.precisionOn, settings->colourPrecision);
     glUniform1i(viUniform.ditherOn, settings->dither);
-    for (int i = 0; i < passes->count; i++) {
-        /* Ping-pong by executed passes; the first enabled stage reads the original crop. */
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, n64ViFramebuffer[i & 1]);
+    for (int i = 0; i < passes; i++) {
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, n64ViFramebuffer[i]);
         glBindTexture(GL_TEXTURE_2D, source);
         glUniform4i(viUniform.region, x, y, width, height);
-        glUniform1i(viUniform.stage, passes->stages[i]);
+        glUniform1i(viUniform.stage, i);
         glDrawArrays(GL_TRIANGLES, 0, 3);
-        source = n64ViTexture[i & 1];
+        source = n64ViTexture[i];
         x = y = 0;
     }
     glUseProgram((GLuint)previousProgram);
-    return n64ViFramebuffer[(passes->count - 1) & 1];
+    return n64ViFramebuffer[passes - 1];
 }
 
 /* Resample directly to the destination with the old cropped-buffer edge clamp.
@@ -138,7 +123,7 @@ static void N64Resample(GLuint source, int x, int y, int width, int height, int 
     glUniform1i(viUniform.source, 0);
     glUniform4i(viUniform.region, x, y, width, height);
     glUniform4i(viUniform.displayRegion, x0, y0, x1 - x0, y1 - y0);
-    glUniform1i(viUniform.stage, 3);
+    glUniform1i(viUniform.stage, 2);
     glDrawArrays(GL_TRIANGLES, 0, 3);
     glUseProgram((GLuint)previousProgram);
 }
@@ -159,8 +144,8 @@ static void N64Present(const void *profile, const RenderPresent *p)
     const N64RenderSettings *settings = profile;
     RenderPresent shown = *p;
     if (p->race && p->right > p->left && p->bottom > p->top) {
-        N64ViPasses passes = N64ViStages(settings);
-        if (!passes.count) {
+        int passes = N64ViPassCount(settings);
+        if (!passes) {
             if (settings->resample) {
                 N64Resample(p->texture, p->left, p->top, p->right - p->left, p->bottom - p->top,
                             p->x0, p->y0, p->x1, p->y1);
@@ -173,9 +158,8 @@ static void N64Present(const void *profile, const RenderPresent *p)
             if (!viCache.valid || !RenderGlPictureMatches(&viCache.picture, p, p->texture) ||
                 viCache.scale != p->scale ||
                 viCache.settings.colourPrecision != settings->colourPrecision ||
-                viCache.settings.dither != settings->dither || viCache.settings.dedither != settings->dedither ||
-                viCache.settings.divot != settings->divot) {
-                viCache.result = N64Picture(p->texture, p->left, p->top, width, height, settings, p->scale, &passes);
+                viCache.settings.dither != settings->dither || viCache.settings.dedither != settings->dedither) {
+                viCache.result = N64Picture(p->texture, p->left, p->top, width, height, settings, p->scale, passes);
                 viCache.picture = RenderGlPictureKey(p, p->texture);
                 viCache.scale = p->scale;
                 viCache.settings = *settings;
