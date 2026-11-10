@@ -43,6 +43,7 @@ typedef struct MetalUniforms {
 @property RenderDraw previousDraw;
 @property BOOL drawValid;
 @property id<MTLRenderCommandEncoder> encoder;
+@property id<MTLBlitCommandEncoder> blit;
 @property id<MTLTexture> encoderColour;
 @property id<MTLTexture> encoderDepth;
 @property RenderTarget encoderTarget;
@@ -70,7 +71,7 @@ static int Error(NSString *what) {
     SDL_SetError("%s", what.UTF8String);
     return 0;
 }
-static void End(WipeoutMetalDevice *m) {
+static void EndRender(WipeoutMetalDevice *m) {
     m.drawValid = NO;
     if (m.encoder) {
         [m.encoder endEncoding];
@@ -80,6 +81,14 @@ static void End(WipeoutMetalDevice *m) {
         m.encoderTarget = (RenderTarget){0};
     }
 }
+static void End(WipeoutMetalDevice *m) {
+    EndRender(m);
+    if (m.blit) {
+        [m.blit endEncoding];
+        m.blit = nil;
+    }
+}
+
 static id<MTLCommandBuffer> Command(WipeoutMetalDevice *m) {
     if (!m.command) {
         dispatch_semaphore_wait(m.inflight, DISPATCH_TIME_FOREVER);
@@ -92,6 +101,15 @@ static id<MTLCommandBuffer> Command(WipeoutMetalDevice *m) {
     }
     return m.command;
 }
+/* Batch consecutive transfers until drawing, readback or submission resumes. */
+static id<MTLBlitCommandEncoder> Transfer(WipeoutMetalDevice *m) {
+    if (!m.blit) {
+        EndRender(m);
+        m.blit = [Command(m) blitCommandEncoder];
+    }
+    return m.blit;
+}
+
 static void Finish(RenderDevice *d) {
     WipeoutMetalDevice *m = Data(d);
     End(m);
@@ -106,6 +124,7 @@ static void Finish(RenderDevice *d) {
 }
 static MTLPixelFormat Format(RenderFormat f) {
     if (f == RENDER_RGBA16_FLOAT) return MTLPixelFormatRGBA16Float;
+    if (f == RENDER_RGBA32_FLOAT) return MTLPixelFormatRGBA32Float;
     return f == RENDER_DEPTH      ? MTLPixelFormatDepth32Float
            : f == RENDER_R16_UINT ? MTLPixelFormatR16Uint
                                   : MTLPixelFormatRGBA8Unorm;
@@ -171,7 +190,9 @@ static int Upload(RenderDevice *d, uintptr_t image, RenderRect r, int layer, con
     @autoreleasepool {
         WipeoutMetalDevice *m = Data(d);
         id<MTLTexture> t = Texture(image);
-        int bpp = t.pixelFormat == MTLPixelFormatR16Uint ? 2 : t.pixelFormat == MTLPixelFormatRGBA16Float ? 8 : 4;
+        MTLPixelFormat format = t.pixelFormat;
+        size_t bpp = format == MTLPixelFormatR16Uint ? 2 : format == MTLPixelFormatRGBA16Float ? 8
+                   : format == MTLPixelFormatRGBA32Float ? 16 : 4;
         size_t pitch = ((size_t)r.w * bpp + 255) & ~(size_t)255;
         id<MTLBuffer> staging = ReuseBuffer(m, pitch * r.h);
         if (!staging)
@@ -179,8 +200,7 @@ static int Upload(RenderDevice *d, uintptr_t image, RenderRect r, int layer, con
         for (int y = 0; y < r.h; y++)
             memcpy((uint8_t *)staging.contents + y * pitch, (const uint8_t *)data + y * rowBytes,
                    (size_t)r.w * bpp);
-        End(m);
-        id<MTLBlitCommandEncoder> b = [Command(m) blitCommandEncoder];
+        id<MTLBlitCommandEncoder> b = Transfer(m);
         [b copyFromBuffer:staging
                    sourceOffset:0
               sourceBytesPerRow:pitch
@@ -190,7 +210,6 @@ static int Upload(RenderDevice *d, uintptr_t image, RenderRect r, int layer, con
                destinationSlice:layer
                destinationLevel:0
               destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
-        [b endEncoding];
         RetireBuffer(m, staging);
         return 1;
     }
@@ -198,10 +217,8 @@ static int Upload(RenderDevice *d, uintptr_t image, RenderRect r, int layer, con
 static void Mipmaps(RenderDevice *d, uintptr_t image) {
     @autoreleasepool {
         WipeoutMetalDevice *m = Data(d);
-        End(m);
-        id<MTLBlitCommandEncoder> b = [Command(m) blitCommandEncoder];
+        id<MTLBlitCommandEncoder> b = Transfer(m);
         [b generateMipmapsForTexture:Texture(image)];
-        [b endEncoding];
     }
 }
 static uintptr_t Buffer(RenderDevice *d, const void *data, size_t size, RenderBufferKind kind) {
@@ -302,6 +319,8 @@ static id<MTLSamplerState> Sampler(WipeoutMetalDevice *m, RenderSampler s) {
     }
     return sam;
 }
+enum { METAL_COPY = RENDER_SHADER_COUNT, METAL_CLEAR, METAL_CLEAR_DEPTH, METAL_GAME_DEPTH };
+
 static id<MTLRenderPipelineState> Pipeline(WipeoutMetalDevice *m, int shader, RenderTarget target,
                                            int blend, int mask) {
     id<MTLTexture> colour = Colour(m, target);
@@ -317,10 +336,11 @@ static id<MTLRenderPipelineState> Pipeline(WipeoutMetalDevice *m, int shader, Re
     static NSString *const fs[] = {
         @"gameFragment", @"averageFragment", @"detailFragment", @"compositeFragment", @"uiFragment",
         @"profilePictureFragment", @"gameHdrFragment", @"modernMotionFragment", @"modernResolveFragment",
-        @"saturnQuadFragment", @"saturnSkyFragment", @"copyFragment", @"clearFragment", @"clearDepthFragment"
+        @"saturnQuadFragment", @"saturnSkyFragment", @"copyFragment", @"clearFragment", @"clearDepthFragment",
+        @"gameDepthFragment"
     };
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-    int game = shader == RENDER_GAME || shader == RENDER_GAME_HDR;
+    int game = shader == RENDER_GAME || shader == RENDER_GAME_HDR || shader == METAL_GAME_DEPTH;
     pd.vertexFunction = [m.library newFunctionWithName:game ? @"gameVertex" :
                           shader == RENDER_UI ? @"uiVertex" :
                           shader == RENDER_SATURN_QUAD ? @"saturnQuadVertex" :
@@ -417,7 +437,11 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
     @autoreleasepool {
         WipeoutMetalDevice *m = Data(d);
         id<MTLTexture> colour = Colour(m, draw->target);
-        id<MTLRenderPipelineState> p = Pipeline(m, draw->pipeline.shader, draw->target,
+        int shader = draw->pipeline.shader;
+        if (!draw->pipeline.colourMask && draw->uniforms.depthPass &&
+            (shader == RENDER_GAME || shader == RENDER_GAME_HDR))
+            shader = METAL_GAME_DEPTH;
+        id<MTLRenderPipelineState> p = Pipeline(m, shader, draw->target,
                                                 draw->pipeline.blend, draw->pipeline.colourMask);
         if (!p)
             return 0;
@@ -430,7 +454,8 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
         id<MTLRenderCommandEncoder> e = Encoder(m, draw->target);
         RenderDraw last = m.previousDraw;
         BOOL all = !m.drawValid;
-        if (all || memcmp(&last.pipeline, &draw->pipeline, sizeof(RenderPipeline))) {
+        if (all || last.uniforms.depthPass != draw->uniforms.depthPass ||
+            memcmp(&last.pipeline, &draw->pipeline, sizeof(RenderPipeline))) {
             [e setRenderPipelineState:p];
             [e setDepthStencilState:Depth(m, draw->pipeline.depthTest, draw->pipeline.depthWrite,
                                           draw->pipeline.depthLess)];
@@ -515,7 +540,8 @@ static int Clear(RenderDevice *d, const RenderClear *c) {
             return 1;
         }
         id<MTLRenderPipelineState> p =
-            Pipeline(m, RENDER_SHADER_COUNT + (c->depth && depth ? 2 : 1), c->target, 0, c->colour ? c->colourMask : 0);
+            Pipeline(m, c->depth && depth ? METAL_CLEAR_DEPTH : METAL_CLEAR, c->target, 0,
+                     c->colour ? c->colourMask : 0);
         if (!p)
             return 0;
         id<MTLRenderCommandEncoder> e = Encoder(m, c->target);
@@ -541,8 +567,7 @@ static int Copy(RenderDevice *d, const RenderCopy *c) {
         if (!c->source.window && !c->destination.window && c->from.w == c->to.w &&
             c->from.h == c->to.h && c->from.w > 0 && c->from.h > 0 &&
             source.pixelFormat == dest.pixelFormat) {
-            End(m);
-            id<MTLBlitCommandEncoder> b = [Command(m) blitCommandEncoder];
+            id<MTLBlitCommandEncoder> b = Transfer(m);
             [b copyFromTexture:source
                       sourceSlice:0
                       sourceLevel:0
@@ -552,12 +577,11 @@ static int Copy(RenderDevice *d, const RenderCopy *c) {
                  destinationSlice:0
                  destinationLevel:0
                 destinationOrigin:MTLOriginMake(c->to.x, c->to.y, 0)];
-            [b endEncoding];
             return 1;
         }
         if (c->depth)
             return Error(@"Scaled depth transfers are unsupported");
-        id<MTLRenderPipelineState> p = Pipeline(m, RENDER_SHADER_COUNT, c->destination, 0, 15);
+        id<MTLRenderPipelineState> p = Pipeline(m, METAL_COPY, c->destination, 0, 15);
         if (!p)
             return 0;
         id<MTLRenderCommandEncoder> e = Encoder(m, c->destination);

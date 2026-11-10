@@ -6,9 +6,9 @@
 
 enum { FIELD, BLOCKS, TILES, NEARBY, MOTION_SURFACES };
 enum { BLOOM_A, BLOOM_B, RESOLVED, BLOOM_SURFACES };
-enum { EXTRACT = 1, BLUR, RESOLVE };
+enum { EXTRACT = 1, BLUR, RESOLVE, LINEAR_SCENE };
 
-static ModernSurface motion[MOTION_SURFACES], bloom[BLOOM_SURFACES];
+static ModernSurface motion[MOTION_SURFACES], bloom[BLOOM_SURFACES], linear;
 static struct {
     RgHandle hdr, sdr, depth;
     RenderRect crop;
@@ -146,8 +146,18 @@ const ModernSurface *ModernResolvePicture(const ModernPicture *picture, const Mo
         inputs[2] = bloom[BLOOM_A].texture;
     }
     inputs[0] = picture->hdr;
+    /* A longer shutter reuses enough taps to amortize linearizing the scene once. */
+    int prepareLinear = tile > 4 && RenderActiveBackend() == RENDER_METAL &&
+                        ModernSurfaceResize(&linear, crop.w, crop.h, RENDER_RGBA32_FLOAT);
+    if (prepareLinear) {
+        effect[1][2] = LINEAR_SCENE;
+        Draw(RENDER_MODERN_RESOLVE, &linear, effect, inputs);
+        inputs[0] = linear.texture;
+        effect[3][0] = 1;
+    }
     effect[1][2] = RESOLVE;
     Draw(RENDER_MODERN_RESOLVE, &bloom[RESOLVED], effect, inputs);
+    if (prepareLinear) RgDiscardImageContents(linear.texture);
     if (glow == settings->bloom && (!!tile == !!amount)) {
         cache.hdr = picture->hdr;
         cache.sdr = picture->sdr;

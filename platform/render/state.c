@@ -817,6 +817,11 @@ int RgAllocateImage(RgHandle handle, int width, int height, RenderFormat format)
     return 1;
 }
 
+void RgDiscardImageContents(RgHandle handle)
+{
+    images[handle].dirty = 0;
+}
+
 static void DrawBound(RenderDraw *draw)
 {
     if (!device.ops->draw(&device, draw)) {

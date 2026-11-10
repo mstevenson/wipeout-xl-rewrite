@@ -31,7 +31,8 @@ def metal_fragment(header, name, directory):
     )
     glsl = glsl.replace("out vec4 motion;", "layout(location=0) out vec4 motion;")
     fragment, binary = directory / f"{name}.frag", directory / f"{name}.spv"
-    fragment.write_text("#version 450\n" + glsl)
+    defines = "#define PREPARE_LINEAR_SCENE 1\n" if name == "modernResolveFragment" else ""
+    fragment.write_text("#version 450\n" + defines + glsl)
     subprocess.run(["glslangValidator", "-V", str(fragment), "-o", str(binary)], check=True)
     msl = subprocess.check_output(
         ["spirv-cross", str(binary), "--msl", "--msl-version", "20300", "--msl-decoration-binding",

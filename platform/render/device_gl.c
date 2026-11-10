@@ -44,6 +44,7 @@ static GLenum ImageFormat(RenderFormat f) {
 }
 static GLenum ImageType(RenderFormat f) {
     if (f == RENDER_RGBA16_FLOAT) return GL_HALF_FLOAT;
+    if (f == RENDER_RGBA32_FLOAT) return GL_FLOAT;
     return f == RENDER_R16_UINT ? GL_UNSIGNED_SHORT
            : f == RENDER_DEPTH  ? GL_FLOAT
                                 : GL_UNSIGNED_BYTE;
@@ -200,6 +201,7 @@ static uintptr_t NewImage(RenderDevice *d, RenderImageDesc desc) {
     GLenum target = desc.layers > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
     GLint format = desc.format == RENDER_R16_UINT ? GL_R16UI
                    : desc.format == RENDER_RGBA16_FLOAT ? GL_RGBA16F
+                   : desc.format == RENDER_RGBA32_FLOAT ? GL_RGBA32F
                    : desc.format == RENDER_DEPTH  ? GL_DEPTH_COMPONENT24
                                                   : GL_RGBA8;
     glGenTextures(1, &im->name);

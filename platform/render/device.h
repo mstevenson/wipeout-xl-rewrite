@@ -21,9 +21,10 @@ typedef struct RenderVertex {
     int16_t emission[4];
 } RenderVertex;
 
-typedef enum RenderFormat { RENDER_RGBA8, RENDER_R16_UINT, RENDER_DEPTH, RENDER_RGBA16_FLOAT } RenderFormat;
+typedef enum RenderFormat { RENDER_RGBA8, RENDER_R16_UINT, RENDER_DEPTH, RENDER_RGBA16_FLOAT, RENDER_RGBA32_FLOAT } RenderFormat;
 static inline size_t RenderPixelBytes(RenderFormat format)
 {
+    if (format == RENDER_RGBA32_FLOAT) return 16;
     return format == RENDER_R16_UINT ? 2 : format == RENDER_RGBA16_FLOAT ? 8 : 4;
 }
 
