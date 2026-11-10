@@ -48,6 +48,8 @@ int main(void)
         }
     }
     PortOriginalSceneInit(prm, 2, &sky);
+    for (int i = 0; i < 5; i++) assert(scenery[i].flags & PORT_OBJECT_ORIGINAL_SCENERY);
+    assert(!(sky.flags & PORT_OBJECT_ORIGINAL_SCENERY));
     assert(beaconCount == 1 && beacons[0] == &scenery[2]);
     assert(pumpCount == 2 && auroraCount == 80);
     assert(aurora[0].corners == 3 && aurora[1].corners == 15 && aurora[2].corners == 12);
@@ -97,6 +99,10 @@ int main(void)
     guestModel = "silverstream"; PortOriginalSceneInit(prm, 2, &sky); assert(auroraCount == 80);
     guest = -1; PortOriginalSceneInit(prm, 2, &sky);
     assert(!auroraCount && !beaconCount && !pumpCount);
+    Object nativeScene = {0};
+    prm[0] = &nativeScene;
+    PortOriginalSceneInit(prm, 2, &sky);
+    assert(nativeScene.flags == 0);
     puts("1995 pump matrices, selected beacon, Silverstream aurora, PAL timing and pause: OK");
     return 0;
 }

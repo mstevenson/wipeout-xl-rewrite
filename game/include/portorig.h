@@ -4,6 +4,8 @@
 
 #include "menus.h"
 
+#define PORT_OBJECT_ORIGINAL_SCENERY 0x2000 /* Port: private Object.flags bit for the 1995 scene.prm */
+
 void  PortOriginalChoose(int index);
 void  PortOriginalRaceBegins(void);
 int   PortOriginalOffered(void);

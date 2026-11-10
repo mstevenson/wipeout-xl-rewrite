@@ -9,8 +9,8 @@
    object (the rest of its primitives are not drawn).
 
    The three differ in how they treat the primitives:
-     AsmDrawObject       the plain renderer: PS1 gouraud textured polygons are drawn flat, textured with the colour
-                         of their first vertex (marked N64 materials blend all corner colours for smooth lighting);
+     AsmDrawObject       the plain renderer: native PS1 XL Gouraud textured polygons use the colour of their first
+                         vertex. Imported 1995 scenery and N64 materials can retain all corner colours;
                          single sided polygons facing away are dropped; translucent ones
                          get the semi-transparency bit; depth is the average of the vertices' depths; billboard
                          sprites (types 10 and 11) are scaled by distance and rotated by `roll`.
@@ -367,17 +367,21 @@ static char *DrawTexturedQuad(DrawKind kind, char *out, u_long *ordering, int fi
     return out + sizeof(POLY_FT4);
 }
 
-/* Port: the PC loader retains every GT3/GT4 corner colour, including scenery and sky.
-   The original Wipeout's sky renderer also emits GT3/GT4 packets, unlike PS1 XL's flat sky. */
-static int GouraudColours(DrawKind kind)
+/* Port: the 1995 renderer retains GT3/GT4 corner colours on its scenery and sky. */
+static int GouraudColours(DrawKind kind, const Object *object)
 {
-    return PortRenderGeometry().gouraudObjects || kind == DRAW_LIT || (kind == DRAW_FIXED && PortOriginalLooks());
+    RenderGeometry geometry = PortRenderGeometry();
+
+    return geometry.gouraudObjects || kind == DRAW_LIT ||
+           (kind == DRAW_FIXED && PortOriginalLooks()) ||
+           (kind == DRAW_PLAIN && geometry.originalSceneryColours &&
+            (object->flags & PORT_OBJECT_ORIGINAL_SCENERY) && PortOriginalLooks());
 }
 
 /* N64 materials retain corner lighting in every draw pass. */
-static int GouraudTextured(DrawKind kind, unsigned short page)
+static int GouraudTextured(DrawKind kind, unsigned short page, const Object *object)
 {
-    return GouraudColours(kind) || (page & PORT_TPAGE_N64) != 0;
+    return GouraudColours(kind, object) || (page & PORT_TPAGE_N64) != 0;
 }
 
 static char *DrawGouraudTexturedTriangle(DrawKind kind, char *out, u_long *ordering, int fixedSlot, const GT3 *prim)
@@ -830,10 +834,10 @@ static int DrawNearPrimitive(Object *object, int index, u_long *ordering, Poly p
         coords = prim.ft3->coords, count = 3, uv = &prim.ft3->u0, colours = &prim.ft3->colour;
         tsb = prim.ft3->tsb, cba = prim.ft3->cba;
         break;
-    case TypeGT3: /* Preserve N64 corner lighting through near-plane clipping. */
+    case TypeGT3: /* Preserve authored corner lighting through near-plane clipping. */
         coords = prim.gt3->coords, count = 3, uv = &prim.gt3->u0, colours = prim.gt3->colour;
         tsb = prim.gt3->tsb, cba = prim.gt3->cba;
-        gouraud = GouraudTextured(DRAW_PLAIN, (unsigned short)tsb);
+        gouraud = GouraudTextured(DRAW_PLAIN, (unsigned short)tsb, object);
         break;
     case TypeFT4:
         coords = prim.ft4->coords, count = 4, uv = &prim.ft4->u0, colours = &prim.ft4->colour;
@@ -842,7 +846,7 @@ static int DrawNearPrimitive(Object *object, int index, u_long *ordering, Poly p
     case TypeGT4:
         coords = prim.gt4->coords, count = 4, uv = &prim.gt4->u0, colours = prim.gt4->colour;
         tsb = prim.gt4->tsb, cba = prim.gt4->cba;
-        gouraud = GouraudTextured(DRAW_PLAIN, (unsigned short)tsb);
+        gouraud = GouraudTextured(DRAW_PLAIN, (unsigned short)tsb, object);
         break;
     case TypeG3: coords = prim.g3->coords, count = 3, colours = prim.g3->colour, gouraud = 1; break;
     case TypeG4: coords = prim.g4->coords, count = 4, colours = prim.g4->colour, gouraud = 1; break;
@@ -1075,7 +1079,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         culled = 0;
         switch ((u_short)prim.prim->type) {
         case TypeGT3:
-            if (GouraudTextured(kind, (unsigned short)prim.gt3->tsb)) {
+            if (GouraudTextured(kind, (unsigned short)prim.gt3->tsb, object)) {
                 out = DrawGouraudTexturedTriangle(kind, out, ordering, fixedSlot, prim.gt3);
             } else {
                 out = DrawTexturedTriangle(kind, out, ordering, fixedSlot, (const FT3 *)prim.gt3, &prim.gt3->colour[0]);
@@ -1083,7 +1087,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             primitive += sizeof(GT3);
             break;
         case TypeGT4:
-            if (GouraudTextured(kind, (unsigned short)prim.gt4->tsb)) {
+            if (GouraudTextured(kind, (unsigned short)prim.gt4->tsb, object)) {
                 out = DrawGouraudTexturedQuad(kind, out, ordering, fixedSlot, prim.gt4);
             } else {
                 out = DrawTexturedQuad(kind, out, ordering, fixedSlot, (const FT4 *)prim.gt4, &prim.gt4->colour[0]);

@@ -12,8 +12,14 @@ static void *packet;
 static u_long *packetSlot;
 static int originalLook;
 static int pcRendering;
+static int originalSceneryColours;
 RenderGeometry PortRenderGeometry(void)
-{ return (RenderGeometry){pcRendering, pcRendering, pcRendering, pcRendering ? RENDER_LIGHT_RGB8 : RENDER_LIGHT_PS1}; }
+{
+    return (RenderGeometry){.alternateQuad = pcRendering, .gouraudObjects = pcRendering,
+                            .lightAllVertices = pcRendering,
+                            .lightFormat = pcRendering ? RENDER_LIGHT_RGB8 : RENDER_LIGHT_PS1,
+                            .originalSceneryColours = originalSceneryColours};
+}
 static int n64Track;
 int PortOriginalTrackIs64(void) { return n64Track; }
 int PortOriginalLooks(void) { return originalLook; }
@@ -154,10 +160,30 @@ int main(void)
         assert(DrawNearPrimitive(&object, 0, ordering, prim));
         assert(arena.gt.r0 == 20 && arena.gt.r1 == 50 && arena.gt.r2 == 80 && arena.gt.r3 == 110);
         /* Plain, sky and far passes share the same material decision; PS1 stays flat. */
-        assert(GouraudTextured(DRAW_PLAIN, quad.tsb));
-        assert(GouraudTextured(DRAW_FIXED, quad.tsb));
-        assert(!GouraudTextured(DRAW_PLAIN, 17));
-        assert(!GouraudTextured(DRAW_FIXED, 17));
+        assert(GouraudTextured(DRAW_PLAIN, quad.tsb, &object));
+        assert(GouraudTextured(DRAW_FIXED, quad.tsb, &object));
+        assert(!GouraudTextured(DRAW_PLAIN, 17, &object));
+        assert(!GouraudTextured(DRAW_FIXED, 17, &object));
+
+        /* 1995 scenery retains its corner colours in ordinary packets and through near clipping. */
+        originalLook = originalSceneryColours = 1;
+        smooth.tsb = quad.tsb = 17;
+        assert(!GouraudTextured(DRAW_PLAIN, smooth.tsb, &object));
+        object.flags = PORT_OBJECT_ORIGINAL_SCENERY;
+        assert(GouraudTextured(DRAW_PLAIN, smooth.tsb, &object));
+        prim.gt3 = &smooth;
+        assert(DrawNearPrimitive(&object, 0, ordering, prim));
+        assert(arena.gt.r0 == 40 && arena.gt.r1 == 80 && arena.gt.r2 == 120);
+        prim.gt4 = &quad;
+        assert(DrawNearPrimitive(&object, 0, ordering, prim));
+        assert(arena.gt.r0 == 20 && arena.gt.r1 == 50 && arena.gt.r2 == 80 && arena.gt.r3 == 110);
+        originalLook = 0;
+        assert(!GouraudTextured(DRAW_PLAIN, smooth.tsb, &object));
+        originalLook = 1;
+        originalSceneryColours = 0;
+        assert(!GouraudTextured(DRAW_PLAIN, smooth.tsb, &object));
+        originalLook = 0;
+        object.flags = 0;
     }
     prim.ft4 = &face;
     /* Fully hidden polygons and invalid vertex references must still be rejected. */
@@ -171,10 +197,10 @@ int main(void)
     {
         GT4 sky = {0}; GT3 triangle = {0};
         originalLook = 1;
-        assert(GouraudColours(DRAW_FIXED) && GouraudColours(DRAW_LIT));
-        assert(!GouraudColours(DRAW_PLAIN));
+        assert(GouraudColours(DRAW_FIXED, &object) && GouraudColours(DRAW_LIT, &object));
+        assert(!GouraudColours(DRAW_PLAIN, &object));
         originalLook = 0;
-        assert(!GouraudColours(DRAW_FIXED) && GouraudColours(DRAW_LIT));
+        assert(!GouraudColours(DRAW_FIXED, &object) && GouraudColours(DRAW_LIT, &object));
         for (int i = 0; i < 4; i++) {
             sky.coords[i] = (short)i;
             sky.colour[i] = (CVECTOR){30 + i * 40, 50 + i * 30, 70 + i * 20, 0};
@@ -209,7 +235,7 @@ int main(void)
             projected[i].flag = 1;
         }
         pcRendering = 1;
-        assert(GouraudTextured(DRAW_PLAIN, 0) && GouraudTextured(DRAW_FIXED, 0));
+        assert(GouraudTextured(DRAW_PLAIN, 0, &object) && GouraudTextured(DRAW_FIXED, 0, &object));
         prim.gt4 = &smooth;
         assert(DrawNearPrimitive(&object, 0, ordering, prim));
         assert(arena.gt.r0 == 10 && arena.gt.r1 == 30 && arena.gt.r2 == 50 && arena.gt.r3 == 70);
@@ -220,7 +246,7 @@ int main(void)
         assert(arena.gt.code == before.code && arena.gt.tpage == before.tpage && arena.gt.x3 == before.x3);
         assert(smooth.colour[0].r == 10 && smooth.colour[3].r == 70); /* shared model was not changed */
         pcRendering = 0;
-        assert(!GouraudTextured(DRAW_PLAIN, 0));
+        assert(!GouraudTextured(DRAW_PLAIN, 0, &object));
         puts("PC scenery retains corner colours; PC ship lighting replaces every emitted corner: OK");
     }
     puts("near scenery keeps PS1 quad geometry and original vertex positions: OK");

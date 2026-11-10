@@ -468,6 +468,11 @@ void PortOriginalSceneInit(Object **prm, short prmCount, Object *sky)
     int looks = PortOriginalLooks();
 
     guestScene = prmCount ? prm[0] : NULL;
+    if (looks) {
+        for (Object *object = guestScene; object; object = object->next) {
+            object->flags |= PORT_OBJECT_ORIGINAL_SCENERY;
+        }
+    }
     boardCount = 0;
     InitStartBoom(prm, looks ? prmCount : 0);
     ResetStartBoom();

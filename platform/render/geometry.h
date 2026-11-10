@@ -15,6 +15,7 @@ typedef struct RenderGeometry {
     int worldBillboards;  /* upright 3D sprite quads instead of screen-space sprite arithmetic */
     int smoothTrackLighting; /* attach interpolated colour to track packets */
     int trackDetail;      /* RENDER_TRACK_* for road packets */
+    int originalSceneryColours; /* preserve textured corner colours on imported 1995 scenery */
 } RenderGeometry;
 RenderGeometry PortRenderGeometry(void);
 #ifdef __cplusplus

@@ -29,7 +29,7 @@ static int Depth(const void *profile)
 static RenderGeometry Geometry(const void *profile)
 {
     (void)profile;
-    return (RenderGeometry){0, 0, 0, RENDER_LIGHT_PS1};
+    return (RenderGeometry){.lightFormat = RENDER_LIGHT_PS1, .originalSceneryColours = 1};
 }
 
 const Renderer ps1Renderer = {"PlayStation", Prepare, Depth, Geometry};

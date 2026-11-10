@@ -25,7 +25,8 @@ static RenderGeometry Geometry(const void *profile)
 {
     const ModernRenderSettings *settings = profile;
     return (RenderGeometry){.lightFormat = RENDER_LIGHT_PS1, .worldBillboards = 1,
-                            .smoothTrackLighting = settings->smoothTrackLighting, .trackDetail = settings->trackDetail};
+                            .smoothTrackLighting = settings->smoothTrackLighting, .trackDetail = settings->trackDetail,
+                            .originalSceneryColours = 1};
 }
 
 static RenderResources Resources(const void *profile)
