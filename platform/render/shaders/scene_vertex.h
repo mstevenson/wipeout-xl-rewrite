@@ -14,9 +14,8 @@
     "in ivec4 hdTexelsIn;\n"
     "in ivec4 filterBoundsIn;\n"
     "flat out ivec4 filterBounds;\n"
-    "flat out int filtered;\n"
-    "flat out int addressFlags;\n"
-    "flat out int ps1Light;\n"
+    /* Group flat values so the scene shader fits the ES 3 varying limit. */
+    "flat out ivec4 materialFlags;\n"
 #ifdef RENDER_AUX_FLAGS
     "flat out int auxFlags;\n"
     "in ivec4 emissionUvIn;\n"
@@ -26,20 +25,17 @@
 #endif
     "flat out uvec4 hd;\n"
     "flat out ivec4 hdTexels;\n"
-    "flat out ivec4 texturePage;\n"
-    "flat out ivec4 clut;\n"
+    "flat out ivec4 textureAddress;\n"
     "flat out ivec4 vWindow;\n"
     "flat out ivec4 mode;\n"
-    "flat out int semiMode;\n"        /* the primitive's blending: -1 opaque, else the console's mode 0-3 */
     "uniform int pass;\n"
     "uniform float depthPull;\n"       /* the depth buffer (Flush): depth tested this much nearer */
     "uniform int depthPass;\n"         /* ... 1: depth written, at the true depth */
     "uniform vec2 target;\n"           /* framebuffer size in video-memory pixels */
     "uniform vec2 origin;\n"           /* the video-memory position of its first pixel */
     "out vec4 vColour;\n"
-    "out float vColourWeight;\n"
     "out vec3 vPixel;\n"
-    "out vec3 vTexel;\n"
+    "out vec4 vTexel;\n"               /* xy: UV, z: UV weight, w: colour weight */
     "void main() {\n"
     /* position.z: the depth (perspective), negative when left out of the depth buffer, 0 in 2D. The depth buffer
        holds 1 - 1/depth; what is left out and 2D are in front of it (always drawn) and never written. */
@@ -54,32 +50,30 @@
        nearer); from bit 4
        the blending mode + 1 */
     "    float pull = depthPass == 1 || (modeIn.w & 1u) == 1u ? 1.0 : depthPull;\n"
-    "    semiMode = int(modeIn.w >> 4u) - 1;\n"
     "    float z = position.z > 0.0 ? w - 2.0 * pull : (depthPass == 1 ? w : -w);\n"
     "    gl_Position = vec4(ndc * w, z, w);\n"
     /* Multiply/divide by w implements screen-linear colour on ES 3 too (no noperspective qualifier). */
-    "    vColourWeight = (modeIn.y & 16u) != 0u ? w : 1.0;\n"
-    "    vColour = vec4(colour.rgb * vColourWeight, colour.a);\n"
+    "    float colourWeight = (modeIn.y & 16u) != 0u ? w : 1.0;\n"
+    "    vColour = vec4(colour.rgb * colourWeight, colour.a);\n"
     "    vPixel = vec3(pixel * w, w);\n"
 #ifdef RENDER_LIGHTING
     "    vViewPosition = viewPositionIn.xyz;\n"
     "    receivesLight = viewPositionIn.w;\n"
 #endif
-    "    texturePage = ivec4(textureIn.xy, 0, 0);\n"
-    "    clut = ivec4(textureIn.zw, 0, 0);\n"
+    "    textureAddress = textureIn;\n"
     "    vWindow = ivec4(window);\n"
     "    mode = ivec4(int(modeIn.x), int(modeIn.y), pass, int(modeIn.z & 3u));\n"
 #ifdef RENDER_AFFINE_TEXTURES
-    "    vTexel = (modeIn.y & 32u) != 0u ? vec3(texel * w, w) : vec3(texel, 1.0);\n"
+    "    vTexel = (modeIn.y & 32u) != 0u ? vec4(texel * w, w, colourWeight) : vec4(texel, 1.0, colourWeight);\n"
 #else
-    "    vTexel = vec3(texel, 1.0);\n"
+    "    vTexel = vec4(texel, 1.0, colourWeight);\n"
 #endif
     "    hd = hdIn;\n"
     "    hdTexels = hdTexelsIn;\n"
     "    filterBounds = filterBoundsIn;\n"
-    "    filtered = int((modeIn.w >> 1u) & 3u);\n"
-    "    addressFlags = int((modeIn.z >> 2u) & 7u);\n"
-    "    ps1Light = int((modeIn.z >> 5u) & 1u);\n"
+    /* Filter mode, address flags, PS1 light, and blending mode (-1 for opaque). */
+    "    materialFlags = ivec4(int((modeIn.w >> 1u) & 3u), int((modeIn.z >> 2u) & 7u),\n"
+    "                          int((modeIn.z >> 5u) & 1u), int(modeIn.w >> 4u) - 1);\n"
 #ifdef RENDER_AUX_FLAGS
     "    auxFlags = int((modeIn.z >> 6u) | ((modeIn.w & 8u) >> 1u));\n"
     "    emissionUv = emissionUvIn;\n"

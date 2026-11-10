@@ -14,6 +14,7 @@
 
 #define RENDER_AFFINE_TEXTURES
 #define RENDER_RGB5_VERTEX_COLOUR
+#define RENDER_FRAGMENT_UNIFORMS "uniform vec2 nativeGrid;\n"
 #define RENDER_POSITION "    vec2 pixel = (modeIn.y & 128u) != 0u ? floor(position.xy * nativeGrid) / nativeGrid : position.xy;\n    if (pointSize > 0.0) pixel += vec2(0.5) / nativeGrid;\n    gl_PointSize = max(pointSize, 1.0);\n"
 /* VDP2 places RGB555 in the high five bits of each 8-bit channel. */
 #define RENDER_OUTPUT_COLOUR \
@@ -40,7 +41,7 @@
 static const char *saturnVertexSource = "uniform float pointSize; uniform vec2 nativeGrid;\n"
 #include "shaders/scene_vertex.h"
 ;
-static const char *saturnFragmentSource = "uniform vec2 nativeGrid;\n"
+static const char *saturnFragmentSource =
 #include "shaders/material_fragment.h"
 ;
 static RenderProgram saturnProgram, backgroundProgram;

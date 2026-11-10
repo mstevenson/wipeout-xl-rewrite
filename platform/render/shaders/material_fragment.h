@@ -8,22 +8,21 @@
     RENDER_FRAGMENT_UNIFORMS
 #endif
     "in vec4 vColour;\n"
-    "in float vColourWeight;\n"
     "in vec3 vPixel;\n"
-    "in vec3 vTexel;\n"
-    "flat in int semiMode;\n"
+    "in vec4 vTexel;\n"
     "flat in ivec4 filterBounds;\n"
-    "flat in int filtered;\n"
-    "flat in int addressFlags;\n"
-    "flat in int ps1Light;\n"
+    "flat in ivec4 materialFlags;\n"
+    "#define filtered (materialFlags.x)\n"
+    "#define addressFlags (materialFlags.y)\n"
+    "#define ps1Light (materialFlags.z)\n"
+    "#define semiMode (materialFlags.w)\n"
     "uniform usampler2D vram;\n"
     "uniform sampler2D glyphs;\n"
     "uniform sampler2D portPages;\n"
     "uniform sampler2D hdAtlas;\n"
     "flat in uvec4 hd;\n"
     "flat in ivec4 hdTexels;\n"
-    "flat in ivec4 texturePage;\n"
-    "flat in ivec4 clut;\n"
+    "flat in ivec4 textureAddress;\n"
     "flat in ivec4 vWindow;\n"
     "flat in ivec4 mode;\n"
 #ifdef RENDER_AUX_COLOUR
@@ -36,7 +35,7 @@
     "uint Fetch(ivec2 p) { return texelFetch(vram, ivec2(p.x & 1023, p.y & 1023), 0).r; }\n"
     "uint FetchClut(ivec2 p) { return texelFetch(vram, ivec2(p.x & 1023, p.y & 1023), 0).r; }\n"
     "vec3 VertexColour() {\n"
-    "    vec3 c = vColour.rgb / vColourWeight;\n"
+    "    vec3 c = vColour.rgb / vTexel.w;\n"
 #ifdef RENDER_VERTEX_COLOUR
     RENDER_VERTEX_COLOUR
 #elif defined(RENDER_RGB5_VERTEX_COLOUR)
@@ -101,15 +100,15 @@
     /* Resolve palette indices before filtering; retain the packed colour's semi-transparency bit. */
     "uint NativeTexel(ivec2 uv) {\n"
     "    if (mode.w == 0) {\n"
-    "        uint word = Fetch(texturePage.xy + ivec2(uv.x >> 2, uv.y));\n"
+    "        uint word = Fetch(textureAddress.xy + ivec2(uv.x >> 2, uv.y));\n"
     "        uint index = (word >> uint((uv.x & 3) * 4)) & 15u;\n"
-    "        return FetchClut(clut.xy + ivec2(int(index), 0));\n"
+    "        return FetchClut(textureAddress.zw + ivec2(int(index), 0));\n"
     "    } else if (mode.w == 1) {\n"
-    "        uint word = Fetch(texturePage.xy + ivec2(uv.x >> 1, uv.y));\n"
+    "        uint word = Fetch(textureAddress.xy + ivec2(uv.x >> 1, uv.y));\n"
     "        uint index = (word >> uint((uv.x & 1) * 8)) & 255u;\n"
-    "        return FetchClut(clut.xy + ivec2(int(index), 0));\n"
+    "        return FetchClut(textureAddress.zw + ivec2(int(index), 0));\n"
     "    }\n"
-    "    return Fetch(texturePage.xy + uv);\n"
+    "    return Fetch(textureAddress.xy + uv);\n"
     "}\n"
     /* N64 images have registered bounds; native PS1 taps retain page wrapping and texture windows. */
 #include "material_address.h"
@@ -254,7 +253,7 @@
     "        Out(c, c, 1.0, semiMode >= 0, false);\n"
     "        return;\n"
     "    }\n"
-    "    int portPage = texturePage.x / 64 + 16 * ((texturePage.y / 256) & 1) + (texturePage.y >= 512 ? 32 : 0);\n"
+    "    int portPage = textureAddress.x / 64 + 16 * ((textureAddress.y / 256) & 1) + (textureAddress.y >= 512 ? 32 : 0);\n"
     "    if (mode.w == 3 && portPage > 0) {\n"  /* the port's other pages (the PC version's): its colour key, the
                                                  vertex colour as Direct3D's (255 white), blended whole */
     "        int k = portPage - 1;\n"
