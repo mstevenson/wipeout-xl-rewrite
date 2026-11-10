@@ -1,9 +1,6 @@
 /* Global data of display.c, generated from the executable by tools/gendata.py. */
 #include "functions.h"
 
-char *primBuffers[2];
-char PrimitiveBuffer0[44032];
-char PrimitiveBuffer1[44032];
 DRAWENV DrawEnv0;
 DRAWENV DrawEnv1;
 DISPENV DispEnv0;

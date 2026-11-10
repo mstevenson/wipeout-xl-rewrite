@@ -14,10 +14,10 @@ extern u_long otBuffer0[0x2000];
 extern u_long otBuffer1[0x2000];
 extern u_long ot2Buffer0[0x640];
 extern u_long ot2Buffer1[0x640];
-/* The primitive pool of each screen (44032 bytes on the console). */
-extern char *primBuffers[];
-extern char PrimitiveBuffer0[0xAC00];
-extern char PrimitiveBuffer1[0xAC00];
+/* Port: the console's 44,032 bytes per screen can overflow on imported tracks.
+   Allow room for Firestar's entire scenery and sky (under 600 KiB even at one
+   POLY_GT4 per primitive), plus the track, ships and effects. */
+static _Alignas(u_long) char primitiveBuffers[2][1 << 20];
 extern ConfigData *gameData;
 extern short fastFrame;
 extern int primsDrawn;
@@ -53,6 +53,12 @@ POLY_F4 *ClearScreen(short red, short green, short blue)
 
 void InitSystem(void)
 {
+    static int linked;
+
+    if (!linked) {
+        PsxLinkRegion(primitiveBuffers, sizeof(primitiveBuffers));
+        linked = 1;
+    }
     ResetGraph(0);
     SetGraphDebug(0);
     InitGeom();
@@ -72,9 +78,7 @@ void InitSystem(void)
     OT[1] = otBuffer1;
     OT2[0] = ot2Buffer0;
     OT2[1] = ot2Buffer1;
-    primBuffers[0] = PrimitiveBuffer0;
-    primBuffers[1] = PrimitiveBuffer1;
-    nextPrim.ptr = primBuffers[CurrentScreen];
+    nextPrim.ptr = primitiveBuffers[CurrentScreen];
 }
 
 
@@ -222,7 +226,7 @@ void Swap(void)
     if (activateOT2 != 0) {
         DrawOTag(OT2[(CurrentScreen + 1) & 1] + 0x63F);
     }
-    nextPrim.ptr = primBuffers[CurrentScreen];
+    nextPrim.ptr = primitiveBuffers[CurrentScreen];
     SfxDoSfx();
     PortTraceBoundary(TRACE_SWAP); /* Port: end of a game-loop iteration, for the lockstep tests */
 }
@@ -239,7 +243,7 @@ void CallbackSwap(void)
     PutDispEnv(doubleBuffer[CurrentScreen].disp);
     DrawOTag(OT[(CurrentScreen + 1) & 1] + 0x1FFF);
     DrawOTag(OT2[(CurrentScreen + 1) & 1] + 0x63F);
-    nextPrim.ptr = primBuffers[CurrentScreen];
+    nextPrim.ptr = primitiveBuffers[CurrentScreen];
     PortTraceBoundary(TRACE_CALLBACK_SWAP); /* Port: end of a game-loop iteration, for the lockstep tests */
 }
 
