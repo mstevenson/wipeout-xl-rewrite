@@ -4,6 +4,8 @@
 #include "device.h"
 #include "gl_functions.h"
 #include "shaders_gl.h"
+#include "modern/shaders_gl.h"
+#include "modern/portable_post.h"
 #include <SDL3/SDL.h>
 #include <stddef.h>
 #include <string.h>
@@ -18,8 +20,9 @@ typedef struct GlImage {
 } GlImage;
 typedef struct GlProgram {
     GLuint name;
-    GLint uniform[13];
+    GLint uniform[13], lightCount, lightPosition, lightColour, shield, effect;
     RenderUniforms last;
+    RenderModernUniforms lastModern;
     int valid;
 } GlProgram;
 typedef struct GlDevice {
@@ -41,15 +44,17 @@ static GLenum ImageFormat(RenderFormat f) {
     return f == RENDER_R16_UINT ? GL_RED_INTEGER : f == RENDER_DEPTH ? GL_DEPTH_COMPONENT : GL_RGBA;
 }
 static GLenum ImageType(RenderFormat f) {
+    if (f == RENDER_RGBA16_FLOAT) return GL_HALF_FLOAT;
+    if (f == RENDER_RGBA32_FLOAT) return GL_FLOAT;
     return f == RENDER_R16_UINT ? GL_UNSIGNED_SHORT
            : f == RENDER_DEPTH  ? GL_FLOAT
                                 : GL_UNSIGNED_BYTE;
 }
-static GLuint Shader(GLenum type, const char *source) {
-    const char *parts[] = {PORT_GLSL_VERSION, source};
+static GLuint Shader(GLenum type, const char *source, int hdr) {
+    const char *parts[] = {PORT_GLSL_VERSION, hdr ? "#define MODERN_HDR 1\n" : "", source};
     GLuint shader = glCreateShader(type);
     GLint ok;
-    glShaderSource(shader, 2, parts, NULL);
+    glShaderSource(shader, 3, parts, NULL);
     glCompileShader(shader);
     glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
     if (!ok) {
@@ -64,11 +69,13 @@ static GLuint Shader(GLenum type, const char *source) {
 }
 static int Program(GlProgram *p, RenderShader kind) {
     const char *fragments[] = {gameFragment, averageFragment, detailFragment, compositeFragment,
-                               uiFragment};
-    GLuint vs = Shader(GL_VERTEX_SHADER, kind == RENDER_GAME ? gameVertex
-                                         : kind == RENDER_UI ? uiVertex
-                                                             : pictureVertex);
-    GLuint fs = Shader(GL_FRAGMENT_SHADER, fragments[kind]);
+                               uiFragment, modernGameFragment, modernGameFragment,
+                               modernMotionFragment, modernResolveFragment};
+    const char *vertex = kind == RENDER_GAME ? gameVertex :
+        (kind == RENDER_MODERN_SCENE || kind == RENDER_GAME_HDR) ? modernGameVertex :
+        kind == RENDER_UI ? uiVertex : kind >= RENDER_MODERN_MOTION ? effectPictureVertex : pictureVertex;
+    GLuint vs = Shader(GL_VERTEX_SHADER, vertex, kind == RENDER_GAME_HDR);
+    GLuint fs = Shader(GL_FRAGMENT_SHADER, fragments[kind], kind == RENDER_GAME_HDR);
     GLint ok;
     if (!vs || !fs) {
         if (vs)
@@ -80,10 +87,10 @@ static int Program(GlProgram *p, RenderShader kind) {
     p->name = glCreateProgram();
     glAttachShader(p->name, vs);
     glAttachShader(p->name, fs);
-    const char *attrs[] = {"position", "colour", "texel", "texture",
-                           "window",   "modeIn", "hdIn",  "hdTexelsIn"};
-    for (int i = 0; i < 8; i++)
-        glBindAttribLocation(p->name, i, attrs[i]);
+    const char *attrs[] = {"position", "colour", "texel", "textureIn",
+                           "window",   "modeIn", "hdIn",  "hdTexelsIn", "filterBoundsIn", "viewIn", "shutterIn", "emissionIn"};
+    for (int i = 0; i < 12; i++)
+        glBindAttribLocation(p->name, i, i == 3 && kind == RENDER_GAME ? "texture" : attrs[i]);
     glLinkProgram(p->name);
     glGetProgramiv(p->name, GL_LINK_STATUS, &ok);
     glDeleteShader(vs);
@@ -101,11 +108,23 @@ static int Program(GlProgram *p, RenderShader kind) {
         glUniform1i(glGetUniformLocation(p->name, samplers[i]), i);
     glUniform1i(glGetUniformLocation(p->name, "source"), 0);
     glUniform1i(glGetUniformLocation(p->name, "coarse"), 1);
+    if (kind >= RENDER_MODERN_MOTION) {
+        for (int i = 0; i < RENDER_TEXTURES; i++) {
+            char name[16];
+            SDL_snprintf(name, sizeof(name), "image%d", i);
+            glUniform1i(glGetUniformLocation(p->name, name), i);
+        }
+    }
+    p->effect = glGetUniformLocation(p->name, "effect[0]");
     const char *names[] = {"target",  "origin",   "depthPull",   "pass",     "depthPass",
                            "rect",    "factor",   "targetScale", "adaptive", "stepSize",
                            "uiScale", "uiOffset", "rasterScale"};
     for (int i = 0; i < 13; i++)
         p->uniform[i] = glGetUniformLocation(p->name, names[i]);
+    p->lightCount = glGetUniformLocation(p->name, "lightCount");
+    p->lightPosition = glGetUniformLocation(p->name, "lightPosition[0]");
+    p->lightColour = glGetUniformLocation(p->name, "lightColour[0]");
+    p->shield = glGetUniformLocation(p->name, "shieldGlow");
     return 1;
 }
 static int Create(RenderDevice *d, void *window) {
@@ -140,8 +159,15 @@ static int Create(RenderDevice *d, void *window) {
 #ifdef GPU_READ_ASYNC
     d->caps.asyncReadback = 1;
 #endif
+#if defined(PORT_GL_LINKED)
+    d->caps.hdrTargets = SDL_GL_ExtensionSupported("GL_EXT_color_buffer_float") ||
+                         SDL_GL_ExtensionSupported("GL_EXT_color_buffer_half_float");
+#else
+    d->caps.hdrTargets = 1;
+#endif
+    glDisable(GL_DITHER);
     for (int i = 0; i < RENDER_SHADER_COUNT; i++)
-        if (!Program(&g->programs[i], (RenderShader)i))
+        if (i < RENDER_MODERN_SCENE && !Program(&g->programs[i], (RenderShader)i))
             return 0;
     return 1;
 }
@@ -170,6 +196,8 @@ static uintptr_t NewImage(RenderDevice *d, RenderImageDesc desc) {
     im->desc = desc;
     GLenum target = desc.layers > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
     GLint format = desc.format == RENDER_R16_UINT ? GL_R16UI
+                   : desc.format == RENDER_RGBA16_FLOAT ? GL_RGBA16F
+                   : desc.format == RENDER_RGBA32_FLOAT ? GL_RGBA32F
                    : desc.format == RENDER_DEPTH  ? GL_DEPTH_COMPONENT24
                                                   : GL_RGBA8;
     glGenTextures(1, &im->name);
@@ -202,7 +230,7 @@ static int Upload(RenderDevice *d, uintptr_t p, RenderRect r, int layer, const v
     ((GlDevice *)d->data)->valid = 0;
     GlImage *im = Image(p);
     GLenum target = im->desc.layers > 1 ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
-    int bpp = im->desc.format == RENDER_R16_UINT ? 2 : 4;
+    size_t bpp = RenderPixelBytes(im->desc.format);
     glBindTexture(target, im->name);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)(rowBytes / bpp));
@@ -230,11 +258,16 @@ static void Target(GlDevice *g, RenderTarget t, GLenum which) {
     glBindFramebuffer(which, which == GL_READ_FRAMEBUFFER ? g->readFramebuffer : g->framebuffer);
     glFramebufferTexture2D(which, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, Texture(t.colour), 0);
     glFramebufferTexture2D(which, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, Texture(t.depth), 0);
-    GLenum attachment = t.colour ? GL_COLOR_ATTACHMENT0 : GL_NONE;
-    if (which != GL_READ_FRAMEBUFFER)
-        glDrawBuffers(1, &attachment);
+    GLenum attachments[4] = {t.colour ? GL_COLOR_ATTACHMENT0 : GL_NONE};
+    if (which != GL_READ_FRAMEBUFFER) {
+        for (int i = 0; i < 3; i++) {
+            glFramebufferTexture2D(which, GL_COLOR_ATTACHMENT1 + i, GL_TEXTURE_2D, Texture(t.auxiliary[i]), 0);
+            attachments[i + 1] = t.auxiliary[i] ? GL_COLOR_ATTACHMENT1 + i : GL_NONE;
+        }
+        glDrawBuffers(4, attachments);
+    }
     if (which != GL_DRAW_FRAMEBUFFER)
-        glReadBuffer(attachment);
+        glReadBuffer(attachments[0]);
 }
 static int Read(RenderDevice *d, RenderTarget target, RenderRect r, RenderFormat format,
                 void *pixels) {
@@ -289,7 +322,7 @@ static int Clear(RenderDevice *d, const RenderClear *c) {
     glClear((c->colour ? GL_COLOR_BUFFER_BIT : 0) | (c->depth ? GL_DEPTH_BUFFER_BIT : 0));
     return 1;
 }
-static void Uniforms(GlProgram *p, const RenderUniforms *u) {
+static void Uniforms(GlProgram *p, const RenderUniforms *u, const RenderModernUniforms *modern) {
     const RenderUniforms *l = &p->last;
     int all = !p->valid;
     if (all || u->targetX != l->targetX || u->targetY != l->targetY)
@@ -318,6 +351,19 @@ static void Uniforms(GlProgram *p, const RenderUniforms *u) {
         glUniform2f(p->uniform[11], u->uiOffsetX, u->uiOffsetY);
     if (all || u->rasterScale != l->rasterScale)
         glUniform1f(p->uniform[12], u->rasterScale);
+    if (modern) {
+        if (p->lightCount >= 0 && (all || memcmp(&modern->lighting, &p->lastModern.lighting, sizeof(modern->lighting)))) {
+            glUniform1i(p->lightCount, modern->lighting.count);
+            glUniform4fv(p->shield, 1, modern->lighting.shield);
+            if (modern->lighting.count) {
+                glUniform4fv(p->lightPosition, modern->lighting.count, &modern->lighting.position[0][0]);
+                glUniform4fv(p->lightColour, modern->lighting.count, &modern->lighting.colour[0][0]);
+            }
+        }
+        if (p->effect >= 0 && (all || memcmp(modern->effect, p->lastModern.effect, sizeof(modern->effect))))
+            glUniform4fv(p->effect, RENDER_PASS_VECTORS, &modern->effect[0][0]);
+        p->lastModern = *modern;
+    }
     p->last = *u;
     p->valid = 1;
 }
@@ -329,7 +375,8 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
     const RenderDraw *last = &g->last;
     int all = !g->valid;
     if (all || last->target.colour != draw->target.colour ||
-        last->target.depth != draw->target.depth || last->target.window != draw->target.window)
+        last->target.depth != draw->target.depth || last->target.window != draw->target.window ||
+        memcmp(last->target.auxiliary, draw->target.auxiliary, sizeof(draw->target.auxiliary)))
         Target(g, draw->target, GL_DRAW_FRAMEBUFFER);
     if (all || memcmp(&last->viewport, &draw->viewport, sizeof(draw->viewport)))
         glViewport(draw->viewport.x, draw->viewport.y, draw->viewport.w, draw->viewport.h);
@@ -338,7 +385,7 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
         Scissor(draw->scissorEnabled, draw->scissor);
     if (all || last->pipeline.shader != draw->pipeline.shader)
         glUseProgram(p->name);
-    Uniforms(p, &draw->uniforms);
+    Uniforms(p, &draw->uniforms, draw->modern);
     const RenderPipeline *s = &draw->pipeline;
     if (all || last->pipeline.depthTest != s->depthTest) {
         if (s->depthTest)
@@ -353,17 +400,18 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
     if (all || last->pipeline.colourMask != s->colourMask)
         glColorMask(s->colourMask & 1, (s->colourMask >> 1) & 1, (s->colourMask >> 2) & 1,
                     (s->colourMask >> 3) & 1);
-    if (all || last->pipeline.blend != s->blend) {
+    if (all || last->pipeline.blend != s->blend ||
+        !!last->target.auxiliary[0] != !!draw->target.auxiliary[0]) {
         if (!s->blend)
             glDisable(GL_BLEND);
         else {
             glEnable(GL_BLEND);
             glBlendEquation(s->blend == 2 ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD);
-            glBlendFuncSeparate(GL_ONE, s->blend == 2 ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA, GL_ZERO,
-                                GL_ONE);
+            glBlendFuncSeparate(GL_ONE, s->blend == 2 ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA,
+                                s->blend == 2 && draw->target.auxiliary[0] ? GL_ONE : GL_ZERO, GL_ONE);
         }
     }
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < RENDER_TEXTURES; i++) {
         GlImage *im = Image(draw->images[i]);
         if (!im)
             continue;
@@ -386,28 +434,33 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
         glBindVertexArray(g->vertexArray);
     int layout = all || last->vertices != draw->vertices ||
                  last->vertexOffset != draw->vertexOffset || last->pipeline.shader != s->shader;
-    if (s->shader == RENDER_GAME && layout) {
+    if ((s->shader == RENDER_GAME || s->shader == RENDER_MODERN_SCENE || s->shader == RENDER_GAME_HDR) && layout) {
         glBindBuffer(GL_ARRAY_BUFFER, (GLuint)draw->vertices);
-        const size_t offsets[] = {offsetof(RenderVertex, x),      offsetof(RenderVertex, r),
-                                  offsetof(RenderVertex, u),      offsetof(RenderVertex, texture),
-                                  offsetof(RenderVertex, window), offsetof(RenderVertex, mode),
-                                  offsetof(RenderVertex, hd),     offsetof(RenderVertex, hdTexels)};
-        const int counts[] = {3, 4, 2, 4, 4, 4, 4, 4};
+        const size_t offsets[] = {offsetof(RenderModernVertex, x),      offsetof(RenderModernVertex, r),
+                                  offsetof(RenderModernVertex, u),      offsetof(RenderModernVertex, texture),
+                                  offsetof(RenderModernVertex, window), offsetof(RenderModernVertex, mode),
+                                  offsetof(RenderModernVertex, hd),     offsetof(RenderModernVertex, hdTexels),
+                                  offsetof(RenderModernVertex, filterBounds), offsetof(RenderModernVertex, view),
+                                  offsetof(RenderModernVertex, shutter), offsetof(RenderModernVertex, emission)};
+        const int counts[] = {3, 4, 2, 4, 4, 4, 4, 4, 4, 4, 3, 4};
         const GLenum types[] = {GL_FLOAT,         GL_FLOAT,         GL_FLOAT,          GL_SHORT,
-                                GL_UNSIGNED_BYTE, GL_UNSIGNED_BYTE, GL_UNSIGNED_SHORT, GL_SHORT};
-        for (int i = 0; i < 8; i++) {
+                                GL_UNSIGNED_BYTE, GL_UNSIGNED_BYTE, GL_UNSIGNED_SHORT, GL_SHORT, GL_SHORT, GL_FLOAT, GL_FLOAT, GL_SHORT};
+        int modern = s->shader != RENDER_GAME;
+        size_t stride = modern ? sizeof(RenderModernVertex) : sizeof(RenderVertex);
+        for (int i = modern ? 12 : 8; i < 12; i++) glDisableVertexAttribArray(i);
+        for (int i = 0; i < (modern ? 12 : 8); i++) {
             glEnableVertexAttribArray(i);
             const void *at = (const void *)(draw->vertexOffset + offsets[i]);
-            if (i < 3)
-                glVertexAttribPointer(i, counts[i], types[i], GL_FALSE, sizeof(RenderVertex), at);
+            if (i < 3 || i == 9 || i == 10)
+                glVertexAttribPointer(i, counts[i], types[i], GL_FALSE, stride, at);
             else
-                glVertexAttribIPointer(i, counts[i], types[i], sizeof(RenderVertex), at);
+                glVertexAttribIPointer(i, counts[i], types[i], stride, at);
         }
     }
     if (s->shader == RENDER_UI) {
         if (layout) {
             glBindBuffer(GL_ARRAY_BUFFER, (GLuint)draw->vertices);
-            glEnableVertexAttribArray(0);
+                glEnableVertexAttribArray(0);
             glEnableVertexAttribArray(1);
             glEnableVertexAttribArray(2);
             glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 20, (void *)draw->vertexOffset);
@@ -420,8 +473,9 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
         glDrawElements(GL_TRIANGLES, draw->count,
                        draw->indexBytes == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT,
                        (void *)((size_t)draw->first * draw->indexBytes));
-    } else
+    } else {
         glDrawArrays(GL_TRIANGLES, draw->first, draw->count);
+    }
     g->last = *draw;
     g->valid = 1;
     return 1;

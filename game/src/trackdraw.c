@@ -16,6 +16,8 @@
 #include "trackasm.h"
 #include "drawasm.h"
 #include "portfar.h"
+#include "port_platform.h"
+#include "../../platform/n64_material.h"
 #include "../../platform/psx/gte.h" /* Port: precise projections bound to the packets */
 
 extern short       CurrentScreen;
@@ -44,6 +46,14 @@ static void SetQuadTile(POLY_FT4 *poly, Tile *tile)
     poly->v2 = tile->v2;
     poly->u3 = tile->u3;
     poly->v3 = tile->v3;
+}
+
+/* Port: preserve original packet colours; light encoding lives in a host sidecar. */
+static void SetTrackLight(POLY_FT4 *poly, const Face *face)
+{
+    poly->r0 = face->red;
+    poly->g0 = face->green;
+    poly->b0 = face->blue;
 }
 
 /* Port: frame interpolation (gte.h): a point of the track is known by where it is in the world, so that a point two
@@ -138,10 +148,9 @@ void AsmTrackLo(TrackSection *firstSection, Skeleton *camera, short loCount)
                a mirrored face, before moving on to the mirrored surface, so they always come from the plain one. */
             poly->tpage = tileSurfaces[(u_char)face->texture][0].low[0].tsb;
             poly->clut = tileSurfaces[(u_char)face->texture][0].low[0].cba;
-            poly->r0 = face->red;
-            poly->g0 = face->green;
-            poly->b0 = face->blue;
+            SetTrackLight(poly, face);
             AddPrim((u_long *)((char *)ordering + (depth & 0xFFFC)), poly);
+            if (ModernEnabled()) PortModernTagTrackFace(poly, face);
             PortFarMarkFace(face); /* Port: the far view draws the faces the game did not */
             PortTagPrims(poly, poly + 1, "track lo face", NULL, (int)(face - track->faces)); /* Port: the frame recorder */
             poly++;
@@ -165,7 +174,28 @@ typedef struct GridPoint {
     u_short depth;
     u_short flag;
     uint32_t handle; /* Port: the precise projection (gte.h) */
+    uint32_t light; /* Port: bit 24 marks an interpolated RGB value */
 } GridPoint;
+
+static void ShadeTrackGrid(GridPoint *grid, int size, const uint32_t *colours, int x, int y, int step)
+{
+    if (!ModernEnabled()) return;
+    for (int row = 0; row < size; row++) {
+        for (int col = 0; col < size; col++) {
+            grid[row * size + col].light = colours
+                ? 0x1000000u | PortModernTrackSample(colours, x + col * step, y + row * step) : 0;
+        }
+    }
+}
+
+static void TagTrackGridLight(const POLY_FT4 *poly,
+                             const GridPoint *a, const GridPoint *b, const GridPoint *c, const GridPoint *d)
+{
+    if (ModernEnabled() && a->light) {
+        const uint32_t colours[] = {a->light, b->light, c->light, d->light};
+        PortTagTrackLight(poly, colours);
+    }
+}
 
 /* Projects a grid point through the GTE: fills in its screen position, depth and the flag bits that matter
    (the upper half of the GTE flag word, masked with 0x466).  Returns whether the point is rejected. */
@@ -195,15 +225,15 @@ static POLY_FT4 *DrawGridQuad(POLY_FT4 *poly, u_long *ordering, Face *face, Tile
     GteBindPrecise(&poly->x2, p2->handle);
     GteBindPrecise(&poly->x3, p3->handle);
     SetQuadTile(poly, tile);
-    poly->r0 = face->red;
-    poly->g0 = face->green;
-    poly->b0 = face->blue;
+    SetTrackLight(poly, face);
     GteWriteData(16, p0->depth);
     GteWriteData(17, p1->depth);
     GteWriteData(18, p2->depth);
     GteWriteData(19, p3->depth);
     GteExecute(GTE_AVSZ4);
     AddPrim(ordering + GteReadData(7), poly);
+    if (ModernEnabled()) PortTagTrackEncoding(poly, PortModernLightFormat(face) == RENDER_LIGHT_PS1);
+    TagTrackGridLight(poly, p0, p1, p2, p3);
     PortTagPrims(poly, poly + 1, "track face", NULL, (int)(face - track->faces)); /* Port: the frame recorder */
     return poly + 1;
 }
@@ -264,6 +294,8 @@ void AsmTrackMed(TrackSection *firstSection, Skeleton *camera, short medCount)
             grid[3].z = (short)((cz[1] + cz[2]) >> 1); grid[5].z = (short)((cz[0] + cz[3]) >> 1);
             grid[4].z = (short)((((cz[1] + cz[2]) >> 1) + ((cz[0] + cz[3]) >> 1)) >> 1);
 
+            uint32_t colours[4];
+            ShadeTrackGrid(grid, 3, (ModernEnabled() && PortModernTrackCorners(face, colours)) ? colours : NULL, 0, 0, 8 / 2);
             for (i = 0; i < 9; i++) {
                 int rejected = ProjectGridPoint(&grid[i]);
 
@@ -348,7 +380,8 @@ static const int gridQuad[4][4] = { { 0, 1, 3, 4 }, { 1, 2, 4, 5 }, { 3, 4, 6, 7
 /* A cell of the high detail grid that is partly off screen: it is cut once more into four quads, each drawn
    only if all its points are on screen.  The quads come from the general primitive buffer (nextPrim), not
    from the track's pool, and are not counted in hiTileCount.  The texture coordinates are averaged along. */
-static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *ordering)
+static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *ordering,
+                            const uint32_t *colours, int row, int col)
 {
     GridPoint sub[9];
     u_short   uv[9];
@@ -367,6 +400,7 @@ static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *
     sub[3].x = (cell[0]->x + cell[2]->x) >> 1;  sub[3].y = (cell[0]->y + cell[2]->y) >> 1;  sub[3].z = (cell[0]->z + cell[2]->z) >> 1;
     sub[5].x = (cell[1]->x + cell[3]->x) >> 1;  sub[5].y = (cell[1]->y + cell[3]->y) >> 1;  sub[5].z = (cell[1]->z + cell[3]->z) >> 1;
     sub[4].x = (sub[3].x + sub[5].x) >> 1;      sub[4].y = (sub[3].y + sub[5].y) >> 1;      sub[4].z = (sub[3].z + sub[5].z) >> 1;
+    ShadeTrackGrid(sub, 3, colours, col * 2, row * 2, 1);
     ProjectGridPoint(&sub[1]);
     ProjectGridPoint(&sub[3]);
     ProjectGridPoint(&sub[4]);
@@ -406,9 +440,7 @@ static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *
         poly->u3 = (u_char)uv[gridQuad[i][3]]; poly->v3 = (u_char)(uv[gridQuad[i][3]] >> 8);
         poly->tpage = tile->tsb;
         poly->clut = tile->cba;
-        poly->r0 = face->red;
-        poly->g0 = face->green;
-        poly->b0 = face->blue;
+        SetTrackLight(poly, face);
         GteWriteData(16, a->depth);
         GteWriteData(17, b->depth);
         GteWriteData(18, c->depth);
@@ -416,6 +448,8 @@ static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *
         GteExecute(GTE_AVSZ4);
         AddPrim(ordering + GteReadData(7), poly);
         nextPrim.ptr = (char *)(poly + 1);
+        if (ModernEnabled()) PortTagTrackEncoding(poly, PortModernLightFormat(face) == RENDER_LIGHT_PS1);
+        TagTrackGridLight(poly, a, b, c, d);
         PortTagPrims(poly, poly + 1, "track cell", NULL, (int)(face - track->faces)); /* Port: the frame recorder */
     }
 }
@@ -468,6 +502,9 @@ void AsmTrackHi(TrackSection *firstSection, Skeleton *camera, AutoMeshData *auto
             SubdivideHigh(x, gx);
             SubdivideHigh(y, gy);
             SubdivideHigh(z, gz);
+            uint32_t colours[4];
+            const uint32_t *light = (ModernEnabled() && PortModernTrackCorners(face, colours)) ? colours : NULL;
+            ShadeTrackGrid(grid, 5, light, 0, 0, 8 / 4);
             for (i = 0; i < HI_POINTS; i++) {
                 int rejected;
 
@@ -495,7 +532,7 @@ void AsmTrackHi(TrackSection *firstSection, Skeleton *camera, AutoMeshData *auto
                             poly = DrawGridQuad(poly, ordering, face, tile, cell[0], cell[1], cell[2], cell[3]);
                             count++;
                         } else if (!(cell[0]->flag && cell[1]->flag && cell[2]->flag && cell[3]->flag)) {
-                            DrawPartialCell(cell, tile, face, ordering);
+                            DrawPartialCell(cell, tile, face, ordering, light, row, col);
                         }
                         tile++;
                     }
@@ -561,11 +598,10 @@ static void DrawNearFace(Face *face, const PortView *view, u_short tpage, u_shor
     SetQuadTile(poly, &FaceSurface(face)->low[0]);
     poly->tpage = tpage;
     poly->clut = clut;
-    poly->r0 = face->red;
-    poly->g0 = face->green;
-    poly->b0 = face->blue;
+    SetTrackLight(poly, face);
     /* behind whatever the game drew of the face, and nearer things */
     AddPrim(PortFarSlot((int)deepest >> 2, deepest), poly);
+    if (ModernEnabled()) PortModernTagTrackFace(poly, face);
     PortTagPrims(poly, poly + 1, "near fill face", NULL, (int)(face - track->faces));
 }
 
@@ -629,11 +665,10 @@ void PortTrackFar(TrackSection *section, const PortView *view)
         SetQuadTile(poly, &FaceSurface(face)->low[0]);
         poly->tpage = tileSurfaces[(u_char)face->texture][0].low[0].tsb;
         poly->clut = tileSurfaces[(u_char)face->texture][0].low[0].cba;
-        poly->r0 = face->red;
-        poly->g0 = face->green;
-        poly->b0 = face->blue;
+        SetTrackLight(poly, face);
         /* AsmTrackLo's slot: the depth of the last corner of RTPT (vertex 2), a quarter per entry */
         AddPrim(PortFarSlot((int)corner[2].z >> 2, corner[2].z), poly);
+        if (ModernEnabled()) PortModernTagTrackFace(poly, face);
         PortTagPrims(poly, poly + 1, "far track face", NULL, (int)(face - track->faces));
     }
     PortFarDepthBias(1.0);

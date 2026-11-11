@@ -80,6 +80,7 @@ void DrawShips(ShipData *shipIndex, Object **shipShapes, int camShip, TrackCamer
     u_char    flags;
     Face     *face;
     CVECTOR  *win;
+    CVECTOR modernLight;
 
     proximity = 0;
     baseIndex = (u_short)raceLines[camera.section->secNo].distance;
@@ -137,6 +138,7 @@ void DrawShips(ShipData *shipIndex, Object **shipShapes, int camShip, TrackCamer
                     face--;
                     if (!(shipIndex[i].attr & LSIDE)) face++;
                     win = (CVECTOR *)&face->red;
+                    if (ModernEnabled()) { modernLight = PortShipTrackLight(&shipIndex[i]); win = &modernLight; }
                     PortInterpInstance(i); /* Port: frame interpolation: the model's drawing is this ship's */
                     if (raceType == RACE_ONE_ON_ONE) {
                         if ((i == remoteShip) || (i == ownShip)) {

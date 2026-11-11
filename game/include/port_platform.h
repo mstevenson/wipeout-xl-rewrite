@@ -2,6 +2,7 @@
 #define PORT_PLATFORM_H_GAME
 
 #include <stdint.h>
+#include "portmodern.h"
 
 /* What the game needs from the platform beyond the PsyQ libraries.  Implemented by platform/. */
 
@@ -25,6 +26,7 @@ void PsxStartupDisplay(int enabled); /* keep resident loaders hidden until both 
    second may be NULL), the first entry of the HUD's in the first, and the drawing environment they go to. While
    the fields pass the display shows them moving from the frame before. */
 void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env);
+void PsxUpcomingCameraTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env, int cameraCut);
 
 /* The HUD's place in the ordering tables Swap draws next: the last entry of the first and the start of
    the second (drawn at half size in a split window, platform/link.c). */

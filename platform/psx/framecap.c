@@ -699,6 +699,7 @@ void FrameCapTable(int offsetX, int offsetY, int areaX, int areaY, int areaW, in
     newFrame = 0;
     f = NewFrame();
     current = (int)(f - frames);
+    f->render = *RenderCurrent();
     f->gameFrame = PortGameFrames();
     f->between = 0.0f;
     f->shown = 0;
@@ -859,6 +860,7 @@ int FrameCapBetween(float along, int offsetX, int offsetY, int areaX, int areaY,
     }
     betweenSaved = current;
     f = NewFrame();
+    f->render = *RenderCurrent();
     f->gameFrame = PortGameFrames();
     f->between = SDL_clamp(along, 0.001f, 0.999f);
     f->shown = 0;
@@ -933,8 +935,8 @@ static uint16_t Fetch(const uint16_t *vram, int x, int y)
     return vram[(y & (VRAM_HEIGHT - 1)) * VRAM_WIDTH + (x & (VRAM_WIDTH - 1))];
 }
 
-/* What the fragment shader of gpu_gl.c computes at barycentric l. */
-static void Shade(const FrameCapPrim *p, const GpuVertex *t[3], const float l[3], const uint16_t *vram, FrameCapHit *h)
+/* Source-texel inspection; dynamic lighting and post effects are in the saved picture. */
+static void Shade(const RenderFrame *frame, const FrameCapPrim *p, const GpuVertex *t[3], const float l[3], const uint16_t *vram, FrameCapHit *h)
 {
     float k[3], sum = 0, c[4] = {0, 0, 0, 0};
     int i;
@@ -948,9 +950,10 @@ static void Shade(const FrameCapPrim *p, const GpuVertex *t[3], const float l[3]
         k[i] /= sum;
         h->u += k[i] * t[i]->u;
         h->v += k[i] * t[i]->v;
-        c[0] += k[i] * t[i]->r;
-        c[1] += k[i] * t[i]->g;
-        c[2] += k[i] * t[i]->b;
+        float colour = frame->id == RENDER_MODERN && !p->draw.smoothTrackLighting ? l[i] : k[i];
+        c[0] += colour * t[i]->r;
+        c[1] += colour * t[i]->g;
+        c[2] += colour * t[i]->b;
         c[3] += k[i] * t[i]->a;
     }
     h->alpha = c[3];
@@ -1030,7 +1033,7 @@ int FrameCapHits(int frame, int x, int y, FrameCapHit *hits, int max)
                 h->prim = i;
                 h->triangle = k;
                 h->skipped = (p->flags & FRAMECAP_DROPPED) || (p->flags & (k ? FRAMECAP_SKIP1 : FRAMECAP_SKIP0));
-                Shade(p, t, l, vram, h);
+                Shade(&f->render, p, t, l, vram, h);
                 if (p->draw.semi == 4 && ((x + y) & 1)) h->transparent = 1;
             }
         }
@@ -1175,6 +1178,32 @@ static void Save(void)
         }
     }
     fclose(file);
+    /* Keep XLFC v3 readable by existing tools. Optional semantic metadata is
+       versioned separately and contains no live pointers or native struct dumps. */
+    SDL_snprintf(path, sizeof(path), "%s/modern.json", savedDir);
+    if ((file = fopen(path, "w"))) {
+        fputs("{\"version\":1,\"frames\":[", file);
+        for (i = 0; i < count; i++) {
+            const FrameCapFrame *f = FrameCapFrameAt(i);
+            const ModernRenderSettings *m = &f->render.settings.modern;
+            fprintf(file, "%s{\"mode\":%d,\"generation\":%llu,\"brightness\":%d,\"bloom\":%d,"
+                    "\"tone\":%d,\"bilinear\":%d,\"lights\":%d,\"blur\":%d,\"blurStrength\":%d,"
+                    "\"smoothTrackLighting\":%d,\"resample\":%d,\"primitives\":[",
+                    i ? "," : "", f->render.id, (unsigned long long)f->render.generation,
+                    m->brightness, m->bloom, m->tonemapper, m->bilinear, m->weaponLights, m->cameraBlur, m->cameraBlurAmount,
+                    m->smoothTrackLighting, m->resample);
+            for (k = 0; k < f->count; k++) {
+                const GpuDrawState *d = &f->prims[k].draw;
+                fprintf(file, "%s{\"smoothTrack\":%d,\"sourceRgb8\":%d,\"ps1Light\":%d,"
+                        "\"emission\":%d,\"uv\":[%d,%d,%d,%d],\"spark\":%d,\"hullMotion\":%d}",
+                        k ? "," : "", d->smoothTrackLighting, d->n64, d->ps1Light, d->emission.enabled,
+                        d->emission.uv[0], d->emission.uv[1], d->emission.uv[2], d->emission.uv[3], d->sparkStreak, d->hullMotion);
+            }
+            fputs("]}", file);
+        }
+        fputs("]}\n", file);
+        fclose(file);
+    }
     for (i = 0; i < SNAPSHOTS; i++) {
         if (snapshots[i].users) {
             SDL_snprintf(path, sizeof(path), "%s/vram_%d.bin", savedDir, i);

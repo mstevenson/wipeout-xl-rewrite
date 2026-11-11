@@ -678,8 +678,13 @@ void NewWingCollision(ShipData *playerShip, Face *facePtr, int direction, int al
     reaction.vx = playerShip->vpivot.vx >> 6;
     reaction.vy = playerShip->vpivot.vy >> 6;
     reaction.vz = playerShip->vpivot.vz >> 6;
+    PortModernWallBegin(); /* Port: observe wall sparks without changing their type or RNG. */
     AddScrapingParticles(particleSlots, 8, &wingPos, &reaction);
+    PortModernWallEnd();
+    PortModernWallBegin(); /* Port: observe wall sparks without changing their type or RNG. */
     AddRandomParticles(particleSlots, 8, &wingPos, &reaction);
+    PortModernWallEnd();
+    PortWallSparkLight(playerShip, &wingPos, facePtr);
 }
 
 
@@ -739,7 +744,10 @@ void WingCollision(ShipData *playerShip, Face *facePtr, int direction, int alpha
   reaction.vx = playerShip->vpivot.vx >> 6;
   reaction.vy = playerShip->vpivot.vy >> 6;
   reaction.vz = playerShip->vpivot.vz >> 6;
+  PortModernWallBegin(); /* Port: observe wall sparks without changing their type or RNG. */
   AddRandomParticles(particleSlots, 8, &wingPos, &reaction);
+  PortModernWallEnd();
+  PortWallSparkLight(playerShip, &wingPos, facePtr);
 }
 
 
@@ -792,7 +800,10 @@ void NoseCollision(ShipData *playerShip, Face *facePtr, int direction, int alpha
   reaction.vx = playerShip->vpivot.vx >> 6;
   reaction.vy = playerShip->vpivot.vy >> 6;
   reaction.vz = playerShip->vpivot.vz >> 6;
+  PortModernWallBegin(); /* Port: observe wall sparks without changing their type or RNG. */
   AddRandomParticles(particleSlots, 8, &nosePos, &reaction);
+  PortModernWallEnd();
+  PortWallSparkLight(playerShip, &nosePos, facePtr);
 }
 
 

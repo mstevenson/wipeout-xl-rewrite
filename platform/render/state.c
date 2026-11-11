@@ -46,15 +46,49 @@ static RgHandle textureUnits[5][2], readTarget, drawTarget, vertexBuffer, packBu
     indexBuffer;
 static int activeUnit, unpackAlignment = 4, unpackRowLength, program;
 static RenderDraw state;
+static RgHandle gameAttachments[3];
 static RenderUniforms uniforms[RENDER_SHADER_COUNT];
+static RenderModernUniforms modernUniforms;
 static float clearColour[4];
+static uint64_t deviceGeneration;
+uint64_t RenderDeviceGeneration(void) { return deviceGeneration; }
+/* Scope host submission state; devices receive complete state on every command. */
+typedef struct SavedState {
+    RenderDraw draw;
+    RgHandle textures[5][2], attachments[3], read, write, vertex, index, pack, depth;
+    int unit, program;
+    float clear[4];
+} SavedState;
+static SavedState savedStates[4];
+static unsigned savedCount;
+void RgPushState(void) {
+    SDL_assert(savedCount < SDL_arraysize(savedStates));
+    SavedState *s = &savedStates[savedCount++];
+    s->draw = state;
+    memcpy(s->textures, textureUnits, sizeof(textureUnits));
+    memcpy(s->attachments, gameAttachments, sizeof(gameAttachments));
+    memcpy(s->clear, clearColour, sizeof(clearColour));
+    s->read = readTarget; s->write = drawTarget; s->vertex = vertexBuffer;
+    s->index = indexBuffer; s->pack = packBuffer; s->depth = depthImage;
+    s->unit = activeUnit; s->program = program;
+}
+void RgPopState(void) {
+    SDL_assert(savedCount);
+    SavedState *s = &savedStates[--savedCount];
+    state = s->draw;
+    memcpy(textureUnits, s->textures, sizeof(textureUnits));
+    memcpy(gameAttachments, s->attachments, sizeof(gameAttachments));
+    memcpy(clearColour, s->clear, sizeof(clearColour));
+    readTarget = s->read; drawTarget = s->write; vertexBuffer = s->vertex;
+    indexBuffer = s->index; packBuffer = s->pack; depthImage = s->depth;
+    activeUnit = s->unit; program = s->program;
+}
 static void Failed(const char *what) {
     SDL_snprintf(error, sizeof(error), "%s: %s", what, SDL_GetError());
     SDL_Log("renderer: %s", error);
 }
-static size_t PixelBytes(RenderFormat f) { return f == RENDER_R16_UINT ? 2 : 4; }
 static size_t ImageBytes(RenderImageDesc d) {
-    return (size_t)d.width * d.height * d.layers * PixelBytes(d.format);
+    return (size_t)d.width * d.height * d.layers * RenderPixelBytes(d.format);
 }
 static void FreeShadow(Image *im) {
     SDL_free(im->shadow);
@@ -170,6 +204,7 @@ int RenderStartBackend(void *window, RenderBackend selected) {
     state.uniforms.depthPull = 1;
     device.ops->activate(&device, 1);
     started = 1;
+    deviceGeneration++;
     error[0] = 0;
     SDL_Log("renderer: %s on %s", RenderBackendName(backend), device.caps.deviceName);
     return 1;
@@ -225,7 +260,8 @@ int RenderApplyBackend(void) {
         Image *im = &images[i];
         if (!im->used || !im->native)
             continue;
-        if (im->desc.width > next.caps.maxTextureSize ||
+        if ((im->desc.format == RENDER_RGBA16_FLOAT && !next.caps.hdrTargets) ||
+            im->desc.width > next.caps.maxTextureSize ||
             im->desc.height > next.caps.maxTextureSize ||
             im->desc.layers > next.caps.maxArrayLayers) {
             SDL_SetError("Current resolution exceeds the new device's limits");
@@ -255,7 +291,7 @@ int RenderApplyBackend(void) {
             }
         }
         if (pixels) {
-            size_t row = (size_t)im->desc.width * PixelBytes(im->desc.format),
+            size_t row = (size_t)im->desc.width * RenderPixelBytes(im->desc.format),
                    layer = row * im->desc.height;
             for (int z = 0; z < im->desc.layers; z++)
                 if (!next.ops->upload(&next, newImages[i],
@@ -267,7 +303,7 @@ int RenderApplyBackend(void) {
                 }
         }
         if (!pixels && im->layerShadows) {
-            size_t row = (size_t)im->desc.width * PixelBytes(im->desc.format);
+            size_t row = (size_t)im->desc.width * RenderPixelBytes(im->desc.format);
             for (int z = 0; z < im->desc.layers; z++)
                 if (im->layerShadows[z] && !next.ops->upload(&next, newImages[i],
                     (RenderRect){0, 0, im->desc.width, im->desc.height}, z, im->layerShadows[z], row))
@@ -298,6 +334,7 @@ int RenderApplyBackend(void) {
     device = next;
     device.ops->activate(&device, 1);
     backend = requested;
+    deviceGeneration++;
     SDL_Log("renderer: switched to %s on %s", RenderBackendName(backend), device.caps.deviceName);
     ok = 1;
 done:
@@ -341,6 +378,7 @@ void RenderStop(void) {
     memset(images, 0, sizeof(images));
     memset(buffers, 0, sizeof(buffers));
     memset(targets, 0, sizeof(targets));
+    memset(gameAttachments, 0, sizeof(gameAttachments));
     started = 0;
 }
 void RenderTrimMemory(void) {
@@ -373,6 +411,10 @@ int RgGetUniformLocation(RgHandle p, const char *name) {
         if (!strcmp(name, names[i]))
             return (int)p * 32 + i + 1;
     return (int)p * 32 + U_UNUSED;
+}
+void RgLighting(const RenderLighting *lighting)
+{
+    modernUniforms.lighting = *lighting;
 }
 static RenderUniforms *Uniform(int id) { return &uniforms[id / 32 - 1]; }
 void RgUniform1i(int id, int value) {
@@ -459,7 +501,7 @@ void RgTexParameteri(int kind, int parameter, int value) {
 void RgTexSubImage3D(int kind, int level, int x, int y, int layer, int w, int h, int layers,
                      int format, int type, const void *data) {
     Image *im = Bound(kind);
-    size_t bpp = PixelBytes(im->desc.format);
+    size_t bpp = RenderPixelBytes(im->desc.format);
     int inputBpp = format == RG_RGB ? 3 : (int)bpp;
     size_t inputRow = (size_t)(unpackRowLength ? unpackRowLength : w) * inputBpp;
     inputRow = (inputRow + unpackAlignment - 1) / unpackAlignment * unpackAlignment;
@@ -580,12 +622,12 @@ void RgGenerateMipmap(int kind) {
             device.ops->copy(&device, &copy);
         } else if (im->shadow)
             device.ops->upload(&device, next, (RenderRect){0, 0, im->desc.width, im->desc.height},
-                               0, im->shadow, (size_t)im->desc.width * PixelBytes(im->desc.format));
+                               0, im->shadow, (size_t)im->desc.width * RenderPixelBytes(im->desc.format));
         if (!im->dirty && im->layerShadows)
             for (int z = 0; z < im->desc.layers; z++)
                 if (im->layerShadows[z]) device.ops->upload(&device, next,
                     (RenderRect){0, 0, im->desc.width, im->desc.height}, z, im->layerShadows[z],
-                    (size_t)im->desc.width * PixelBytes(im->desc.format));
+                    (size_t)im->desc.width * RenderPixelBytes(im->desc.format));
         device.ops->releaseImage(&device, im->native);
         im->native = next;
     }
@@ -780,25 +822,100 @@ void RgPixelStorei(int f, int v) {
     else if (f == RG_UNPACK_ROW_LENGTH)
         unpackRowLength = v;
 }
+void RgGameAttachments(const RgHandle auxiliary[3], float sparkGain)
+{
+    modernUniforms.effect[0][0] = sparkGain;
+    if (auxiliary) memcpy(gameAttachments, auxiliary, sizeof(gameAttachments));
+    else memset(gameAttachments, 0, sizeof(gameAttachments));
+}
+
+void RgGameGrid(float x, float y)
+{
+    modernUniforms.effect[0][1] = x;
+    modernUniforms.effect[0][2] = y;
+}
+
+int RgAllocateImage(RgHandle handle, int width, int height, RenderFormat format)
+{
+    if (!handle || handle >= RESOURCES || !images[handle].used ||
+        width <= 0 || height <= 0 || (size_t)width > SIZE_MAX / (size_t)height / RenderPixelBytes(format) ||
+        width > device.caps.maxTextureSize || height > device.caps.maxTextureSize)
+        return 0;
+    Image *image = &images[handle];
+    if ((format == RENDER_RGBA16_FLOAT || format == RENDER_RGBA32_FLOAT) && !device.caps.hdrTargets) return 0;
+    RenderImageDesc desc = {width, height, 1, 0, format};
+    uintptr_t native = device.ops->image(&device, desc);
+    if (!native) return 0;
+    if (image->native) device.ops->releaseImage(&device, image->native);
+    FreeShadow(image);
+    image->native = native;
+    image->desc = desc;
+    image->dirty = 0;
+    image->sampler = (RenderSampler){0, 0, 1};
+    return 1;
+}
+
+void RgDiscardImageContents(RgHandle handle)
+{
+    images[handle].dirty = 0;
+}
+
+static void DrawBound(RenderDraw *draw)
+{
+    if (!device.ops->draw(&device, draw)) {
+        Failed("draw");
+        abort();
+    }
+    if (draw->pipeline.colourMask) Dirty(drawTarget, 0);
+    if (draw->pipeline.depthWrite) Dirty(drawTarget, 1);
+}
+
+void RgDrawPass(RenderShader shader, const float effect[RENDER_PASS_VECTORS][4],
+                const RgHandle textures[RENDER_TEXTURES], int vertices)
+{
+    RenderDraw draw = {0};
+    draw.target = TargetOf(drawTarget);
+    draw.viewport = state.viewport;
+    draw.scissor = state.scissor;
+    draw.scissorEnabled = state.scissorEnabled;
+    draw.pipeline = state.pipeline;
+    draw.pipeline.shader = shader;
+    RenderModernUniforms payload = {0};
+    memcpy(payload.effect, effect, sizeof(payload.effect));
+    draw.modern = &payload;
+    draw.count = vertices;
+    for (int i = 0; i < RENDER_TEXTURES; i++) {
+        draw.images[i] = images[textures[i]].native;
+        draw.samplers[i] = images[textures[i]].sampler;
+    }
+    DrawBound(&draw);
+}
+
 void RgDrawArrays(int kind, int first, int count) {
     state.target = TargetOf(drawTarget);
     state.pipeline.shader = program;
     state.uniforms = uniforms[program];
+    state.modern = program == RENDER_MODERN_SCENE ? &modernUniforms : NULL;
     state.vertices = buffers[vertexBuffer].native;
     state.first = first;
     state.count = count;
+    memset(state.images, 0, sizeof(state.images));
+    if (program == RENDER_MODERN_SCENE && gameAttachments[0]) {
+        /* The depth prepass masks colour writes. Keep its attachments bound so
+           alternating depth and colour draws can stay in the same render pass. */
+        state.pipeline.shader = RENDER_GAME_HDR;
+        for (int i = 0; i < 3; i++) {
+            Image *image = &images[gameAttachments[i]];
+            state.target.auxiliary[i] = image->native;
+            if (image->native && state.pipeline.colourMask) image->dirty = 1;
+        }
+    }
     for (int i = 0; i < 5; i++) {
-        Image *im = &images[textureUnits[i][program == RENDER_GAME && i == 4]];
+        Image *im = &images[textureUnits[i][(program == RENDER_GAME || program == RENDER_MODERN_SCENE) && i == 4]];
         state.images[i] = im->native;
         state.samplers[i] = im->sampler;
     }
-    if (!device.ops->draw(&device, &state)) {
-        Failed("draw");
-        abort();
-    }
-    Dirty(drawTarget, 0);
-    if (state.pipeline.depthWrite)
-        Dirty(drawTarget, 1);
+    DrawBound(&state);
 }
 void RgBlitFramebuffer(int x, int y, int r, int b, int tx, int ty, int tr, int tb, RgBits flags,
                        int filter) {

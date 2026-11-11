@@ -9,19 +9,25 @@
    object (the rest of its primitives are not drawn).
 
    The three differ in how they treat the primitives:
-     AsmDrawObject       the plain renderer: gouraud textured polygons are drawn flat, textured with the colour
-                         of their first vertex; single sided polygons facing away are dropped; translucent ones
+     AsmDrawObject       the plain renderer: native PS1 XL Gouraud textured polygons use the colour of their first
+                         vertex. Imported 1995 scenery and N64 materials can retain all corner colours;
+                         single sided polygons facing away are dropped; translucent ones
                          get the semi-transparency bit; depth is the average of the vertices' depths; billboard
                          sprites (types 10 and 11) are scaled by distance and rotated by `roll`.
      AsmDrawObjectLit    the same, except that gouraud polygons keep their colours, flat textured polygons are
                          tinted by `colour`, and everything is linked 0x78 slots nearer.
      AsmDrawObjectFixed  for the sky: XL draws it flat, while the original Wipeout's guest skies keep
                          their corner colours. All use one fixed slot, facing tests and no sprites. */
+#include <math.h>
+
 #include "functions.h"
 #include "drawasm.h"
 #include "../../platform/psx/gte.h"
 #include "portfar.h"
 #include "portorig.h"
+#include "port_platform.h"
+#include "portmodern.h"
+#include "../../platform/n64_material.h"
 
 extern short   CurrentScreen;
 extern u_long *OT[2];
@@ -116,6 +122,7 @@ static void ProjectVertices(Object *object)
     int              count = (u_short)object->vertexCount;
     uint64_t         drawing = currentDrawing = DrawingKey(object); /* Port: frame interpolation */
 
+    if (ModernEnabled()) GteSetN64(PortModernObjectRgb8(object)); /* Port: projection provenance */
     if (farView) {
         int i;
 
@@ -359,10 +366,19 @@ static char *DrawTexturedQuad(DrawKind kind, char *out, u_long *ordering, int fi
     return out + sizeof(POLY_FT4);
 }
 
-/* The original Wipeout's sky renderer emits GT3/GT4 packets, unlike XL's flat sky. */
+/* Port: the 1995 renderer retains GT3/GT4 corner colours on its scenery and sky. */
 static int GouraudColours(DrawKind kind)
 {
-    return kind == DRAW_LIT || (kind == DRAW_FIXED && PortOriginalLooks());
+    if (kind == DRAW_LIT) return 1;
+    if (kind != DRAW_FIXED && !(ModernEnabled() && PortRenderGeometry().originalSceneryColours && kind == DRAW_PLAIN))
+        return 0;
+    return PortOriginalLooks();
+}
+
+/* N64 materials retain corner lighting in every draw pass. */
+static int GouraudTextured(DrawKind kind, const Object *object)
+{
+    return GouraudColours(kind) || (ModernEnabled() && PortModernObjectRgb8(object));
 }
 
 static char *DrawGouraudTexturedTriangle(DrawKind kind, char *out, u_long *ordering, int fixedSlot, const GT3 *prim)
@@ -520,6 +536,7 @@ static void BindSpriteCorner(short *corner, const GtePrecise *centre, int x, int
     uint32_t handle;
 
     GteKeyNext(0, GteKeyMix(centre->key, (uint64_t)k + 1));
+    GteSetN64(centre->n64); /* Port: retain imported billboard provenance. */
     handle = GteRecordProjection(*(u_int *)corner, centre->x + (float)dx, centre->y + (float)dy, 0.0f, 1.0f);
     GteRecordView(handle, centre->view[0] + dx * scale, centre->view[1] + dy * scale, centre->view[2]);
     GteBindPrecise(corner, handle);
@@ -628,6 +645,95 @@ static void CameraSpace(const SVECTOR *v, double out[3])
     }
 }
 
+/* Port: the PC's LoadPrmCommon/BuildQuads makes upright object-space billboards, with
+   texture-sized dimensions and the anchor at the bottom for both sprite types. Keep
+   its XZ facing calculation in model units, then project each corner with its own
+   depth. Bound view positions also let libgpu clip and interpolate the original quad. */
+static char *DrawWorldSprite(Object *object, int index, char *out, u_long *ordering, const SPR *prim)
+{
+    PortView view;
+    double centre[3], cameraX, cameraZ, matrixX, matrixZ, length, sine, cosine;
+    double corner[4][3], halfWidth, height, depth = 0;
+    int pcSprite = PortPcData();
+    const SVECTOR *position;
+    Texture *texture;
+    POLY_FT4 *poly = (POLY_FT4 *)out;
+    short *xy[4] = {&poly->x0, &poly->x1, &poly->x2, &poly->x3};
+    int i, k, inFront = 0, slot;
+
+    if (forceReject || (u_short)prim->coord >= (u_short)object->vertexCount) {
+        return out;
+    }
+    position = &object->vertices[prim->coord];
+    texture = textureTable[prim->texture];
+    if (farView) {
+        view = *farView;
+    } else {
+        for (i = 0; i < 9; i++) {
+            view.m[i / 3][i % 3] = (short)((u_int)GteReadControl(i / 2) >> ((i & 1) * 16)) / 4096.0;
+        }
+        for (i = 0; i < 3; i++) view.t[i] = GteReadControl(5 + i);
+    }
+    for (i = 0; i < 3; i++) {
+        centre[i] = view.t[i] + view.m[i][0] * position->vx + view.m[i][1] * position->vy +
+                    view.m[i][2] * position->vz;
+    }
+    length = hypot(centre[0], centre[2]);
+    cameraX = length > 0 ? centre[0] / length : 0;
+    cameraZ = length > 0 ? centre[2] / length : 1;
+    length = hypot(view.m[0][0], view.m[2][0]);
+    matrixX = length > 0 ? view.m[0][0] / length : 1;
+    matrixZ = length > 0 ? -view.m[2][0] / length : 0;
+    sine = -(matrixZ * cameraX + matrixX * cameraZ);
+    cosine = matrixZ * cameraZ - matrixX * cameraX;
+    /* LoadPrmCommon doubles SPR.width into a short; BuildQuads offsets each side by
+       2*width*textureW/256. textureW is the TIM's stored word width, not its texel width. */
+    halfWidth = (double)(short)(prim->width * 2) * texture->textureW / 128.0;
+    height = -(double)prim->height * texture->textureH / 256.0;
+    /* Port: console sprite dimensions are already world-sized, and TSPR is
+       top anchored. PC's compatibility loader uses its own texture-based units. */
+    if (!pcSprite) { halfWidth = prim->width * 0.5; height = -(double)prim->height; }
+    for (i = 0; i < 4; i++) {
+        double side = i & 1 ? halfWidth : -halfWidth;
+        if (!pcSprite) side = -side;
+        double x = side * sine, y = i < 2 ? height : 0, z = -side * cosine;
+        if (!pcSprite && prim->type == TypeTSPR) y -= height;
+
+        for (k = 0; k < 3; k++) {
+            corner[i][k] = centre[k] + view.m[k][0] * x + view.m[k][1] * y + view.m[k][2] * z;
+        }
+        inFront |= corner[i][2] >= PORT_FAR_NEAR;
+        depth += corner[i][2] * 0.25;
+    }
+    if (!inFront) {
+        return out;
+    }
+    /* PC-authored 3D sprites participate in the depth buffer without the PS1 model slack. */
+    GteSetExactDepth(1);
+    GteSetN64(PortModernObjectRgb8(object));
+    for (i = 0; i < 4; i++) {
+        PortFarVertex point;
+
+        GteKeyNext(0, GteKeyMix(GteKeyMix(currentDrawing, 0x10000u + (u_int)index), (uint64_t)i));
+        PortFarProjectAny(corner[i][0], corner[i][1], corner[i][2], &point);
+        StoreScreenXY(xy[i], xy[i] + 1, point.screen);
+        GteBindPrecise(xy[i], point.handle);
+    }
+    GteSetExactDepth(0);
+    SetRgb(&poly->r0, &poly->g0, &poly->b0, &prim->colour);
+    ((u_char *)poly)[3] = 9;
+    poly->code = 0x2C;
+    poly->tpage = texture->tsb;
+    poly->clut = texture->cba;
+    poly->u0 = (u_char)texture->u0; poly->v0 = (u_char)texture->v0;
+    poly->u1 = (u_char)texture->u1; poly->v1 = (u_char)texture->v1;
+    poly->u2 = (u_char)texture->u2; poly->v2 = (u_char)texture->v2;
+    poly->u3 = (u_char)texture->u3; poly->v3 = (u_char)texture->v3;
+    slot = depth < 0 ? 0 : depth >= 32760 ? 8190 : (int)(depth / 4);
+    AddPrim(farView ? PortFarSlot((int)(depth / 4), depth) : ordering + slot, poly);
+    return out + sizeof(POLY_FT4);
+}
+
 typedef struct NearCorner {
     double   c[8];   /* camera x, y, z, u, v, r, g, b */
     int      vertex; /* the object's vertex */
@@ -670,10 +776,10 @@ static int DrawClippedPrimitive(Object *object, int index, u_long *ordering, Pol
         coords = prim.ft3->coords, count = 3, uv = &prim.ft3->u0, colours = &prim.ft3->colour;
         tsb = prim.ft3->tsb, cba = prim.ft3->cba;
         break;
-    case TypeGT3: /* the plain renderer draws it flat, in its first colour */
+    case TypeGT3: /* Preserve authored corner lighting through near-plane clipping. */
         coords = prim.gt3->coords, count = 3, uv = &prim.gt3->u0, colours = prim.gt3->colour;
         tsb = prim.gt3->tsb, cba = prim.gt3->cba;
-        gouraud = GouraudColours(kind);
+        gouraud = GouraudTextured(kind, object);
         break;
     case TypeFT4:
         coords = prim.ft4->coords, count = 4, uv = &prim.ft4->u0, colours = &prim.ft4->colour;
@@ -682,7 +788,7 @@ static int DrawClippedPrimitive(Object *object, int index, u_long *ordering, Pol
     case TypeGT4:
         coords = prim.gt4->coords, count = 4, uv = &prim.gt4->u0, colours = prim.gt4->colour;
         tsb = prim.gt4->tsb, cba = prim.gt4->cba;
-        gouraud = GouraudColours(kind);
+        gouraud = GouraudTextured(kind, object);
         break;
     case TypeG3: coords = prim.g3->coords, count = 3, colours = prim.g3->colour, gouraud = kind != DRAW_FIXED || GouraudColours(kind); break;
     case TypeG4: coords = prim.g4->coords, count = 4, colours = prim.g4->colour, gouraud = kind != DRAW_FIXED || GouraudColours(kind); break;
@@ -776,8 +882,26 @@ static int DrawClippedPrimitive(Object *object, int index, u_long *ordering, Pol
         AddPrim(slot, poly);
         out += count == 4 ? sizeof(POLY_G4) : sizeof(POLY_G3);
     }
-    PortTagPrims(start, out, kind == DRAW_FIXED ? "clipped sky" : "near object", object->name, index); /* the frame recorder */
+    /* Port: tag the emitted packet with the model identity from the synthetic PRM. */
+    if (ModernEnabled())
+        PortTagObjectPrims(start, out, kind == DRAW_FIXED ? "clipped sky" : "near object", object->name, object->scratch, index,
+                           object->skeleton->relative.t);
+    else PortTagPrims(start, out, kind == DRAW_FIXED ? "clipped sky" : "near object", object->name, index);
     return 1;
+}
+
+/* Port: only imported road RGB8 needs conversion for PS1-scaled object lighting.
+   Gameplay-authored pad colours already use PS1 tint, even on an imported track. */
+static CVECTOR ObjectLight(const Object *object, const CVECTOR *colour, RenderGeometry geometry)
+{
+    CVECTOR result = *colour;
+    if (geometry.lightFormat == RENDER_LIGHT_PS1 && PortOriginalTrackIs64() &&
+        colour->cd == RENDER_LIGHT_RGB8) {
+        result.r = PortN64Modulation(colour->r);
+        result.g = PortN64Modulation(colour->g);
+        result.b = PortN64Modulation(colour->b);
+    }
+    return result;
 }
 
 static int DrawNearPrimitive(Object *object, int index, u_long *ordering, Poly prim)
@@ -805,9 +929,20 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
     char   *out;
     char   *primitive;
     int     count, index = 0;
-    int     gouraud = GouraudColours(kind);
+    int modernArena = ModernEnabled();
     unsigned char *drawnFlags = NULL;
     const unsigned char *skip = NULL;
+    CVECTOR compatibleLight;
+    const RenderGeometry geometry = PortRenderGeometry();
+    int     ship = kind == DRAW_LIT ? nextInstance : -1;
+    int     gouraud = GouraudTextured(kind, object);
+    char   *firstPacket;
+
+    /* Port: colour.cd carries the track face's light format, not its texture identity. */
+    if (modernArena && kind == DRAW_LIT && colour) {
+        compatibleLight = ObjectLight(object, colour, geometry);
+        colour = &compatibleLight;
+    }
 
     if (farView) {
         int complete;
@@ -815,15 +950,17 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         /* the primitives the game handled (scenery; a ship model can serve several ships) */
         skip = kind == DRAW_LIT ? NULL : PortFarObjectDrawn(object, &complete);
         /* the largest packet per primitive, in the far view's own memory */
-        out = PortFarAlloc((u_short)object->primitiveCount * (int)sizeof(POLY_GT4));
+        out = PortFarAlloc(((u_short)object->primitiveCount) * (int)sizeof(POLY_GT4));
         if (!out) {
             return;
         }
     } else {
         drawnFlags = PortFarObjectPrimitives(object); /* Port: the far view draws what the game did not */
         SetSkeletonTransform(object->skeleton);
-        out = nextPrim.ptr;
+        out = modernArena ? PortFarAlloc((u_short)object->primitiveCount * (int)sizeof(POLY_GT4)) : nextPrim.ptr;
+        if (!out) return; /* Port: bounded enhancement allocation, no linked packet overwrite. */
     }
+    firstPacket = out;
     primitive = (char *)object->primitives;
     count = (u_short)object->primitiveCount;
     ordering = OT[CurrentScreen];
@@ -886,7 +1023,11 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             if (kind == DRAW_FIXED) {
                 goto finished;
             }
-            out = DrawSprite(kind, out, ordering, roll, prim.spr, prim.prim->type == TypeTSPR);
+            if (geometry.worldBillboards) { /* Port: 3D billboard geometry is independent of lighting/depth toggles. */
+                out = DrawWorldSprite(object, index, out, ordering, prim.spr);
+            } else {
+                out = DrawSprite(kind, out, ordering, roll, prim.spr, prim.prim->type == TypeTSPR);
+            }
             primitive += sizeof(SPR);
             break;
         default:
@@ -898,12 +1039,19 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             drawnFlags[index] = clippedSky || out != before || (culled && CulledForCertain(culledVertex[0], culledVertex[1], culledVertex[2])) ||
                                 (!culled && kind == DRAW_PLAIN && DrawNearPrimitive(object, index, ordering, prim));
         }
-        PortTagPrims(before, out, farView ? "far object" : "object", object->name, index); /* Port: the frame recorder */
+        /* Port: recorder identity and source placement for renderer material tags. */
+        if (modernArena)
+            PortTagObjectPrims(before, out, farView ? "far object" : "object", object->name, object->scratch, index,
+                               object->skeleton->relative.t);
+        else PortTagPrims(before, out, farView ? "far object" : "object", object->name, index);
         index++;
     } while (--count > 0);
 finished:
+    /* Port: shield compositing and, with smooth track lighting, tint between game frames. */
+    if (modernArena && ship >= 0) PortShipPackets(ship, firstPacket, out, geometry.smoothTrackLighting ? colour : NULL);
+    if (modernArena) GteSetN64(0); /* Port: subsequent PS1 projections keep their own material identity. */
     forceReject = 0;
-    if (farView) {
+    if (farView || modernArena) {
         PortFarRelease(out);
         return;
     }

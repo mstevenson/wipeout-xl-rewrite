@@ -79,7 +79,9 @@ void PortFarMarkFace(Face *face)
         return;
     }
     if (faceMarkCount < track->faceCount) {
-        faceMarks = realloc(faceMarks, (size_t)track->faceCount * sizeof(*faceMarks));
+        uint32_t *next = realloc(faceMarks, (size_t)track->faceCount * sizeof(*faceMarks));
+        if (!next) return;
+        faceMarks = next;
         memset(faceMarks + faceMarkCount, 0, (size_t)(track->faceCount - faceMarkCount) * sizeof(*faceMarks));
         faceMarkCount = track->faceCount;
     }
@@ -479,14 +481,15 @@ static void DrawFarShips(ShipData *ships, Object **shipShapes)
         if (!(ship->attr & LSIDE)) {
             face++;
         }
+        CVECTOR light = ModernEnabled() ? PortShipTrackLight(ship) : *(const CVECTOR *)&face->red;
         farShips |= 1 << i;
         PortInterpInstance(i); /* frame interpolation: the ship's drawing, as DrawShips gives it */
         if (raceType == 1 && i == ghostShip) {
             InitTransShip(object, 1); /* the ghost is see-through, as DrawShips draws it */
-            PortDrawObjectFar(object, &view, (const CVECTOR *)&face->red);
+            PortDrawObjectFar(object, &view, &light);
             InitTransShip(object, 0);
         } else {
-            PortDrawObjectFar(object, &view, (const CVECTOR *)&face->red);
+            PortDrawObjectFar(object, &view, &light);
         }
         PortInterpInstance(-1);
     }

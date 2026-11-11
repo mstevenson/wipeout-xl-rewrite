@@ -16,6 +16,7 @@ static uint64_t raceFrame; /* the game frame the race was last drawn in, + 1 (0:
 void PortInfoRaceDrawn(void)
 {
     raceFrame = PortGameFrames() + 1;
+    PortCaptureWeaponLights(); /* Port: copy source facts before presentation. */
 }
 
 static const char *RaceTypeName(void)
@@ -66,3 +67,5 @@ int PortGameInfo(char *out, int size)
     }
     return n < size ? n : size - 1;
 }
+
+int PortActiveTrackNumber(void) { return gameData ? gameData->actTrackNum : -1; }

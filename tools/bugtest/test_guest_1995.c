@@ -100,3 +100,5 @@ int main(void)
     puts("1995 pump matrices, selected beacon, Silverstream aurora, PAL timing and pause: OK");
     return 0;
 }
+
+void PortModernSceneLoaded(Object **objects, int count, Object *sky) { (void)objects; (void)count; (void)sky; }

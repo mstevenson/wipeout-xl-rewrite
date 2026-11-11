@@ -53,3 +53,7 @@ int main(void)
     puts("checkpoint packets survive the main far pass; no memory reuse or self-linked list: OK");
     return 0;
 }
+
+#include "../../platform/render/modern/metadata.c"
+PortSettings portSettings;
+CVECTOR PortShipTrackLight(const ShipData *ship) { abort(); }

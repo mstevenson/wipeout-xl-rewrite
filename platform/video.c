@@ -162,6 +162,7 @@ void PortSwapInterval(int vsync)
 void PortVideoShutdown(void)
 {
     DebugUiShutdown();
+    GpuRendererShutdown();
     RenderStop();
 #ifdef PORT_SECOND_GAME
     if (portConfig.secondPlayer) {

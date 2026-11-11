@@ -29,7 +29,7 @@ OUT = Path('/tmp/oracle32')
 NOSP = bool(os.environ.get('ORACLE_NOSP'))   # ORACLE_NOSP=1: ignore stack slot numbers (locals were retyped)
 OPT = os.environ.get('ORACLE_OPT', '-O2')   # ORACLE_OPT=-O0 compares unoptimised code (no scheduling noise)
 FLAGS = ['-target', 'mipsel-unknown-none-elf', '-march=mips1', '-mabi=o32', OPT, '-fno-pic',
-         '-mno-abicalls', '-msoft-float', '-ffreestanding', '-nostdinc', '-fsigned-char',
+         '-mno-abicalls', '-G0', '-msoft-float', '-ffreestanding', '-nostdinc', '-fsigned-char',
          '-fno-strict-aliasing', '-fwrapv', '-std=gnu11', '-w', '-Wno-error',
          # the sources are compiled as the PlayStation compiler accepted them
          '-Wno-implicit-function-declaration', '-Wno-int-conversion', '-Wno-incompatible-pointer-types',
@@ -39,22 +39,28 @@ FLAGS = ['-target', 'mipsel-unknown-none-elf', '-march=mips1', '-mabi=o32', OPT,
 def compile_tree(src_root, out_dir, only=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     files = sorted((src_root / 'game/src').glob('*.c'))
+    resource = subprocess.check_output([str(LLVM / 'clang'), '-print-resource-dir'], text=True).strip()
     if only:
         files = [f for f in files if f.name in only]
     # the port header is for the host; the oracle uses a 32-bit libc prototype stub instead
     def one(f):
         obj = out_dir / (f.stem + '.o')
+        obj.unlink(missing_ok=True)
+        (out_dir / (f.stem + '.dis')).unlink(missing_ok=True)
         cmd = [str(LLVM / 'clang')] + FLAGS + ['-include', str(ROOT / 'tools/oracle32/o32.h'),
-                                               '-isystem', str(ROOT / 'tools/oracle32/include'), '-I' + str(src_root / 'game/include'), '-c', str(f), '-o', str(obj)]
+                                               '-isystem', str(ROOT / 'tools/oracle32/include'),
+                                               '-isystem', str(Path(resource) / 'include'), '-I' + str(src_root / 'game/include'), '-c', str(f), '-o', str(obj)]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode:
             print('COMPILE FAIL', f.name, r.stderr[:2000])
             return f.stem, None
         dis = subprocess.run([str(LLVM / 'llvm-objdump'), '-dr', '--no-show-raw-insn', str(obj)],
-                             capture_output=True, text=True).stdout
+                             capture_output=True, text=True, check=True).stdout
         (out_dir / (f.stem + '.dis')).write_text(dis)
         return f.stem, split_functions(dis)
     with ThreadPoolExecutor(max_workers=2) as ex:
+        if not files:
+            raise SystemExit('No matching game sources')
         return dict(ex.map(one, files))
 
 
@@ -97,12 +103,15 @@ def reloc_lines(dis):
 
 def snapshot(ref, name):
     d = Path(tempfile.mkdtemp(prefix='oracle32-src-'))
-    arch = subprocess.run(['git', '-C', str(ROOT), 'archive', ref, 'game', 'tools'], capture_output=True).stdout
-    subprocess.run(['tar', '-x', '-C', str(d)], input=arch)
+    arch = subprocess.run(['git', '-C', str(ROOT), 'archive', ref, 'game', 'tools', 'platform'], capture_output=True, check=True).stdout
+    subprocess.run(['tar', '-x', '-C', str(d)], input=arch, check=True)
     out = OUT / name
     funcs = compile_tree(d, out)
     subprocess.run(['rm', '-rf', str(d)])
-    print('snapshot %s: %d files' % (name, len(funcs)))
+    failures = sum(f is None for f in funcs.values())
+    print('snapshot %s: %d files, %d compile failures' % (name, len(funcs), failures))
+    if failures:
+        raise SystemExit(1)
 
 
 def diff(name, verbose, only):
@@ -110,10 +119,12 @@ def diff(name, verbose, only):
     cur_dir = OUT / ('cur-' + name)
     cur = compile_tree(ROOT, cur_dir, only)
     changed = 0
+    failed = 0
     for stem, funcs in sorted(cur.items()):
         base_dis = base_dir / (stem + '.dis')
         if funcs is None or not base_dis.exists():
             print('%s: no baseline or compile failure' % stem)
+            failed += 1
             continue
         base = split_functions(base_dis.read_text())
         for fn in sorted(set(funcs) | set(base)):
@@ -130,7 +141,9 @@ def diff(name, verbose, only):
                 if verbose:
                     for l in difflib.unified_diff(a, b, lineterm='', n=1):
                         print('    ' + l)
-    print('%d function(s) differ from %s' % (changed, name))
+    print('%d function(s) differ from %s; %d files could not be compared' % (changed, name, failed))
+    if failed:
+        raise SystemExit(1)
 
 
 def main():

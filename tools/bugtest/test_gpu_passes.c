@@ -303,3 +303,6 @@ int main(int argc, char **argv)
     SDL_GL_DestroyContext(context); SDL_DestroyWindow(window); SDL_Quit();
     return 0;
 }
+
+int PortLinkRole(void) { return 0; }
+int PortTracing(void) { return 0; }

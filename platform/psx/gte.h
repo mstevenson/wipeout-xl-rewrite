@@ -43,6 +43,7 @@ typedef struct GtePrecise {
     float view[3];  /* ... and where it was in view space */
     uint64_t anchor;       /* what moves with something: the key it goes with (GteRecordAnchor), or 0 */
     float anchorOffset[3]; /* ... and how far from that it is in view space */
+    int n64; /* imported source encoding, presentation only */
 } GtePrecise;
 
 #define GTE_RESOLVE_MAX 4
@@ -112,6 +113,13 @@ void GteRecordAnchor(uint32_t handle, uint64_t anchor, double dx, double dy, dou
 void GteRecordView(uint32_t handle, double x, double y, double z);
 /* On while the display interpolates: the projections of the frame before are kept. */
 void GteKeepPast(int on);
+/* Camera motion blur: the shutter-open view relative to the displayed one, a vertex's view-space displacement to
+   the shutter-open position, and `along` as presentation uses it (1 after a cut or without the frame before). */
+int GteCameraShutter(float along, float shutter, float earlier[3][4]);
+int GteVertexShutter(const GtePrecise *p, float shutter, float delta[3]);
+float GtePresentationAlong(float along);
+/* The source encoding recorded with the following projections (presentation only). */
+void GteSetN64(int on);
 /* A vertex of the frame being drawn as it is a fraction `along` (0..1) of the way from the frame before:
    1 when *out was made, 0 when there is nothing to go by (no key, not in the frame before, too near, or the
    view jumped: a camera cut). */

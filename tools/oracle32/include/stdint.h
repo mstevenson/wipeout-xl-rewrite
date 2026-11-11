@@ -11,4 +11,10 @@ typedef long long int64_t;
 typedef unsigned long long uint64_t;
 typedef int intptr_t;
 typedef unsigned int uintptr_t;
+#define UINT32_C(x) x##U
+#define UINT64_C(x) x##ULL
+#define INT32_MAX 2147483647
+#define UINT32_MAX 4294967295U
+#define UINT64_MAX 18446744073709551615ULL
+#define SIZE_MAX UINT32_MAX
 #endif

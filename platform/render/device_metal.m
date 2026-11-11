@@ -16,6 +16,12 @@ typedef struct MetalUniforms {
     int window;
     float surfaceHeight;
 } MetalUniforms;
+typedef struct MetalModernUniforms {
+    RenderUniforms common;
+    RenderModernUniforms modern;
+    int window;
+    float surfaceHeight;
+} MetalModernUniforms;
 /* Keep the SDL window and its GL context intact. SDL_Metal_CreateView converts
    the window's API flags and unloads GL, which prevents a later live switch. */
 @interface WipeoutMetalView : NSView
@@ -31,7 +37,14 @@ typedef struct MetalUniforms {
 @end
 @implementation WipeoutMetalReusableBuffer
 @end
-@interface WipeoutMetalDevice : NSObject
+@interface WipeoutMetalDevice : NSObject {
+@public
+    /* Command encoding and its cached state belong to the rendering thread.
+       Do not pay atomic property locks/copies for these growing draw records. */
+    RenderDraw previousDraw;
+    RenderModernUniforms previousModern;
+    RenderTarget encoderTarget;
+}
 @property id<MTLDevice> gpu;
 @property id<MTLCommandQueue> queue;
 @property id<MTLLibrary> library;
@@ -40,9 +53,9 @@ typedef struct MetalUniforms {
 @property NSMutableArray<WipeoutMetalReusableBuffer *> *buffers;
 @property NSUInteger pooledBytes;
 @property id<MTLBuffer> readbackBuffer;
-@property RenderDraw previousDraw;
 @property BOOL drawValid;
 @property id<MTLRenderCommandEncoder> encoder;
+@property id<MTLBlitCommandEncoder> blit;
 @property id<MTLTexture> encoderColour;
 @property id<MTLTexture> encoderDepth;
 @property id<CAMetalDrawable> drawable;
@@ -69,15 +82,24 @@ static int Error(NSString *what) {
     SDL_SetError("%s", what.UTF8String);
     return 0;
 }
-static void End(WipeoutMetalDevice *m) {
+static void EndRender(WipeoutMetalDevice *m) {
     m.drawValid = NO;
     if (m.encoder) {
         [m.encoder endEncoding];
         m.encoder = nil;
         m.encoderColour = nil;
         m.encoderDepth = nil;
+        m->encoderTarget = (RenderTarget){0};
     }
 }
+static void End(WipeoutMetalDevice *m) {
+    EndRender(m);
+    if (m.blit) {
+        [m.blit endEncoding];
+        m.blit = nil;
+    }
+}
+
 static id<MTLCommandBuffer> Command(WipeoutMetalDevice *m) {
     if (!m.command) {
         dispatch_semaphore_wait(m.inflight, DISPATCH_TIME_FOREVER);
@@ -90,6 +112,15 @@ static id<MTLCommandBuffer> Command(WipeoutMetalDevice *m) {
     }
     return m.command;
 }
+/* Batch consecutive transfers until drawing, readback or submission resumes. */
+static id<MTLBlitCommandEncoder> Transfer(WipeoutMetalDevice *m) {
+    if (!m.blit) {
+        EndRender(m);
+        m.blit = [Command(m) blitCommandEncoder];
+    }
+    return m.blit;
+}
+
 static void Finish(RenderDevice *d) {
     WipeoutMetalDevice *m = Data(d);
     End(m);
@@ -103,6 +134,8 @@ static void Finish(RenderDevice *d) {
     }
 }
 static MTLPixelFormat Format(RenderFormat f) {
+    if (f == RENDER_RGBA16_FLOAT) return MTLPixelFormatRGBA16Float;
+    if (f == RENDER_RGBA32_FLOAT) return MTLPixelFormatRGBA32Float;
     return f == RENDER_DEPTH      ? MTLPixelFormatDepth32Float
            : f == RENDER_R16_UINT ? MTLPixelFormatR16Uint
                                   : MTLPixelFormatRGBA8Unorm;
@@ -168,7 +201,9 @@ static int Upload(RenderDevice *d, uintptr_t image, RenderRect r, int layer, con
     @autoreleasepool {
         WipeoutMetalDevice *m = Data(d);
         id<MTLTexture> t = Texture(image);
-        int bpp = t.pixelFormat == MTLPixelFormatR16Uint ? 2 : 4;
+        MTLPixelFormat format = t.pixelFormat;
+        size_t bpp = format == MTLPixelFormatR16Uint ? 2 : format == MTLPixelFormatRGBA16Float ? 8
+                   : format == MTLPixelFormatRGBA32Float ? 16 : 4;
         size_t pitch = ((size_t)r.w * bpp + 255) & ~(size_t)255;
         id<MTLBuffer> staging = ReuseBuffer(m, pitch * r.h);
         if (!staging)
@@ -176,8 +211,7 @@ static int Upload(RenderDevice *d, uintptr_t image, RenderRect r, int layer, con
         for (int y = 0; y < r.h; y++)
             memcpy((uint8_t *)staging.contents + y * pitch, (const uint8_t *)data + y * rowBytes,
                    (size_t)r.w * bpp);
-        End(m);
-        id<MTLBlitCommandEncoder> b = [Command(m) blitCommandEncoder];
+        id<MTLBlitCommandEncoder> b = Transfer(m);
         [b copyFromBuffer:staging
                    sourceOffset:0
               sourceBytesPerRow:pitch
@@ -187,7 +221,6 @@ static int Upload(RenderDevice *d, uintptr_t image, RenderRect r, int layer, con
                destinationSlice:layer
                destinationLevel:0
               destinationOrigin:MTLOriginMake(r.x, r.y, 0)];
-        [b endEncoding];
         RetireBuffer(m, staging);
         return 1;
     }
@@ -195,10 +228,8 @@ static int Upload(RenderDevice *d, uintptr_t image, RenderRect r, int layer, con
 static void Mipmaps(RenderDevice *d, uintptr_t image) {
     @autoreleasepool {
         WipeoutMetalDevice *m = Data(d);
-        End(m);
-        id<MTLBlitCommandEncoder> b = [Command(m) blitCommandEncoder];
+        id<MTLBlitCommandEncoder> b = Transfer(m);
         [b generateMipmapsForTexture:Texture(image)];
-        [b endEncoding];
     }
 }
 static uintptr_t Buffer(RenderDevice *d, const void *data, size_t size, RenderBufferKind kind) {
@@ -242,7 +273,9 @@ static id<MTLTexture> Colour(WipeoutMetalDevice *m, RenderTarget target) {
 }
 static id<MTLRenderCommandEncoder> Encoder(WipeoutMetalDevice *m, RenderTarget target) {
     id<MTLTexture> colour = Colour(m, target), depth = Texture(target.depth);
-    if (m.encoder && m.encoderColour == colour && m.encoderDepth == depth)
+    const RenderTarget *previous = &m->encoderTarget;
+    if (m.encoder && m.encoderColour == colour && m.encoderDepth == depth &&
+        !memcmp(previous->auxiliary, target.auxiliary, sizeof(target.auxiliary)))
         return m.encoder;
     End(m);
     MTLRenderPassDescriptor *pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -250,6 +283,12 @@ static id<MTLRenderCommandEncoder> Encoder(WipeoutMetalDevice *m, RenderTarget t
         pass.colorAttachments[0].texture = colour;
         pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
         pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (!target.auxiliary[i]) continue;
+        pass.colorAttachments[i + 1].texture = Texture(target.auxiliary[i]);
+        pass.colorAttachments[i + 1].loadAction = MTLLoadActionLoad;
+        pass.colorAttachments[i + 1].storeAction = MTLStoreActionStore;
     }
     if (depth) {
         pass.depthAttachment.texture = depth;
@@ -259,6 +298,7 @@ static id<MTLRenderCommandEncoder> Encoder(WipeoutMetalDevice *m, RenderTarget t
     m.encoder = [Command(m) renderCommandEncoderWithDescriptor:pass];
     m.encoderColour = colour;
     m.encoderDepth = depth;
+    m->encoderTarget = target;
     return m.encoder;
 }
 static id<MTLDepthStencilState> Depth(WipeoutMetalDevice *m, int test, int write, int less) {
@@ -290,58 +330,75 @@ static id<MTLSamplerState> Sampler(WipeoutMetalDevice *m, RenderSampler s) {
     }
     return sam;
 }
+enum { METAL_COPY = RENDER_SHADER_COUNT, METAL_CLEAR, METAL_CLEAR_DEPTH, METAL_GAME_DEPTH };
+
 static id<MTLRenderPipelineState> Pipeline(WipeoutMetalDevice *m, int shader, RenderTarget target,
                                            int blend, int mask) {
     id<MTLTexture> colour = Colour(m, target);
     BOOL hasDepth = target.depth != 0;
-    NSNumber *key = @(shader | (blend << 4) | (mask << 8) | (hasDepth << 12) |
-                      ((colour.pixelFormat == MTLPixelFormatBGRA8Unorm) << 13));
+    unsigned auxiliary = 0;
+    for (int i = 0; i < 3; i++) auxiliary |= (target.auxiliary[i] != 0) << i;
+    NSNumber *key = @((uint64_t)shader | ((uint64_t)blend << 8) | ((uint64_t)mask << 10) |
+                      ((uint64_t)hasDepth << 14) | ((uint64_t)auxiliary << 15) |
+                      ((uint64_t)colour.pixelFormat << 20));
     id<MTLRenderPipelineState> pipeline = m.pipelines[key];
     if (pipeline)
         return pipeline;
-    static NSString *const fs[] = {@"gameFragment",      @"averageFragment",   @"detailFragment",
-                                   @"compositeFragment", @"uiFragment",        @"copyFragment",
-                                   @"clearFragment",     @"clearDepthFragment"};
+    static NSString *const fs[] = {
+        @"gameFragment", @"averageFragment", @"detailFragment", @"compositeFragment", @"uiFragment",
+        @"ModerngameFragment", @"ModerngameHdrFragment", @"modernMotionFragment", @"modernResolveFragment",
+        @"copyFragment", @"clearFragment", @"clearDepthFragment",
+        @"ModerngameDepthFragment"
+    };
     MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
-    pd.vertexFunction = [m.library newFunctionWithName:shader == RENDER_GAME ? @"gameVertex"
-                                                       : shader == RENDER_UI ? @"uiVertex"
-                                                                             : @"pictureVertex"];
-    pd.fragmentFunction = [m.library newFunctionWithName:fs[shader]];
-    MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[0];
-    ca.pixelFormat = colour.pixelFormat;
-    ca.writeMask =
-        ((mask & 1) ? MTLColorWriteMaskRed : 0) | ((mask & 2) ? MTLColorWriteMaskGreen : 0) |
-        ((mask & 4) ? MTLColorWriteMaskBlue : 0) | ((mask & 8) ? MTLColorWriteMaskAlpha : 0);
+    int modern = shader == RENDER_MODERN_SCENE || shader == RENDER_GAME_HDR || shader == METAL_GAME_DEPTH;
+    int game = shader == RENDER_GAME || modern;
+    pd.vertexFunction = [m.library newFunctionWithName:modern ? @"ModerngameVertex" : shader == RENDER_GAME ? @"gameVertex" :
+                          shader == RENDER_UI ? @"uiVertex" :
+                          @"pictureVertex"];
+    pd.fragmentFunction = [m.library newFunctionWithName:
+        shader == RENDER_GAME_HDR && (auxiliary & 4) ? @"ModerngameMotionFragment" : fs[shader]];
+    for (int i = 0; i < 4; i++) {
+        id<MTLTexture> texture = i == 0 ? colour : Texture(target.auxiliary[i - 1]);
+        if (!texture) continue;
+        MTLRenderPipelineColorAttachmentDescriptor *ca = pd.colorAttachments[i];
+        ca.pixelFormat = texture.pixelFormat;
+        ca.writeMask =
+            ((mask & 1) ? MTLColorWriteMaskRed : 0) | ((mask & 2) ? MTLColorWriteMaskGreen : 0) |
+            ((mask & 4) ? MTLColorWriteMaskBlue : 0) | ((mask & 8) ? MTLColorWriteMaskAlpha : 0);
+        if (blend) {
+            ca.blendingEnabled = YES;
+            ca.rgbBlendOperation = blend == 2 ? MTLBlendOperationReverseSubtract : MTLBlendOperationAdd;
+            ca.alphaBlendOperation = blend == 2 && auxiliary ? MTLBlendOperationReverseSubtract : MTLBlendOperationAdd;
+            ca.sourceRGBBlendFactor = MTLBlendFactorOne;
+            ca.destinationRGBBlendFactor =
+                blend == 2 ? MTLBlendFactorOne : MTLBlendFactorOneMinusSourceAlpha;
+            ca.sourceAlphaBlendFactor = blend == 2 && auxiliary ? MTLBlendFactorOne : MTLBlendFactorZero;
+            ca.destinationAlphaBlendFactor = MTLBlendFactorOne;
+        }
+    }
     if (hasDepth)
         pd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
-    if (blend) {
-        ca.blendingEnabled = YES;
-        ca.rgbBlendOperation = blend == 2 ? MTLBlendOperationReverseSubtract : MTLBlendOperationAdd;
-        ca.alphaBlendOperation = MTLBlendOperationAdd;
-        ca.sourceRGBBlendFactor = MTLBlendFactorOne;
-        ca.destinationRGBBlendFactor =
-            blend == 2 ? MTLBlendFactorOne : MTLBlendFactorOneMinusSourceAlpha;
-        ca.sourceAlphaBlendFactor = MTLBlendFactorZero;
-        ca.destinationAlphaBlendFactor = MTLBlendFactorOne;
-    }
-    if (shader == RENDER_GAME || shader == RENDER_UI) {
+    if (game || shader == RENDER_UI) {
         MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
-        if (shader == RENDER_GAME) {
+        if (game) {
             const MTLVertexFormat formats[] = {MTLVertexFormatFloat3,  MTLVertexFormatFloat4,
                                                MTLVertexFormatFloat2,  MTLVertexFormatShort4,
                                                MTLVertexFormatUChar4,  MTLVertexFormatUChar4,
-                                               MTLVertexFormatUShort4, MTLVertexFormatShort4};
+                                               MTLVertexFormatUShort4, MTLVertexFormatShort4, MTLVertexFormatShort4, MTLVertexFormatFloat4, MTLVertexFormatFloat3, MTLVertexFormatShort4};
             const size_t offsets[] = {
-                offsetof(RenderVertex, x),      offsetof(RenderVertex, r),
-                offsetof(RenderVertex, u),      offsetof(RenderVertex, texture),
-                offsetof(RenderVertex, window), offsetof(RenderVertex, mode),
-                offsetof(RenderVertex, hd),     offsetof(RenderVertex, hdTexels)};
-            for (int i = 0; i < 8; i++) {
+                offsetof(RenderModernVertex, x),      offsetof(RenderModernVertex, r),
+                offsetof(RenderModernVertex, u),      offsetof(RenderModernVertex, texture),
+                offsetof(RenderModernVertex, window), offsetof(RenderModernVertex, mode),
+                offsetof(RenderModernVertex, hd),     offsetof(RenderModernVertex, hdTexels),
+                offsetof(RenderModernVertex, filterBounds), offsetof(RenderModernVertex, view),
+                offsetof(RenderModernVertex, shutter), offsetof(RenderModernVertex, emission)};
+            for (int i = 0; i < (modern ? 12 : 8); i++) {
                 vd.attributes[i].format = formats[i];
                 vd.attributes[i].offset = offsets[i];
                 vd.attributes[i].bufferIndex = 0;
             }
-            vd.layouts[0].stride = sizeof(RenderVertex);
+            vd.layouts[0].stride = modern ? sizeof(RenderModernVertex) : sizeof(RenderVertex);
         } else {
             vd.attributes[0].format = MTLVertexFormatFloat2;
             vd.attributes[0].offset = 0;
@@ -386,10 +443,10 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
     @autoreleasepool {
         WipeoutMetalDevice *m = Data(d);
         id<MTLTexture> colour = Colour(m, draw->target);
-        id<MTLRenderPipelineState> p = Pipeline(m, draw->pipeline.shader, draw->target,
-                                                draw->pipeline.blend, draw->pipeline.colourMask);
-        if (!p)
-            return 0;
+        int shader = draw->pipeline.shader;
+        if (!draw->pipeline.colourMask && draw->uniforms.depthPass &&
+            (shader == RENDER_MODERN_SCENE || shader == RENDER_GAME_HDR))
+            shader = METAL_GAME_DEPTH;
         RenderRect scissor =
             Clip(draw->scissorEnabled ? draw->scissor
                                       : (RenderRect){0, 0, (int)colour.width, (int)colour.height},
@@ -397,38 +454,59 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
         if (!scissor.w || !scissor.h)
             return 1;
         id<MTLRenderCommandEncoder> e = Encoder(m, draw->target);
-        RenderDraw last = m.previousDraw;
+        const RenderDraw *last = &m->previousDraw;
         BOOL all = !m.drawValid;
-        if (all || memcmp(&last.pipeline, &draw->pipeline, sizeof(RenderPipeline))) {
+        if (all || last->uniforms.depthPass != draw->uniforms.depthPass ||
+            memcmp(&last->pipeline, &draw->pipeline, sizeof(RenderPipeline))) {
+            /* The encoder already owns the unchanged pipeline. Avoid building
+               a dictionary key and looking it up for every range in a batch. */
+            id<MTLRenderPipelineState> p = Pipeline(m, shader, draw->target,
+                                                    draw->pipeline.blend, draw->pipeline.colourMask);
+            if (!p)
+                return 0;
             [e setRenderPipelineState:p];
             [e setDepthStencilState:Depth(m, draw->pipeline.depthTest, draw->pipeline.depthWrite,
                                           draw->pipeline.depthLess)];
         }
-        if (all || memcmp(&last.viewport, &draw->viewport, sizeof(RenderRect)))
+        if (all || memcmp(&last->viewport, &draw->viewport, sizeof(RenderRect)))
             SetViewport(e, draw->viewport, colour, draw->target.window);
-        if (all || last.scissorEnabled != draw->scissorEnabled ||
-            memcmp(&last.scissor, &draw->scissor, sizeof(RenderRect)))
+        if (all || last->scissorEnabled != draw->scissorEnabled ||
+            memcmp(&last->scissor, &draw->scissor, sizeof(RenderRect)))
             [e setScissorRect:(MTLScissorRect){scissor.x, scissor.y, scissor.w, scissor.h}];
         if (all)
             [e setCullMode:MTLCullModeNone];
-        if (all || memcmp(&last.uniforms, &draw->uniforms, sizeof(RenderUniforms))) {
-            MetalUniforms u = Uniform(draw->uniforms, draw->target, colour);
-            [e setVertexBytes:&u length:sizeof(u) atIndex:1];
-            [e setFragmentBytes:&u length:sizeof(u) atIndex:1];
+        BOOL modernChanged = NO;
+        if (draw->modern) {
+            modernChanged = !last->modern || memcmp(&m->previousModern, draw->modern, sizeof(m->previousModern));
+        }
+        if (all || last->pipeline.shader != draw->pipeline.shader || modernChanged ||
+            memcmp(&last->uniforms, &draw->uniforms, sizeof(RenderUniforms))) {
+            if (shader == RENDER_MODERN_SCENE || shader == RENDER_GAME_HDR || shader == METAL_GAME_DEPTH) {
+                MetalModernUniforms u = {draw->uniforms, *draw->modern, draw->target.window, (float)colour.height};
+                [e setVertexBytes:&u length:sizeof(u) atIndex:1];
+                [e setFragmentBytes:&u length:sizeof(u) atIndex:1];
+            } else {
+                MetalUniforms u = Uniform(draw->uniforms, draw->target, colour);
+                [e setVertexBytes:&u length:sizeof(u) atIndex:1];
+                [e setFragmentBytes:&u length:sizeof(u) atIndex:1];
+            }
+            if (draw->pipeline.shader == RENDER_MODERN_MOTION || draw->pipeline.shader == RENDER_MODERN_RESOLVE)
+                [e setFragmentBytes:draw->modern->effect length:sizeof(draw->modern->effect) atIndex:3];
         }
         if (draw->vertices &&
-            (all || last.vertices != draw->vertices || last.vertexOffset != draw->vertexOffset))
+            (all || last->vertices != draw->vertices || last->vertexOffset != draw->vertexOffset))
             [e setVertexBuffer:VertexBuffer(draw->vertices) offset:draw->vertexOffset atIndex:0];
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < RENDER_TEXTURES; i++) {
             if (draw->images[i]) {
-                if (all || last.images[i] != draw->images[i])
+                if (all || last->images[i] != draw->images[i] || last->pipeline.shader != draw->pipeline.shader)
                     [e setFragmentTexture:Texture(draw->images[i]) atIndex:i];
-                if (all || !last.images[i] ||
-                    memcmp(&last.samplers[i], &draw->samplers[i], sizeof(RenderSampler)))
+                if (all || !last->images[i] ||
+                    memcmp(&last->samplers[i], &draw->samplers[i], sizeof(RenderSampler)))
                     [e setFragmentSamplerState:Sampler(m, draw->samplers[i]) atIndex:i];
             }
         }
-        m.previousDraw = *draw;
+        m->previousDraw = *draw;
+        if (draw->modern) m->previousModern = *draw->modern;
         m.drawValid = YES;
         if (draw->indices)
             [e drawIndexedPrimitives:MTLPrimitiveTypeTriangle
@@ -439,7 +517,7 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
         else
             [e drawPrimitives:MTLPrimitiveTypeTriangle
                   vertexStart:draw->first
-                  vertexCount:draw->count];
+                  vertexCount:draw->count instanceCount:1];
         return 1;
     }
 }
@@ -477,7 +555,8 @@ static int Clear(RenderDevice *d, const RenderClear *c) {
             return 1;
         }
         id<MTLRenderPipelineState> p =
-            Pipeline(m, c->depth && depth ? 7 : 6, c->target, 0, c->colour ? c->colourMask : 0);
+            Pipeline(m, c->depth && depth ? METAL_CLEAR_DEPTH : METAL_CLEAR, c->target, 0,
+                     c->colour ? c->colourMask : 0);
         if (!p)
             return 0;
         id<MTLRenderCommandEncoder> e = Encoder(m, c->target);
@@ -503,8 +582,7 @@ static int Copy(RenderDevice *d, const RenderCopy *c) {
         if (!c->source.window && !c->destination.window && c->from.w == c->to.w &&
             c->from.h == c->to.h && c->from.w > 0 && c->from.h > 0 &&
             source.pixelFormat == dest.pixelFormat) {
-            End(m);
-            id<MTLBlitCommandEncoder> b = [Command(m) blitCommandEncoder];
+            id<MTLBlitCommandEncoder> b = Transfer(m);
             [b copyFromTexture:source
                       sourceSlice:0
                       sourceLevel:0
@@ -514,12 +592,11 @@ static int Copy(RenderDevice *d, const RenderCopy *c) {
                  destinationSlice:0
                  destinationLevel:0
                 destinationOrigin:MTLOriginMake(c->to.x, c->to.y, 0)];
-            [b endEncoding];
             return 1;
         }
         if (c->depth)
             return Error(@"Scaled depth transfers are unsupported");
-        id<MTLRenderPipelineState> p = Pipeline(m, 5, c->destination, 0, 15);
+        id<MTLRenderPipelineState> p = Pipeline(m, METAL_COPY, c->destination, 0, 15);
         if (!p)
             return 0;
         id<MTLRenderCommandEncoder> e = Encoder(m, c->destination);
@@ -563,7 +640,7 @@ static int Read(RenderDevice *d, RenderTarget target, RenderRect r, RenderFormat
         id<MTLTexture> t = f == RENDER_DEPTH ? Texture(target.depth) : Colour(m, target);
         if (!t)
             return Error(@"Metal read has no attachment");
-        int bpp = f == RENDER_R16_UINT ? 2 : 4;
+        size_t bpp = RenderPixelBytes(f);
         size_t pitch = ((size_t)r.w * bpp + 255) & ~(size_t)255;
         id<MTLBuffer> staging = [m.gpu newBufferWithLength:pitch * r.h
                                                    options:MTLResourceStorageModeShared];
@@ -783,6 +860,7 @@ static int Create(RenderDevice *d, void *window) {
         d->caps.maxTextureSize = 16384;
         d->caps.maxArrayLayers = 2048;
         d->caps.asyncReadback = 1;
+        d->caps.hdrTargets = 1;
         SDL_strlcpy(d->caps.deviceName, m.gpu.name.UTF8String, sizeof(d->caps.deviceName));
         return 1;
     }

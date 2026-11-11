@@ -1,3 +1,4 @@
+#include <stddef.h>
 typedef unsigned int size_t;
 typedef unsigned int uintptr_t;
 typedef int intptr_t;

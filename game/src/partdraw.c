@@ -160,6 +160,7 @@ void AsmDrawParticles(SParticle *particles, Skeleton *camera, int mode)
                     }
                 }
                 AddPrim(ordering + depth, line);
+                if (PortModernWallParticle(particle)) PortTagSparkStreak(line);
             }
         }
     }

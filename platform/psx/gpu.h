@@ -1,10 +1,12 @@
-/* The drawing backend under libgpu (gpu_gl.c): the PlayStation's
+/* The drawing backend under libgpu (render/gl_backend.c): the PlayStation's
    primitives drawn at any resolution with OpenGL, textured straight from a
    copy of the console's video memory. */
 #ifndef PSX_GPU_H
 #define PSX_GPU_H
 
 #include <stdint.h>
+#include "../render/modern/modern.h"
+#include "../render/modern/metadata.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,13 +26,16 @@ void GpuVramChanged(int x, int y, int w, int h);
    (platform/original.c), as they do not fit beside XL's own. Wipeout 64's palettes go there too, reached with
    bit 15 of a palette's address (the row's tenth bit: rows 512 on), which the console's GPU ignores. */
 extern uint16_t psxVramHigh[VRAM_HEIGHT][VRAM_WIDTH];
+/* The upload's rectangle identifies the original image inside a packed texture page. */
+void GpuVramUploaded(int x, int y, int w, int h);
+void GpuVramOverwritten(int x, int y, int w, int h);
 void GpuVramHighChanged(void);
 
 /* The port's own page of texture memory, beyond the console's video memory, that a textured
    primitive reads when its texture page says colour depth 3 (the depth the console's GPU leaves
    reserved; the game never uses it). The button glyphs of the keyboard and of other gamepads
    live here. The page's coordinates are the primitive's UVs (256x256); its texels are four times
-   finer, with smooth coverage, and are sampled filtered. */
+   finer, with smooth coverage, and are sampled according to the renderer's policy. */
 #define GLYPH_PAGE_SIZE 256   /* the glyph page's texture coordinates (a quad's UV bytes) */
 #define GLYPH_ATLAS_SCALE 4   /* ... and its texels per coordinate */
 #define GLYPH_ATLAS_SIZE (GLYPH_PAGE_SIZE * GLYPH_ATLAS_SCALE)
@@ -38,7 +43,7 @@ void GpuSetGlyphMemory(const uint32_t *rgba); /* RGBA8, premultiplied by the cov
 /* ... and its other pages of depth 3, at the other page positions (1-63 by the texture page's number: x / 64, + 16
    for the second row, + 32 for the second half), as many as 63: the PC version's
    texture pages (pc.c), each 256x256 RGBA8 premultiplied, its colours as Direct3D's (modulated by the vertex colour,
-   255 white), sampled filtered, a semi-transparent primitive blending all of it. */
+   255 white), sampled according to the renderer's policy, a semi-transparent primitive blending all of it. */
 #define PORT_PAGES_ACROSS 8
 #define PORT_PAGES_DOWN 8
 void GpuSetPortPage(int page, const uint32_t *rgba);
@@ -55,6 +60,10 @@ typedef struct GpuVertex {
     int backFacing; /* ... of a polygon seen from behind: hidden by anything nearer (the depth buffer's slack is not
                        for it: a model drawn two-sided, its back behind its front) */
     int exactDepth; /* ... tested without the slack too (GteSetExactDepth) */
+    int n64;       /* material ownership, independent of sampler fallback */
+    int world;     /* view-space provenance, even for affine billboards drawn with w == 0 */
+    float view[3]; /* true view-space position, independent of depth bias */
+    float shutterDelta[3]; /* view-space displacement to the shutter-open position */
 } GpuVertex;
 
 /* How a primitive is drawn. */
@@ -68,15 +77,48 @@ typedef struct GpuDrawState {
     int windowMaskX, windowMaskY, windowOffsetX, windowOffsetY; /* texture window, in 8-texel units */
     int dither;
     int fade;          /* the port's distance fade: the vertices' alpha (GpuVertex.a) blends it out */
+    /* Append new fields here so the frame recorder's first 14 saved fields keep their layout. */
+    int filtered;      /* packed shader sampling/coverage bits */
+    int n64;           /* source encoding, independent of the selected sampler */
+    int textureFlags;  /* N64 source flags 0x10/20 mirror S/T, 0x40 wrap */
+    int ps1Light;      /* imported road texture with gameplay-authored 128-neutral tint */
+    int trackTile;     /* The packet came from the track polygon pools. */
+    int screenOverlay;
+    MaterialEmission emission;
+    int smoothTrackLighting;
+    const struct GpuLightSet *pointLights; /* immutable for this draw pass */
+    float shieldGlow[4]; /* shield tint and strength, for its own hull */
+    int hullMotion; /* use object motion for this hull, including zero for missing history */
+    int sparkStreak; /* wall-contact particle with extra HDR brightness for bloom */
     int hudColourOverlay; /* coloured HUD fill attenuates the background; black stays transparent */
 } GpuDrawState;
 
+/* Derive material and geometry facts before a profile chooses rasterization.
+   An affine billboard may belong to the world even when it has no reciprocal depth. */
+static inline RenderMaterial GpuMaterialFor(const GpuDrawState *draw, const GpuVertex *vertices, int count)
+{
+    RenderMaterial material = {.n64 = draw->n64, .fullColour = draw->depth == 3,
+        .textured = draw->textured, .raw = draw->raw, .dither = draw->dither, .ui = 1, .perspective = 1,
+        .smoothTrackLighting = draw->smoothTrackLighting};
+    for (int i = 0; i < count; i++) {
+        int projected = vertices[i].w > 0.0f;
+        material.perspective &= projected;
+        material.ui &= !vertices[i].world && !projected;
+        material.n64 |= vertices[i].n64;
+    }
+    return material;
+}
+
+void GpuTagEmission(const void *start, const void *end, const MaterialEmission *emission);
+
 int GpuInit(void);
-/* The framebuffer's scale (its pixels per console pixel), the largest it can be, and the window's (the
-   settings' resolution 0: what it follows). */
+void GpuRendererShutdown(void);
+unsigned GpuModernFailures(void);
+/* Native-resolution multiplier, profile-specific limits and window fit. */
 int GpuScale(void);
 int GpuMaxScale(void);
 int GpuWindowScale(void);
+void GpuUpdateResolution(void);
 /* The drawing area (a rectangle of video memory) the next primitives go to. */
 void GpuSetDrawArea(int x, int y, int w, int h, int offsetX, int offsetY);
 void GpuTriangles(const GpuDrawState *state, const GpuVertex *vertices, int count);
@@ -93,6 +135,14 @@ void GpuPresentInterpolated(int x, int y, int w, int h);
 void GpuDisplayShake(int x, int y);
 /* What is drawn while on is such a picture. */
 void GpuInterpolating(int on);
+typedef struct GpuCameraMotion {
+    float earlier[3][4];
+    float centreX, centreY, focal;
+} GpuCameraMotion;
+/* Snapshot world depth at the end of the scene table. A following HUD table
+   retains the snapshot while advancing the colour revision. */
+void GpuMotionEligible(int eligible);
+void GpuCaptureCameraMotion(int x, int y, int w, int h, const GpuCameraMotion *motion, int hudOnly);
 /* Two players on one machine (link.c): the area (x, y, w, h) of video memory in the upper half of the
    window and another picture (RGBA, rows from the bottom; lowerNew: changed since the last call) in the
    lower half; and an area read back at the framebuffer's scale (RGBA, rows from the bottom). */
@@ -107,7 +157,9 @@ extern int portPal;
 #define GPU_SPLIT_ROWS (portPal ? 145 : 136)
 uint8_t *GpuReadArea(int x, int y, int w, int h, int *outW, int *outH);
 /* The depth buffer in that area of video memory starts afresh (each ordering table: libgpu's DrawOTag). */
+/* The main table also starts a fresh HDR scene from the unprocessed picture. */
 void GpuClearDepth(int x, int y, int w, int h);
+void GpuClearSceneDepth(int x, int y, int w, int h, int mainTable);
 /* Brings psxVram up to date with what was drawn into the rectangle (before
    the CPU reads or copies it). */
 void GpuReadBack(int x, int y, int w, int h);
@@ -118,6 +170,7 @@ void GpuWriteFramebuffer(int x, int y, int w, int h);
 void GpuMoveFramebuffer(int x, int y, int w, int h, int toX, int toY);
 /* Finishes the frame's drawing (before presenting). */
 void GpuFlush(void);
+void PsxRendererBoundary(void);
 /* The window's framebuffer, when it is not 0 (iOS: SDL's view draws into one of its own). */
 void GpuSetWindowFramebuffer(unsigned int number);
 /* Clears the window to a colour, its framebuffer bound for drawing over (the start-up's messages, DebugUiSplash). */

@@ -3,6 +3,8 @@
 set -eu
 cd "$(dirname "$0")/../.."
 test_build=$(mktemp -d)
+modern_policy='platform/render/modern/modern.c platform/render/modern/scene.c'
+modern_gpu="$modern_policy platform/render/modern/post.c platform/n64_material.c"
 trap 'rm -rf "$test_build"' EXIT HUP INT TERM
 case $(uname -s) in Darwin) discard='-Wl,-dead_strip';; *) discard='-Wl,--gc-sections';; esac
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
@@ -32,12 +34,12 @@ ${CC:-cc} -O2 -Iplatform $(pkg-config --cflags sdl3) tools/bugtest/test_second_e
 "$test_build/second_exit"
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_ordering_cycle.c \
+    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_ordering_cycle.c $modern_policy platform/render/modern/lights.c \
     $(pkg-config --libs sdl3) -o "$test_build/ordering_cycle"
 "$test_build/ordering_cycle"
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_menu_reuse.c \
+    -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) tools/bugtest/test_menu_reuse.c $modern_policy platform/render/modern/lights.c \
     $(pkg-config --libs sdl3) -o "$test_build/menu_reuse"
 "$test_build/menu_reuse"
 
@@ -45,12 +47,12 @@ ${CC:-cc} -O2 -ffunction-sections -fdata-sections $discard \
     tools/bugtest/test_projection_cache.c -lm -o "$test_build/projection_cache"
 "$test_build/projection_cache"
 
-${CC:-cc} -O1 -Iplatform $(pkg-config --cflags sdl3) tools/bugtest/test_downsample_settings.c \
+${CC:-cc} -O1 -Iplatform $(pkg-config --cflags sdl3) tools/bugtest/test_downsample_settings.c $modern_policy \
     $(pkg-config --libs sdl3) -o "$test_build/downsample_settings"
 "$test_build/downsample_settings"
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
-    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_framecap_storage.c \
+    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_framecap_storage.c $modern_policy \
     $(pkg-config --libs sdl3) -o "$test_build/framecap_storage"
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
@@ -61,13 +63,13 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
 
 # Keep the portable encoder covered, plus the optional SIMD codec when installed.
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
-    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_framecap_codec.c \
+    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_framecap_codec.c $modern_policy \
     $(pkg-config --libs sdl3) -o "$test_build/framecap_codec"
 "$test_build/framecap_codec"
 if pkg-config --exists libturbojpeg; then
     for test in framecap_storage framecap_codec; do
         ${CC:-cc} -O1 -DPORT_HAVE_TURBOJPEG -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
-            -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3 libturbojpeg) "tools/bugtest/test_$test.c" \
+            -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3 libturbojpeg) "tools/bugtest/test_$test.c" $modern_policy \
             $(pkg-config --libs sdl3 libturbojpeg) -o "$test_build/${test}_turbo"
         "$test_build/${test}_turbo"
     done
@@ -94,26 +96,31 @@ if [ "${WIPEOUT_TEST_GL:-0}" = 1 ]; then
         gl_libs="$gl_libs -framework Metal -framework QuartzCore -framework AppKit"
     fi
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_hud.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_hud.c platform/render/state.c platform/render/device_gl.c $modern_gpu \
         $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_hud"
     "$test_build/gpu_hud"
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_mesh.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_mesh.c platform/render/state.c platform/render/device_gl.c $modern_gpu \
         $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_mesh"
     "$test_build/gpu_mesh"
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_downsample.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_downsample.c platform/render/state.c platform/render/device_gl.c $modern_gpu \
         $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_downsample"
     "$test_build/gpu_downsample"
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
-        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_passes.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_passes.c platform/render/state.c platform/render/device_gl.c $modern_gpu \
         $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_passes"
     "$test_build/gpu_passes"
+    ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard \
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_modern_gpu.c platform/render/state.c platform/render/device_gl.c $modern_gpu \
+        $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/modern_gpu"
+    "$test_build/modern_gpu"
+    env -u WIPEOUT_TEST_METAL "$test_build/modern_gpu"
     # WebGL's float metadata must reproduce the desktop flat interface exactly.
     # Exercise it on a real GL driver even when the other cases selected Metal.
     env -u WIPEOUT_TEST_METAL "$test_build/gpu_passes" "$test_build/flat.bin"
     ${CC:-cc} -O1 -DPORT_TEST_WEBGL_METADATA -DPORT_TEST_WEBGL_UPLOADS -ffunction-sections -fdata-sections $discard \
-        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_passes.c platform/render/state.c platform/render/device_gl.c \
+        $gpu_defines -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_gpu_passes.c platform/render/state.c platform/render/device_gl.c $modern_gpu \
         $gpu_objects $(pkg-config --libs sdl3) $gl_libs -lm -o "$test_build/gpu_metadata"
     env -u WIPEOUT_TEST_METAL "$test_build/gpu_metadata" "$test_build/float.bin"
     cmp "$test_build/flat.bin" "$test_build/float.bin"
@@ -125,7 +132,7 @@ fi
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
     -include platform/include/port.h -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) \
-    tools/bugtest/test_far_lifetime.c platform/psx/gte.c platform/psx/gte_tables.c \
+    tools/bugtest/test_far_lifetime.c $modern_policy platform/render/modern/lights.c platform/psx/gte.c platform/psx/gte_tables.c \
     game/src/skeleton.c platform/psx/libgte.c game/src/utils.c $(pkg-config --libs sdl3) \
     -lm -o "$test_build/far_lifetime"
 "$test_build/far_lifetime"
@@ -138,9 +145,9 @@ for test in guest_sky guest_animation; do
 done
 
 # Port rendering changes must preserve the original effect segments and quad geometry.
-for test in electric near_object; do
+for test in electric near_object modern_billboard; do
     gte_sources=
-    if [ "$test" = near_object ]; then
+    if [ "$test" = near_object ] || [ "$test" = modern_billboard ]; then
         gte_sources="platform/psx/gte.c platform/psx/gte_tables.c"
     fi
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
@@ -151,10 +158,10 @@ done
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -DPORT_VERSION='"0.0.6"' \
     -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
-    tools/bugtest/test_updates.c $(pkg-config --libs sdl3) -o "$test_build/updates"
+    tools/bugtest/test_updates.c $modern_policy $(pkg-config --libs sdl3) -o "$test_build/updates"
 "$test_build/updates"
 ${CC:-cc} -O1 -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
-    tools/bugtest/test_updates_web.c $(pkg-config --libs sdl3) -o "$test_build/updates_web"
+    tools/bugtest/test_updates_web.c $modern_policy $(pkg-config --libs sdl3) -o "$test_build/updates_web"
 
 "$test_build/updates_web"
 
@@ -177,7 +184,7 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-decla
 # The input tests drive a real SDL virtual controller and the game's button decoder.
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations -Wno-pointer-sign \
     -include platform/include/port.h -iquote game/include -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
-    tools/bugtest/test_steering.c platform/psx/pad.c game/src/pad.c $(pkg-config --libs sdl3) -o "$test_build/steering"
+    tools/bugtest/test_steering.c $modern_policy platform/psx/pad.c game/src/pad.c $(pkg-config --libs sdl3) -o "$test_build/steering"
 "$test_build/steering"
 for test in steering_target steering_ghost guest_motion guest_sign; do
     ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations -Wno-pointer-sign \
@@ -195,7 +202,7 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -iquote game/include 
 "$test_build/steering_recording"
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -iquote game/include \
-    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_link_timing.c \
+    -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) tools/bugtest/test_link_timing.c $modern_policy \
     $(pkg-config --libs sdl3) -o "$test_build/link_timing"
 "$test_build/link_timing"
 
@@ -228,3 +235,15 @@ if [ "$#" -gt 0 ]; then
         "$test_build/movie_disc" "$disc"
     done
 fi
+
+for test in modern_sources modern_track modern_settings modern_metadata modern_decoder; do
+    policy="$modern_policy"
+    [ "$test" = modern_track ] && policy=''
+    [ "$test" = modern_metadata ] && policy="$modern_policy platform/render/modern/metadata.c platform/render/modern/lights.c"
+    ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
+        -include platform/include/port.h -Iplatform -Iplatform/psx -iquote game/include $(pkg-config --cflags sdl3) \
+        "tools/bugtest/test_$test.c" $policy $(pkg-config --libs sdl3) -lm -o "$test_build/$test"
+    "$test_build/$test"
+done
+
+python3 tools/bugtest/test_modern_capture.py

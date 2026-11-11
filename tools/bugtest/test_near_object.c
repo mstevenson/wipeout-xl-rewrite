@@ -200,3 +200,12 @@ int main(void)
     puts("1995 sky keeps Gouraud corner colours in the fixed background slot: OK");
     return 0;
 }
+
+RenderGeometry PortRenderGeometry(void) { return (RenderGeometry){0}; }
+int renderModernActive = 0;
+const RenderFrame *RenderCurrent(void) { static const RenderFrame frame = {.id = RENDER_EXISTING}; return &frame; }
+void PortTagObjectPrims(const void *first, const void *end, const char *kind, const char *name,
+                        uint32_t tag, int index, const int position[3])
+{ PortTagPrims(first,end,kind,name,index); }
+
+int PortModernObjectRgb8(const Object *object) { return 0; }

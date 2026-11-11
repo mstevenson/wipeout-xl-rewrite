@@ -1,3 +1,4 @@
+#include "n64_material.h"
 /* The original Wipeout's tracks, raced in Wipeout XL (the debug console's Files tab picks the player's copy
    of the original: its PlayStation disc image, a .cue, or a folder of its data, the disc's WIPEOUT folder).
 
@@ -672,6 +673,7 @@ static void FreeAnimations(void);
 
 static void FreeFiles(void)
 {
+    PortN64TexturesReset();
     int i;
 
     for (i = 0; i < FILES; i++) {
@@ -1734,6 +1736,7 @@ static int PlaceTims(Layout *l, TimList *list, const int *own)
         if (!clut || !PlaceImage(l, Le16(image + 8), Le16(image + 10), &x, &y)) {
             return 0;
         }
+        int nativeFlags = list->tims[i][4];
         list->tims[i][4] &= 0x0F; /* (the N64's own flags above the mode) */
         PutLe16(image + 4, x);
         PutLe16(image + 6, y);
@@ -1742,6 +1745,9 @@ static int PlaceTims(Layout *l, TimList *list, const int *own)
         }
         PutLe16(clut + 4, x);
         PutLe16(clut + 6, y);
+        /* Port: retain source addressing outside the serialized TIM/packet. */
+        PortN64TextureRegister(Le16(image + 4), Le16(image + 6), Le16(image + 8),
+                               Le16(image + 10), nativeFlags & 3, x, y, nativeFlags);
     }
     return 1;
 }

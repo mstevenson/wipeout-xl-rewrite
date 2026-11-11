@@ -185,6 +185,11 @@ static void DrawMenuModel(int x, int y, int z, short dir, short scale, Object *o
     for (i = 0; i < 3; i++) {
         obj->skeleton->relative.m[1][i] = (short)(obj->skeleton->relative.m[1][i] * 3 / 4);
     }
+    if (ModernEnabled()) {
+        /* Port: apply the existing PC model aspect correction in Modern. */
+        for (i = 0; i < 3; i++)
+            obj->skeleton->relative.m[0][i] = (short)(obj->skeleton->relative.m[0][i] * 180 / SCREEN_HEIGHT);
+    }
     if (scale == -1) {
         if (preCalcObject != obj) {
             PreCalcNormals(obj, VertexNormal);

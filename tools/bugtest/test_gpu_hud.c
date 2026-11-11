@@ -117,3 +117,6 @@ int main(void){
  SDL_GL_DestroyContext(ctx);SDL_DestroyWindow(win);SDL_Quit();
  return 0;
 }
+
+int PortLinkRole(void) { return 0; }
+int PortTracing(void) { return 0; }

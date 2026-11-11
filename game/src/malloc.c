@@ -12,6 +12,8 @@ void InitDynamicMem(HeapBlock *head, int size)
 {
     int avail;
 
+    PortModernHeapReset(head); /* Port: release presentation metadata before course memory is reused. */
+
     /* Port: block sizes stay multiples of 8 (see DAlloc), so the usable size is rounded down. */
     avail = (size - sizeof(HeapBlock)) & ~7;
     head->flags = 0;

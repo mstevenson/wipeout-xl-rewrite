@@ -18,7 +18,24 @@ typedef struct RenderVertex {
     int16_t hdTexels[4];
 } RenderVertex;
 
-typedef enum RenderFormat { RENDER_RGBA8, RENDER_R16_UINT, RENDER_DEPTH } RenderFormat;
+typedef struct RenderModernVertex {
+    float x, y, w, r, g, b, a, u, v;
+    int16_t texture[4];
+    uint8_t window[4], mode[4];
+    uint16_t hd[4];
+    int16_t hdTexels[4], filterBounds[4];
+    float view[4];
+    float shutter[3];
+    int16_t emission[4];
+} RenderModernVertex;
+
+typedef enum RenderFormat { RENDER_RGBA8, RENDER_R16_UINT, RENDER_DEPTH, RENDER_RGBA16_FLOAT, RENDER_RGBA32_FLOAT } RenderFormat;
+static inline size_t RenderPixelBytes(RenderFormat format)
+{
+    if (format == RENDER_RGBA32_FLOAT) return 16;
+    return format == RENDER_R16_UINT ? 2 : format == RENDER_RGBA16_FLOAT ? 8 : 4;
+}
+
 typedef enum RenderBufferKind { RENDER_VERTEX_BUFFER, RENDER_INDEX_BUFFER } RenderBufferKind;
 
 typedef enum RenderShader {
@@ -27,6 +44,10 @@ typedef enum RenderShader {
     RENDER_DETAIL,
     RENDER_COMPOSITE,
     RENDER_UI,
+    RENDER_MODERN_SCENE,
+    RENDER_GAME_HDR,
+    RENDER_MODERN_MOTION,
+    RENDER_MODERN_RESOLVE,
     RENDER_SHADER_COUNT
 } RenderShader;
 typedef enum RenderBackend {
@@ -48,7 +69,15 @@ typedef struct RenderSampler {
 typedef struct RenderTarget {
     uintptr_t colour, depth;
     int window;
+    uintptr_t auxiliary[3];
 } RenderTarget;
+enum { RENDER_POINT_LIGHTS = 16, RENDER_TEXTURES = 6, RENDER_PASS_VECTORS = 8 };
+typedef struct RenderLighting {
+    int count;
+    float position[RENDER_POINT_LIGHTS][4], colour[RENDER_POINT_LIGHTS][4];
+    float shield[4];
+} RenderLighting;
+
 /* Scalar layout is shared by shader uniform data, without compiler vector alignment rules. */
 typedef struct RenderUniforms {
     float targetX, targetY, originX, originY, depthPull;
@@ -58,6 +87,10 @@ typedef struct RenderUniforms {
     float uiScaleX, uiScaleY, uiOffsetX, uiOffsetY;
     float rasterScale;
 } RenderUniforms;
+typedef struct RenderModernUniforms {
+    RenderLighting lighting;
+    float effect[RENDER_PASS_VECTORS][4];
+} RenderModernUniforms;
 typedef struct RenderPipeline {
     RenderShader shader;
     int blend; /* 0 disabled, 1 premultiplied, 2 reverse subtract */
@@ -69,11 +102,13 @@ typedef struct RenderDraw {
     int scissorEnabled;
     RenderPipeline pipeline;
     RenderUniforms uniforms;
+    /* Borrowed only for the synchronous draw call; devices copy before retaining. */
+    const RenderModernUniforms *modern;
     uintptr_t vertices, indices;
     size_t vertexOffset, indexOffset;
     int first, count, indexBytes;
-    uintptr_t images[5];
-    RenderSampler samplers[5];
+    uintptr_t images[RENDER_TEXTURES];
+    RenderSampler samplers[RENDER_TEXTURES];
 } RenderDraw;
 typedef struct RenderClear {
     RenderTarget target;
@@ -89,6 +124,7 @@ typedef struct RenderCopy {
 typedef struct RenderCaps {
     int maxTextureSize, maxArrayLayers, asyncReadback;
     char deviceName[160];
+    int hdrTargets;
 } RenderCaps;
 typedef struct RenderDevice RenderDevice;
 typedef struct RenderDeviceOps {

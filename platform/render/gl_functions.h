@@ -13,6 +13,7 @@
     X(PFNGLTEXSUBIMAGE3DPROC, glTexSubImage3D) \
     X(PFNGLGENVERTEXARRAYSPROC, glGenVertexArrays) \
     X(PFNGLBINDVERTEXARRAYPROC, glBindVertexArray) \
+    X(PFNGLDISABLEVERTEXATTRIBARRAYPROC, glDisableVertexAttribArray) \
     X(PFNGLENABLEVERTEXATTRIBARRAYPROC, glEnableVertexAttribArray) \
     X(PFNGLVERTEXATTRIBPOINTERPROC, glVertexAttribPointer) \
     X(PFNGLVERTEXATTRIBIPOINTERPROC, glVertexAttribIPointer) \
@@ -33,6 +34,7 @@
     X(PFNGLUNIFORM1FPROC, glUniform1f) \
     X(PFNGLUNIFORM2FPROC, glUniform2f) \
     X(PFNGLUNIFORM4IPROC, glUniform4i) \
+    X(PFNGLUNIFORM4FVPROC, glUniform4fv) \
     X(PFNGLGENFRAMEBUFFERSPROC, glGenFramebuffers) \
     X(PFNGLBINDFRAMEBUFFERPROC, glBindFramebuffer) \
     X(PFNGLFRAMEBUFFERTEXTURE2DPROC, glFramebufferTexture2D) \
@@ -83,6 +85,7 @@ ASYNC_GL_FUNCTIONS(DECLARE_GL)
 #define glTexSubImage3D p_glTexSubImage3D
 #define glGenVertexArrays p_glGenVertexArrays
 #define glBindVertexArray p_glBindVertexArray
+#define glDisableVertexAttribArray p_glDisableVertexAttribArray
 #define glEnableVertexAttribArray p_glEnableVertexAttribArray
 #define glVertexAttribPointer p_glVertexAttribPointer
 #define glVertexAttribIPointer p_glVertexAttribIPointer
@@ -103,6 +106,7 @@ ASYNC_GL_FUNCTIONS(DECLARE_GL)
 #define glUniform1f p_glUniform1f
 #define glUniform2f p_glUniform2f
 #define glUniform4i p_glUniform4i
+#define glUniform4fv p_glUniform4fv
 #define glGenFramebuffers p_glGenFramebuffers
 #define glBindFramebuffer p_glBindFramebuffer
 #define glFramebufferTexture2D p_glFramebufferTexture2D

@@ -71,7 +71,7 @@ static int UploadFake(RenderDevice *d, uintptr_t p, RenderRect r, int layer, con
                       size_t row) {
     FakeImage *im = (FakeImage *)p;
     assert(im->api == Api(d));
-    size_t bpp = PixelBytes(im->desc.format);
+    size_t bpp = RenderPixelBytes(im->desc.format);
     for (int y = 0; y < r.h; y++)
         memcpy(im->pixels +
                    (((size_t)layer * im->desc.height + r.y + y) * im->desc.width + r.x) * bpp,
@@ -82,7 +82,7 @@ static int ReadFake(RenderDevice *d, RenderTarget t, RenderRect r, RenderFormat 
                     void *pixels) {
     FakeImage *im = (FakeImage *)(format == RENDER_DEPTH ? t.depth : t.colour);
     assert(im && im->api == Api(d));
-    size_t bpp = PixelBytes(format);
+    size_t bpp = RenderPixelBytes(format);
     for (int y = 0; y < r.h; y++)
         memcpy((uint8_t *)pixels + (size_t)y * r.w * bpp,
                im->pixels + ((size_t)(r.y + y) * im->desc.width + r.x) * bpp, (size_t)r.w * bpp);

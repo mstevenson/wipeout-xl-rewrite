@@ -6,6 +6,8 @@
 #include "scene.h"
 #include "sparks.h"
 #include "port_widen.h"
+#include "portinterp.h"
+#include "../../platform/psx/gte.h"
 
 /* Frames between minigun bursts. */
 #define MINIGUN_FIRE_INTERVAL REGION(30, 23)
@@ -1743,6 +1745,7 @@ void InitShield(ShipData *ships, WeaponShape *slots, WeaponData *w, WeaponData *
             SetSkeletonDirectionHPR(slots[w->shapeNo].shapePtr->skeleton, ships[w->owner].hdg, ships[w->owner].pitch, ships[w->owner].roll);
             w->update = UpdateShield;
             ships[w->owner].attr |= SHIELDED;
+            PortSetShieldFlash(w->owner, 0, 0); /* Port: start the shield light at its idle tint. */
             return;
         }
     }
@@ -1821,6 +1824,8 @@ void UpdateShield(ShipData *ships, WeaponShape *shapes, WeaponData *weapon, Weap
             SetVolume(ambientVoice1, 0);
         }
     }
+    /* Port: later weapon slots can register a hit after this shield has drawn. */
+    PortSetShieldFlash(weapon->owner, shieldRed[weapon->owner], shieldGreen[weapon->owner]);
     if (!(ships[weapon->owner].attr & VIEW_IN) || weapon->owner != ownShip) {
         SetSkeletonPosition(shapes[weapon->shapeNo].shapePtr->skeleton, weapon->pos.vx, weapon->pos.vy, weapon->pos.vz);
         SetSkeletonDirectionHPR(shapes[weapon->shapeNo].shapePtr->skeleton, ships[weapon->owner].hdg, ships[weapon->owner].pitch, ships[weapon->owner].roll);
@@ -1889,7 +1894,9 @@ void UpdateShield(ShipData *ships, WeaponShape *shapes, WeaponData *weapon, Weap
         }
         shapes[weapon->shapeNo].shapePtr->skeleton->update = 1;
         shieldID = weapon->shapeNo - 25;
+        char *firstPacket = nextPrim.ptr; /* Port: pair this shield with the owning hull at draw time. */
         TransformTransparentObject(shapes[weapon->shapeNo].shapePtr, cameraPtr->camPos, shieldID);
+        PortShieldPackets(weapon->owner, firstPacket, nextPrim.ptr);
     } else {
         col0 = (rsin(weapon->count * 128) >> 7) + 64;
         col0 = col0 - fade;
@@ -1994,12 +2001,14 @@ void CycleWeaponGrids(ShipData *ships, struct WeaponGridZone *grids, int noGrids
                 face->red = grid->r;
                 face->green = grid->g;
                 face->blue = grid->b;
+                PortModernTrackColour(face); /* Port: gameplay tint uses PS1 encoding. */
             }
             face++;
             if (grid->attr & WEAPON_GRID_RIGHT) {
                 face->red = grid->r;
                 face->green = grid->g;
                 face->blue = grid->b;
+                PortModernTrackColour(face); /* Port: gameplay tint uses PS1 encoding. */
             }
             k++;
         } while (grids + k < grids + noGrids);
@@ -2014,6 +2023,12 @@ static int PackScreenPoint(DVECTOR point)
     return (int)((u_short)point.vx | ((u32)(u_short)point.vy << 16));
 }
 
+
+static void ShieldPoint(DVECTOR *out, const DVECTOR *projected)
+{
+    *out = *projected;
+    if (ModernEnabled()) GteBindPrecise(out, PortProjection(projected));
+}
 
 void TransformTransparentObject(Object *object, void *camera, int shieldID)
 {
@@ -2066,9 +2081,9 @@ void TransformTransparentObject(Object *object, void *camera, int shieldID)
                     tri->colour0.b = ((G3 *) (nextPoly - 1))->colour[0].b;
                     tri->colour1 = ((G3 *) (nextPoly - 1))->colour[1];
                     tri->colour2 = ((G3 *) (nextPoly - 1))->colour[2];
-                    tri->xy0 = screen[coord0];
-                    tri->xy1 = screen[coord1];
-                    tri->xy2 = screen[coord2];
+                    ShieldPoint(&tri->xy0, &screen[coord0]);
+                    ShieldPoint(&tri->xy1, &screen[coord1]);
+                    ShieldPoint(&tri->xy2, &screen[coord2]);
                     average = AverageZ3(depth[coord0], depth[coord1], depth[coord2]);
                     AddPrim(OT[CurrentScreen] + average, tri);
                     nextPrim.ptr += sizeof(ShadedTri);
@@ -2096,10 +2111,10 @@ void TransformTransparentObject(Object *object, void *camera, int shieldID)
                     quad->colour1 = nextPoly[-1].colour[1];
                     quad->colour2 = nextPoly[-1].colour[2];
                     quad->colour3 = nextPoly[-1].colour[3];
-                    quad->xy0 = screen[coord0];
-                    quad->xy1 = screen[coord1];
-                    quad->xy2 = screen[coord2];
-                    quad->xy3 = screen[coord3];
+                    ShieldPoint(&quad->xy0, &screen[coord0]);
+                    ShieldPoint(&quad->xy1, &screen[coord1]);
+                    ShieldPoint(&quad->xy2, &screen[coord2]);
+                    ShieldPoint(&quad->xy3, &screen[coord3]);
                     average = AverageZ4(depth[coord0], depth[coord1], depth[coord2], depth[coord3]);
                     AddPrim(OT[CurrentScreen] + average, quad);
                     nextPrim.ptr += sizeof(ShadedQuad);

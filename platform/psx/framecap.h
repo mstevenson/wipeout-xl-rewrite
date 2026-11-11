@@ -43,6 +43,7 @@ typedef struct FrameCapPrim {
 } FrameCapPrim;
 
 typedef struct FrameCapFrame {
+    RenderFrame render;   /* committed policy for the captured picture */
     uint64_t gameFrame;   /* the game's Swap count (a picture between frames: the frame it moves on from) */
     uint32_t number;      /* the recorded frames' running count (each its own) */
     float between;        /* a picture drawn between two of the game's frames: how far along (0 < between < 1), its

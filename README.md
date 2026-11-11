@@ -259,3 +259,4 @@ the sound, CD, pad and card side. [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md) has
 from others (Monkey's Audio's decoder).
 
 Graphics devices and live switching in the debug console are described in [Graphics backends](docs/RENDER_BACKENDS.md).
+The opt-in [Modern renderer](docs/MODERN_RENDERER.md) adds smooth lighting, dynamic lights, HDR bloom and solo motion blur.

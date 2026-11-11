@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Modern renderer tests</title>
+<canvas id="canvas" width="320" height="240"></canvas><pre id="results"></pre>
+<script>
+var Module = {
+  canvas: document.getElementById('canvas'),
+  print: function (text) { document.getElementById('results').textContent += text + '\n'; },
+  printErr: function (text) { document.getElementById('results').textContent += text + '\n'; },
+  onAbort: function (reason) { document.body.dataset.result = 'FAIL'; Module.printErr(reason); },
+  onExit: function (status) { document.body.dataset.result = status === 0 ? 'PASS' : 'FAIL'; }
+};
+</script>
+{{{ SCRIPT }}}
+</html>

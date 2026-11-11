@@ -280,6 +280,8 @@ void UpdateDroidRescue(RescueData *rescueDroid, ShipData *ship, Object **shapes)
 void SetDroidVectors(RescueData *d, Object **shapes)
 {
     Face *face;
+    CVECTOR *light;
+    CVECTOR modernLight;
 
     d->vel.vx += d->acc.vx;
     d->vel.vy += d->acc.vy;
@@ -299,7 +301,13 @@ void SetDroidVectors(RescueData *d, Object **shapes)
     while (!(face->flags & TRACK_BASE)) {
         face++;
     }
-    AsmDrawObjectLit(shapes[RescueDroidModel], cameraPtr->camPos, 0, (CVECTOR *)&face->red);
+    light = (CVECTOR *)&face->red;
+    if (ModernEnabled()) {
+        /* Port: Modern object lighting reads the face's light encoding from cd, as DrawShips passes it. */
+        modernLight = (CVECTOR){face->red, face->green, face->blue, (u_char)PortModernLightFormat(face)};
+        light = &modernLight;
+    }
+    AsmDrawObjectLit(shapes[RescueDroidModel], cameraPtr->camPos, 0, light);
 }
 
 

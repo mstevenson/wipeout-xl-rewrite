@@ -25,6 +25,7 @@ const char *PortSettingsDefaultSaveDir(void)
 
 static void Set(const char *key, const char *value)
 {
+    if (RenderSet(&portSettings.render, key, value)) return;
     int number = SDL_atoi(value);
 
     if (!strcmp(key, "show_fps")) {
@@ -120,6 +121,8 @@ void PortSettingsLoad(void)
     char *text, *line, *next;
     const char *value;
 
+    portSettings.render = (RenderSettings)RENDER_DEFAULTS;
+    RenderInvalidate();
     portSettings.graphicsBackend = -1; /* Choose the platform default unless a renderer was saved. */
     if (base) {
         SDL_snprintf(path, sizeof(path), "%swipeoutxl.ini", base);
@@ -275,6 +278,7 @@ int PortSettingsSave(void)
             !portSettings.noFocusPause, portSettings.surround, portSettings.fullscreen, portSettings.digitalSteering,
             portSettings.negconPad, !portSettings.noUpdateCheck);
     fprintf(file, "graphics_backend = %d\n", portSettings.graphicsBackend);
+    RenderSave(file, &portSettings.render);
     fclose(file);
     return 1;
 }

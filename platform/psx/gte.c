@@ -724,6 +724,49 @@ static int CameraCut(void)
     return cut;
 }
 
+int GteCameraShutter(float along, float shutter, float earlier[3][4])
+{
+    if (!keepPast || pastFrame != preciseFrame - 1 || CameraCut() || !motionValid) return 0;
+
+    /* The interpolation uses view-space lerp. Solve for B * inverse(A), where
+       A and B map the past game view to the displayed and shutter-open views. */
+    double rows[3][6];
+    double before = along - shutter;
+    for (int col = 0; col < 3; col++) {
+        for (int row = 0; row < 3; row++) {
+            double identity = row == col;
+            double delta = motionR[row][col] - identity;
+            rows[col][row] = identity + along * delta;
+            rows[col][row + 3] = identity + before * delta;
+        }
+    }
+    if (!Solve(&rows[0][0], 3, 6)) return 0;
+    for (int row = 0; row < 3; row++) {
+        double offset = before * motionT[row];
+        for (int col = 0; col < 3; col++) {
+            double value = rows[col][row + 3] / rows[col][col];
+            earlier[row][col] = (float)value;
+            offset -= value * along * motionT[col];
+        }
+        earlier[row][3] = (float)offset;
+    }
+    return 1;
+}
+
+int GteVertexShutter(const GtePrecise *p, float shutter, float delta[3])
+{
+    if (!keepPast || !p->key || pastFrame != preciseFrame - 1 || CameraCut()) return 0;
+    PastEntry *pastVertex = PastSlot(p->key, 0);
+    if (!pastVertex || Jumped(pastVertex->view, p->view)) return 0;
+    for (int k = 0; k < 3; k++) delta[k] = shutter * (pastVertex->view[k] - p->view[k]);
+    return 1;
+}
+
+float GtePresentationAlong(float along)
+{
+    return along >= 1.0f || !keepPast || pastFrame != preciseFrame - 1 || CameraCut() ? 1.0f : along;
+}
+
 /* Where projection p was in the frame before, in view space: under its key; not there (or it jumped), what moves with
    a ship (GTE_KEY_MOVING) where its anchor was, and what stands still where the view's motion brings it from.
    *found: the frame before's projection under its key, or NULL. 0: none of these. */
@@ -855,6 +898,9 @@ void GteRecordAnchor(uint32_t handle, uint64_t anchor, double dx, double dy, dou
 }
 
 static int backgroundOn; /* (GteSetBackground) */
+static int n64On;
+void GteSetN64(int on) { n64On = on; }
+
 static int exactOn;      /* (GteSetExactDepth) */
 
 void GteSetBackground(int on)
@@ -886,6 +932,7 @@ static uint32_t RecordPrecise(uint32_t sxy, float x, float y, float z)
     record->value.fade = 1.0f;
     record->value.background = backgroundOn;
     record->value.exact = exactOn;
+    record->value.n64 = n64On;
     record->value.key = 0;
     record->value.view[0] = record->value.view[1] = record->value.view[2] = 0.0f;
     record->value.anchor = 0;
@@ -919,7 +966,7 @@ static int32_t SameCorner(uint32_t sxy, float x, float y, float z, uint64_t key)
             for (index = slot ? slot->latest : -1, n = 0; index >= 0 && n < 8; index = records[index].previous, n++) {
                 const GtePrecise *p = &records[index].value;
 
-                if (p->background == backgroundOn && p->exact == exactOn && fabsf(p->x - x) <= 0.25f &&
+                if (p->background == backgroundOn && p->exact == exactOn && p->n64 == n64On && fabsf(p->x - x) <= 0.25f &&
                     fabsf(p->y - y) <= 0.25f && fabsf(p->z - z) <= z / 1024.0f &&
                     (p->key & GTE_KEY_MOVING) == (key & GTE_KEY_MOVING)) {
                     return index;

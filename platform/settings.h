@@ -4,6 +4,7 @@
    WIPEOUT_HD_PACK, WIPEOUT_MUSIC, WIPEOUT_TOUCH, WIPEOUT_SURROUND); the tests' hidden runs ignore the file. */
 #ifndef PORT_SETTINGS_H
 #define PORT_SETTINGS_H
+#include "render/modern/modern.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +55,7 @@ typedef struct PortSettings {
     int fullscreen;       /* the window was full screen when last left: the next start is too (video.c) */
     int noUpdateCheck;    /* 0: check GitHub once at launch, 1: stay offline */
     int graphicsBackend; /* RenderBackend, or -1 for the platform default */
+    RenderSettings render; /* optional Modern preferences; baseline values remain independent */
 } PortSettings;
 
 /* PortSettings.downsampleStyle: the target scale is in downsample; 0 there disables either style. */

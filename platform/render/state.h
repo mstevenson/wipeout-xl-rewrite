@@ -72,9 +72,20 @@ enum {
     RG_DEPTH_BUFFER_BIT = 0x2000
 };
 int RgInit(void);
+uint64_t RenderDeviceGeneration(void);
+void RgPushState(void);
+void RgPopState(void);
 RgHandle RgProgram(RenderShader kind);
 int RgGetUniformLocation(RgHandle program, const char *name);
 void RgUseProgram(RgHandle program);
+void RgLighting(const RenderLighting *lighting);
+void RgGameAttachments(const RgHandle auxiliary[3], float sparkGain);
+void RgGameGrid(float x, float y);
+int RgAllocateImage(RgHandle handle, int width, int height, RenderFormat format);
+/* Call after the last use of a scratch image that will be overwritten before reuse. */
+void RgDiscardImageContents(RgHandle handle);
+void RgDrawPass(RenderShader shader, const float effect[RENDER_PASS_VECTORS][4],
+                const RgHandle textures[RENDER_TEXTURES], int vertices);
 void RgUniform1i(int field, int value);
 void RgUniform1f(int field, float value);
 void RgUniform2f(int field, float x, float y);

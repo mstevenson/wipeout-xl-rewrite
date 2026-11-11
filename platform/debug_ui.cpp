@@ -1761,6 +1761,9 @@ static void HdTextures(void)
         portSettings.hdTextures = on;
         Changed();
     }
+    if (ModernEnabled() && !on && portSettings.hdPackPath[0]) {
+        ImGui::TextDisabled("The Modern renderer draws the pack whenever one is chosen.");
+    }
     ImGui::TextWrapped("NR74W's pack (a copy is kept with the port's source, in texture-packs) or any DuckStation "
                        "texture pack for SCUS-94351.");
     if (ImGui::Button("Download NR74W's pack")) {
@@ -1774,7 +1777,7 @@ static void HdTextures(void)
             ImGui::TextDisabled("%s", HdTexAbout());
             ImGui::Unindent();
         }
-    } else if (portSettings.hdPackPath[0] && !portSettings.hdTextures) {
+    } else if (portSettings.hdPackPath[0] && !portSettings.hdTextures && !ModernEnabled()) {
         ImGui::TextDisabled("Opened when HD textures are on.");
     } else {
         ImGui::TextDisabled("No pack chosen.");
@@ -1902,6 +1905,7 @@ static void Console(void)
                 ImGui::EndCombo();
             }
             if (RenderBackendError()[0]) ImGui::TextWrapped("%s", RenderBackendError());
+            if (ModernUI()) Changed();
             Resolution();
             ImGui::Separator();
             static const char *const distances[] = {"Console (pop-in at the original distance)", "Full (the whole track)"};

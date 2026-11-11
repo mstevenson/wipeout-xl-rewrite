@@ -182,6 +182,7 @@ void WADInitFaces(WADFILE *wad)
     track->faceCount = length / sizeof(Face);
 
     IntelFace();
+    PortModernTrackLoaded(); /* Port: reset source metadata on every course load. */
 
     /* keep a copy of the face colours */
     track->colCopy = DAlloc(heap, track->faceCount * sizeof(Colors));

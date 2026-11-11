@@ -181,9 +181,11 @@ void Swap(void)
     if (PortPcData()) {
         PcDrawEndFrame(); /* Port: the PC version's 2D of the frame, in its order (pc/pcdraw.c) */
     }
-    /* Port: frame interpolation: what is drawn below once the fields have passed */
-    PsxUpcomingTables(OT[CurrentScreen] + 0x1FFF, activateOT2 ? OT2[CurrentScreen] + 0x63F : NULL, OT[CurrentScreen],
-                      doubleBuffer[(CurrentScreen + 1) & 1].draw);
+    /* Port: explicit camera changes invalidate presentation motion. */
+    static CameraUpdateFunc lastCamera;
+    PsxUpcomingCameraTables(OT[CurrentScreen] + 0x1FFF, activateOT2 ? OT2[CurrentScreen] + 0x63F : NULL, OT[CurrentScreen],
+                      doubleBuffer[(CurrentScreen + 1) & 1].draw, CameraUpdate != lastCamera);
+    lastCamera = CameraUpdate;
     drawTime = GsGetVcount();
     DrawSync(zero);
     drawTime = GsGetVcount() - drawTime;

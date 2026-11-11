@@ -37,3 +37,5 @@ int main(void)
     puts("each linked game's race starts independently; controller snapshot stays intact: OK");
     return 0;
 }
+
+PortSettings portSettings;

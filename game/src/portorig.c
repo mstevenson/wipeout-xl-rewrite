@@ -465,6 +465,7 @@ static void Collect(Object **prm, short prmCount, const char *name, Object **fou
    left as they are). */
 void PortOriginalSceneInit(Object **prm, short prmCount, Object *sky)
 {
+    PortModernSceneLoaded(prm, prmCount, sky); /* Port: source metadata only. */
     int looks = PortOriginalLooks();
 
     guestScene = prmCount ? prm[0] : NULL;

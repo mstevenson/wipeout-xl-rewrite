@@ -2,7 +2,7 @@
    drawing and display environments and video-memory transfers. The setters
    are translations of the library's code in the retail executable; drawing
    decodes each GPU packet the way the console's GPU interprets it and hands
-   the geometry to gpu_gl.c.
+   the geometry to gpu_renderer.c.
 
    Ordering tables link packets with 24-bit addresses in each packet's first
    word. On the console those are the low bits of the packet's address; here
@@ -20,11 +20,15 @@
 #include "../trace.h"
 #include "framecap.h"
 #include "gpu.h"
+#include "../n64_material.h"
+#include "../original.h"
 #include "../link.h"
 #include "../settings.h"
 #include "gte.h"
 #include "psyq.h"
 #include "../region.h"
+#include "../render/modern/point_lights.h"
+#include "../saturn.h"
 
 uint16_t psxVram[VRAM_HEIGHT][VRAM_WIDTH];
 uint16_t psxVramHigh[VRAM_HEIGHT][VRAM_WIDTH];
@@ -130,6 +134,7 @@ void AddPrim(u_long *ot, void *primitive)
 {
     u_long *p = primitive; /* the game passes any POLY_*, LINE_*, TILE or DR_* packet (psyq.h) */
 
+    if (ModernEnabled()) ModernPacketReused(p);
     *p = (*p & 0xFF000000u) | (*ot & 0x00FFFFFFu);
     *ot = (*ot & 0xFF000000u) | (LinkId(p) & 0x00FFFFFFu);
 }
@@ -233,7 +238,7 @@ static uint32_t DrawModeWord(int dfe, int dtd, int tpage)
         }
     } else {
         mode = dtd ? 0xE1000200u : 0xE1000000u;
-        page = (uint32_t)tpage & 0x9FF; /* (bit 11: the second half of video memory, gpu.h) */
+        page = (uint32_t)tpage & 0x9FF; /* bit 11: the second half of video memory */
         if (dfe) {
             page |= 0x400;
         }
@@ -364,6 +369,14 @@ static struct {
     PortSettings settings;
 } menuPicture;
 
+static GpuLightSet drawnLights;
+static void DrawLights(float along)
+{
+    if (!ModernEnabled()) { drawnLights.count = 0; return; }
+    GpuFlush();
+    drawnLights = *ModernSelectLights(along);
+}
+
 /* Widescreen: the packets of the menus' backdrops (PortWideBackdrop), which fill the picture's sides. They are
    the same few packets every frame, named again each frame: one not named while the last few tables were drawn is
    no longer one (the PC title's picture is made in memory its menus use for other packets after it). */
@@ -446,14 +459,11 @@ static int HoldShadow(const uint32_t *w, int words);
 static void ReleaseShadows(void);
 static int AheadOfShadows(const uint32_t *w, int words);
 
-static void Submit(const uint32_t *w, int words)
+SDL_FORCE_INLINE void DrawPacket(const uint32_t *w, int words)
 {
     int backdrop = PortScreenMargin() && Backdrop(w);
     uint32_t code = words > 0 ? w[0] >> 24 : 0;
 
-    if (!interpolating) {
-        PortTraceGp0(w, words);
-    }
     if (HoldShadow(w, words)) {
         return;
     }
@@ -471,6 +481,14 @@ static void Submit(const uint32_t *w, int words)
     if (backdrop) {
         GpuBackdrop(0);
     }
+}
+
+static void Submit(const uint32_t *w, int words)
+{
+    if (!interpolating) {
+        PortTraceGp0(w, words);
+    }
+    DrawPacket(w, words);
 }
 
 /* The library's clamps of a drawing-area corner and a size to video memory. */
@@ -820,6 +838,7 @@ int LoadImage(RECT *rect, u_long *p)
 
     ForgetDrawnFrame();
     TraceTransfer(0xA0000000u, rect, p);
+    GpuVramUploaded(rect->x, rect->y, rect->w, rect->h);
 
     if (rect->y >= VRAM_HEIGHT) {
         /* the second half (gpu.h): textures only */
@@ -890,6 +909,7 @@ int MoveImage(RECT *rect, int x, int y)
     }
     GpuVramChanged(x, y, rect->w, rect->h);
     HdTexOverwritten(x, y, rect->w, rect->h);
+    GpuVramOverwritten(x, y, rect->w, rect->h);
     GpuMoveFramebuffer(rect->x, rect->y, rect->w, rect->h, x, y);
     FrameCapVramChanged();
     return 0;
@@ -968,6 +988,10 @@ static void Vertex(GpuVertex *v, uint32_t xy, const GtePrecise *precise)
         interpolationHasGeometry = 1;
 
     if (precise && interpolating && GteInterpolate(precise, interpolationAlong, &moved)) {
+        double view[3];
+        if (ModernEnabled() && GteViewAt(precise, interpolationAlong, view)) {
+            for (int k = 0; k < 3; k++) moved.view[k] = (float)view[k];
+        }
         precise = &moved; /* between the frame before and this one */
     }
     if (precise) {
@@ -979,6 +1003,11 @@ static void Vertex(GpuVertex *v, uint32_t xy, const GtePrecise *precise)
         v->a = (uint8_t)(precise->fade * 255.0f + 0.5f);
         v->noDepth = precise->background;
         v->exactDepth = precise->exact;
+        if (ModernEnabled()) {
+            v->n64 = precise->n64;
+            v->world = precise->view[2] != 0.0f;
+            memcpy(v->view, precise->view, sizeof(v->view));
+        }
     } else {
         v->x = (float)(x + state.offsetX) + hudShift;
         v->y = (float)(y + state.offsetY);
@@ -1014,6 +1043,28 @@ static int hudPackets;
 typedef struct PacketRange {
     const char *start, *end;
 } PacketRange;
+enum { SHIP_EXHAUSTS = 15 };
+
+/* The game has three shield models and reserves 64 draw modes per model. */
+enum { SHIELD_DRAWS = 3, SHIELD_FACES = 64 };
+typedef struct ShieldPackets {
+    int ship;
+    PacketRange shell, hull;
+    const u_long *lastHull;
+    float glow[4];
+} ShieldPackets;
+
+typedef struct ShipPackets {
+    PacketRange hull;
+    CVECTOR previous;
+    int hasPreviousLight;
+} ShipPackets;
+
+static struct {
+    uint32_t frame;
+    CVECTOR colour;
+} shipLightHistory[SHIP_EXHAUSTS];
+
 static const uint32_t *heldShadows[HELD_SHADOWS];
 static int heldWords[HELD_SHADOWS];
 static uint32_t heldTexpage;
@@ -1024,12 +1075,158 @@ typedef struct TrackPackets {
     PacketRange shadows;              /* the shadows' packets */
     PacketRange ranges[TRACK_RANGES]; /* the track's */
     int count;
+    ShieldPackets shields[SHIELD_DRAWS];
+    int shieldCount;
+    ShipPackets ships[SHIP_EXHAUSTS];
 } TrackPackets;
 static TrackPackets building;      /* the frame being built's */
 static TrackPackets tableTrack[4]; /* ... the tables drawn's (a table is drawn again between frames) */
 static int tableTrackNext, walkTrack = -1;
+static u_long *preparedTrackTable;
+typedef struct HeldShield {
+    const ShieldPackets *pending;
+    int count;
+    struct {
+        const u_long *node;
+        uint32_t texpage;
+    } faces[SHIELD_FACES];
+} HeldShield;
+
+static HeldShield heldShields[SHIELD_DRAWS];
+static int heldShieldCount;
 
 static int PacketBounds(const uint32_t *w, int words, int box[4]);
+static u_long *NodeAfter(u_long *node);
+static u_long *PacketFrom(u_long *node);
+
+static int PacketInRange(const void *packet, PacketRange range)
+{
+    return (uintptr_t)packet >= (uintptr_t)range.start && (uintptr_t)packet < (uintptr_t)range.end;
+}
+
+void PortShieldPackets(int ship, const void *start, const void *end)
+{
+    if (!ModernEnabled() || start == end || building.shieldCount == SHIELD_DRAWS) return;
+    building.shields[building.shieldCount++] = (ShieldPackets){.ship = ship, .shell = {start, end}};
+}
+
+void PortShipPackets(int ship, const void *start, const void *end, const CVECTOR *roadLight)
+{
+    if (!ModernEnabled() || ship < 0 || ship >= SHIP_EXHAUSTS || start == end) return;
+    ShipPackets *packets = &building.ships[ship];
+    *packets = (ShipPackets){.hull = {start, end}};
+    for (int i = 0; i < building.shieldCount; i++) {
+        if (building.shields[i].ship == ship) building.shields[i].hull = (PacketRange){start, end};
+    }
+    if (!roadLight) return;
+    uint32_t frame = GteFrameRecorded();
+    if (shipLightHistory[ship].frame && shipLightHistory[ship].frame + 1 == frame) {
+        packets->previous = shipLightHistory[ship].colour;
+        packets->hasPreviousLight = 1;
+    }
+    shipLightHistory[ship].frame = frame;
+    shipLightHistory[ship].colour = *roadLight;
+}
+
+/* Only the flat textured polygons of a lit ship carry the road tint. The
+   ordering table owns the previous tint for as long as it can be presented. */
+static void BlendShipLight(const uint32_t *packet, GpuVertex *vertices, int count)
+{
+    if (!interpolating || walkTrack < 0) return;
+    const ShipPackets *ships = tableTrack[walkTrack].ships;
+    for (int i = 0; i < SHIP_EXHAUSTS; i++) {
+        if (!ships[i].hasPreviousLight || !PacketInRange(packet, ships[i].hull)) continue;
+        float along = GtePresentationAlong(interpolationAlong);
+        CVECTOR past = ships[i].previous;
+        uint8_t r = (uint8_t)(past.r + (vertices[0].r - past.r) * along + 0.5f);
+        uint8_t g = (uint8_t)(past.g + (vertices[0].g - past.g) * along + 0.5f);
+        uint8_t b = (uint8_t)(past.b + (vertices[0].b - past.b) * along + 0.5f);
+        for (int k = 0; k < count; k++) {
+            vertices[k].r = r;
+            vertices[k].g = g;
+            vertices[k].b = b;
+        }
+        break;
+    }
+}
+
+/* Lit hull faces are biased forward in the game's table. Hold only shell faces
+   that would draw before the last packet of their own hull. The table links and
+   each face's actual projected depth are preserved. */
+static void OrderShields(TrackPackets *table)
+{
+    if (!table->shieldCount) return;
+    /* Keep the active shield tint with its hull for repeated presentation.
+       A hull can glow even if its shield did not make the point light budget. */
+    for (int i = 0; i < table->shieldCount; i++) {
+        ShieldPackets *shield = &table->shields[i];
+        const GpuLightSource *source = ModernSourceLight(GPU_SHIELD_LIGHT_BASE + (unsigned)shield->ship);
+        if (source) {
+            memcpy(shield->glow, source->light.colour, sizeof(source->light.colour));
+            shield->glow[3] = 1.0f;
+        }
+    }
+    for (u_long *node = PacketFrom(table->table); node; node = PacketFrom(NodeAfter(node))) {
+        for (int i = 0; i < table->shieldCount; i++) {
+            if (PacketInRange(node, table->shields[i].hull)) table->shields[i].lastHull = node;
+        }
+    }
+}
+
+static void ShieldHullGlow(const u_long *node, float glow[4])
+{
+    if (walkTrack < 0) return;
+    const TrackPackets *table = &tableTrack[walkTrack];
+    for (int i = 0; i < table->shieldCount; i++) {
+        const ShieldPackets *shield = &table->shields[i];
+        if (PacketInRange(node, shield->hull)) {
+            memcpy(glow, shield->glow, sizeof(shield->glow));
+            return;
+        }
+    }
+}
+
+static int HoldShield(const u_long *node)
+{
+    for (int i = 0; i < heldShieldCount; i++) {
+        HeldShield *held = &heldShields[i];
+        if (held->pending && PacketInRange(node, held->pending->shell) && held->count < SHIELD_FACES) {
+            int face = held->count++;
+            held->faces[face].node = node;
+            held->faces[face].texpage = state.texpage;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void ReleaseShipShields(const u_long *node)
+{
+    for (int i = 0; i < heldShieldCount; i++) {
+        HeldShield *held = &heldShields[i];
+        if (!held->pending || held->pending->lastHull != node) continue;
+        uint32_t texpage = state.texpage;
+        for (int j = 0; j < held->count; j++) {
+            const u_long *face = held->faces[j].node;
+            state.texpage = held->faces[j].texpage;
+            DrawPacket(face + 1, (int)(*face >> 24));
+        }
+        state.texpage = texpage;
+        held->pending = NULL;
+    }
+}
+
+static void SubmitTablePacket(const u_long *node)
+{
+    const uint32_t *w = node + 1;
+    int words = (int)(*node >> 24);
+
+    /* Traces keep the original GP0 order. Only the drawing is deferred. */
+    if (!interpolating) PortTraceGp0(w, words);
+    if (HoldShield(node)) return;
+    DrawPacket(w, words);
+    ReleaseShipShields(node);
+}
 
 void PortShadowRange(const void *start, size_t bytes)
 {
@@ -1045,26 +1242,49 @@ void PortTrackPackets(const void *start, const void *end)
     }
 }
 
-/* A table is drawn: the shadows and the track's packets named since the last table drawn are its (none: a menu's);
-   a table drawn again between frames keeps its own. */
+/* Freeze packet ranges before the first interpolated presentation, while they
+   describe this build of the table. Its address is reused every other frame. */
+static int PrepareTrackTable(u_long *table)
+{
+    int slot = -1;
+    for (int i = 0; i < 4; i++) {
+        if (tableTrack[i].table == table) slot = i;
+    }
+    if (slot < 0) {
+        slot = tableTrackNext;
+        tableTrackNext = (tableTrackNext + 1) % 4;
+    }
+    tableTrack[slot] = building;
+    tableTrack[slot].table = table;
+    OrderShields(&tableTrack[slot]);
+    memset(&building, 0, sizeof(building));
+    return slot;
+}
+
+/* Direct draws prepare here; Swap's tables were prepared before its VSync waits.
+   Every presentation, including the final DrawOTag, uses that same snapshot. */
 static void WalkTable(u_long *table, int newFrame)
 {
     int i;
 
     walkTrack = -1;
     for (i = 0; i < 4; i++) {
-        if (tableTrack[i].table == table) {
-            walkTrack = i;
-        }
+        if (tableTrack[i].table == table) walkTrack = i;
     }
     if (newFrame) {
-        if (walkTrack < 0) {
-            walkTrack = tableTrackNext;
-            tableTrackNext = (tableTrackNext + 1) % 4;
+        if (table != preparedTrackTable) walkTrack = PrepareTrackTable(table);
+        else preparedTrackTable = NULL;
+    }
+    heldShieldCount = 0;
+    if (walkTrack >= 0) {
+        const TrackPackets *current = &tableTrack[walkTrack];
+        for (i = 0; i < current->shieldCount; i++) {
+            const ShieldPackets *shield = &current->shields[i];
+            if (!shield->lastHull) continue;
+            HeldShield *held = &heldShields[heldShieldCount++];
+            held->pending = shield;
+            held->count = 0;
         }
-        tableTrack[walkTrack] = building;
-        tableTrack[walkTrack].table = table;
-        memset(&building, 0, sizeof(building));
     }
 }
 
@@ -1122,13 +1342,17 @@ static int PolygonDepths(const uint32_t *w, int words, int any, float *nearest, 
     return *nearest > 0.0f;
 }
 
+static int ShadowPacket(const uint32_t *w)
+{
+    return walkTrack >= 0 && PacketInRange(w, tableTrack[walkTrack].shadows);
+}
+
 static int HoldShadow(const uint32_t *w, int words)
 {
     float nearest, deepest;
     int box[4];
 
-    if (walkTrack < 0 || (const char *)w < tableTrack[walkTrack].shadows.start ||
-        (const char *)w >= tableTrack[walkTrack].shadows.end || heldCount == HELD_SHADOWS || !PacketBounds(w, words, box)) {
+    if (!ShadowPacket(w) || heldCount == HELD_SHADOWS || !PacketBounds(w, words, box)) {
         return 0;
     }
     if (!heldCount) {
@@ -1253,8 +1477,15 @@ typedef struct {
     GpuVertex v;
 } CutCorner;
 
+/* An edge crossing the eye plane can extrapolate screen-linear RGB beyond the
+   endpoint range. Saturate before narrowing to the packet's colour representation. */
+static uint8_t CutColour(uint8_t a, uint8_t b, double along)
+{
+    return (uint8_t)SDL_clamp(a + (b - a) * along + 0.5, 0.0, 255.0);
+}
+
 /* back: 1 when the triangle's corners as given wind as a polygon's seen from behind do */
-static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back)
+static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back, unsigned shade)
 {
     CutCorner out[4];
     const double plane = CUT_NEAR;
@@ -1262,25 +1493,39 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back)
 
     for (i = 0; i < 3; i++) {
         const int j = (i + 1) % 3;
-        const int aIn = in[i].view[2] >= plane, bIn = in[j].view[2] >= plane;
+        const double aZ = in[i].view[2], bZ = in[j].view[2];
+        const int aIn = aZ >= plane, bIn = bZ >= plane;
 
         if (aIn) {
             out[cut++] = in[i];
         }
         if (aIn != bIn) {
-            double t = (plane - in[i].view[2]) / (in[j].view[2] - in[i].view[2]);
+            double t = (plane - aZ) / (bZ - aZ);
+            double screen = t * bZ / plane;
+            double uv = t;
+            double rgb = ModernEnabled() && (shade & SHADE_AFFINE_COLOUR) ? screen : t;
+
+            /* An edge that reaches the eye plane has no finite screen-space
+               segment. Use its view-space UV at the cut to stay within the tile.
+               Native Saturn road tiles also use view-space UVs when clipped. */
+            if ((shade & SHADE_AFFINE_UV) && aZ > 0.0 && bZ > 0.0) {
+                uv = screen;
+            }
 
             out[cut] = in[i];
             for (k = 0; k < 3; k++) {
                 out[cut].view[k] = in[i].view[k] + (in[j].view[k] - in[i].view[k]) * t;
+                if (ModernEnabled() && draw->hullMotion)
+                    out[cut].v.shutterDelta[k] = (float)(in[i].v.shutterDelta[k] +
+                        (in[j].v.shutterDelta[k] - in[i].v.shutterDelta[k]) * t);
             }
             out[cut].view[2] = plane;
             out[cut].depth = in[i].depth + (in[j].depth - in[i].depth) * t;
-            out[cut].v.u = (float)(in[i].v.u + (in[j].v.u - in[i].v.u) * t);
-            out[cut].v.v = (float)(in[i].v.v + (in[j].v.v - in[i].v.v) * t);
-            out[cut].v.r = (uint8_t)(in[i].v.r + (in[j].v.r - in[i].v.r) * t + 0.5);
-            out[cut].v.g = (uint8_t)(in[i].v.g + (in[j].v.g - in[i].v.g) * t + 0.5);
-            out[cut].v.b = (uint8_t)(in[i].v.b + (in[j].v.b - in[i].v.b) * t + 0.5);
+            out[cut].v.u = (float)(in[i].v.u + (in[j].v.u - in[i].v.u) * uv);
+            out[cut].v.v = (float)(in[i].v.v + (in[j].v.v - in[i].v.v) * uv);
+            out[cut].v.r = CutColour(in[i].v.r, in[j].v.r, rgb);
+            out[cut].v.g = CutColour(in[i].v.g, in[j].v.g, rgb);
+            out[cut].v.b = CutColour(in[i].v.b, in[j].v.b, rgb);
             out[cut].v.a = (uint8_t)(in[i].v.a + (in[j].v.a - in[i].v.a) * t + 0.5);
             cut++;
         }
@@ -1295,6 +1540,7 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back)
         out[i].v.x = x + (float)state.offsetX;
         out[i].v.y = y + (float)state.offsetY;
         out[i].v.w = (float)(out[i].view[2] * out[i].depth);
+        for (k = 0; k < 3; k++) out[i].v.view[k] = (float)out[i].view[k];
     }
     /* seen from behind: the winding on screen (as Vertices judges a whole polygon by its first three corners) */
     turn = (out[1].v.x - out[0].v.x) * (out[2].v.y - out[0].v.y) -
@@ -1304,7 +1550,6 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back)
     }
     for (i = 1; i + 1 < cut; i++) {
         GpuVertex triangle[3] = {out[0].v, out[i].v, out[i + 1].v};
-
         GpuTriangles(draw, triangle, 3);
     }
 }
@@ -1324,25 +1569,38 @@ static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count)
             return 0;
         }
         in[i].depth = resolved[i].view[2] != 0.0f ? resolved[i].z / resolved[i].view[2] : 1.0;
-        in[i].v = v[i];
         /* (what GteInterpolate cannot place: behind the camera in this frame, or nearer than it projects) */
         behind += resolved[i].view[2] < near || in[i].view[2] < near;
     }
     if (!behind) {
         return 0;
     }
-    CutTriangle(draw, &in[0], 0);
+    for (i = 0; i < count; i++) in[i].v = v[i];
+    /* Resolved view-space corners remain world geometry through clipping. */
+    RenderStyle style = {0};
+    if (ModernEnabled()) {
+        RenderMaterial material = GpuMaterialFor(draw, v, count);
+        material.ui = 0;
+        material.perspective = 1;
+        style = RenderPrepare(RenderCurrent(), &material);
+    }
+    CutTriangle(draw, &in[0], 0, style.shade);
     if (count == 4) {
-        CutTriangle(draw, &in[1], 1); /* (corners 1 2 3 wind the other way round) */
+        CutTriangle(draw, &in[1], 1, style.shade); /* (corners 1 2 3 wind the other way round) */
     }
     return 1;
 }
 
-static void Colour(GpuVertex *v, uint32_t word)
+static void ColourRgb(GpuVertex *v, uint32_t word)
 {
     v->r = (uint8_t)word;
     v->g = (uint8_t)(word >> 8);
     v->b = (uint8_t)(word >> 16);
+}
+
+static void Colour(GpuVertex *v, uint32_t word)
+{
+    ColourRgb(v, word);
     v->a = 255;
 }
 
@@ -1351,11 +1609,15 @@ static void TextureFromPage(GpuDrawState *draw, uint32_t page)
     draw->pageX = (int)(page & 0xF) * 64;
     draw->pageY = (int)((page >> 4) & 1) * 256 + (int)((page >> 11) & 1) * VRAM_HEIGHT; /* (the second half: gpu.h) */
     draw->depth = (int)((page >> 7) & 3);
+
 }
 
 static void StateFor(GpuDrawState *draw, int textured, int semi, int raw)
 {
-    memset(draw, 0, sizeof(*draw));
+    /* The disabled path consumes the original state prefix and HUD flag only.
+       Recorder copies initialize the optional tail separately when requested. */
+    if (ModernEnabled()) memset(draw, 0, sizeof(*draw));
+    else memset(draw, 0, offsetof(GpuDrawState, filtered));
     draw->hudColourOverlay = hudColourOverlay;
     draw->textured = textured;
     draw->raw = raw;
@@ -1366,6 +1628,7 @@ static void StateFor(GpuDrawState *draw, int textured, int semi, int raw)
     draw->windowOffsetY = state.windowOffsetY;
     draw->dither = (state.texpage >> 9) & 1;
     TextureFromPage(draw, state.texpage);
+    if (!textured) draw->n64 = 0;
 }
 
 /* The console's GPU skips triangles wider than 1023 or taller than 511
@@ -1408,7 +1671,17 @@ static void Record(int kind, uint32_t code, int count, const int32_t *ix, const 
         p->v[i] = v[i];
     }
     if (draw) {
-        p->draw = *draw;
+        if (ModernEnabled()) {
+            p->draw = *draw;
+            /* Submission derives source encoding from precise corners too. */
+            for (i = 0; i < count; i++) p->draw.n64 |= v[i].n64;
+        } else {
+            memset(&p->draw, 0, sizeof(p->draw));
+            memcpy(&p->draw, draw, offsetof(GpuDrawState, filtered));
+            p->draw.hudColourOverlay = draw->hudColourOverlay;
+        }
+        p->draw.pointLights = NULL; /* Live lighting is captured in the rendered picture. */
+        memset(p->draw.shieldGlow, 0, sizeof(p->draw.shieldGlow));
     }
     p->address = (uint64_t)(uintptr_t)(w - 1);
     for (r = 0; r < regionCount; r++) {
@@ -1418,6 +1691,29 @@ static void Record(int kind, uint32_t code, int count, const int32_t *ix, const 
     }
     p->flags = (uint8_t)flags;
     FrameCapTagRecord(p);
+}
+
+static float CameraShutterFraction(void);
+static int CameraBlurOn(void);
+
+static int HullMotion(const uint32_t *packet, GpuVertex *vertices, int count)
+{
+    if (walkTrack < 0) return 0;
+    const ShipPackets *ships = tableTrack[walkTrack].ships;
+    for (int i = 0; i < SHIP_EXHAUSTS; i++) {
+        if (!PacketInRange(packet, ships[i].hull)) continue;
+        if (!CameraBlurOn()) return 0; /* (only hull packets need the policy query) */
+        if (!GteResolvedBound() || resolvedMask != (1u << count) - 1) return 1;
+        float shutter = CameraShutterFraction();
+        float delta[4][3];
+        for (int k = 0; k < count; k++) {
+            if (!GteVertexShutter(&resolved[k], shutter, delta[k])) return 1;
+        }
+        for (int k = 0; k < count; k++)
+            memcpy(vertices[k].shutterDelta, delta[k], sizeof(delta[k]));
+        return 1;
+    }
+    return 0;
 }
 
 static void Polygon(const uint32_t *w, uint32_t code)
@@ -1460,13 +1756,36 @@ static void Polygon(const uint32_t *w, uint32_t code)
         SetTexpage(page);
     }
     StateFor(&draw, textured, semi, raw);
+    const int modern = ModernEnabled();
+    RenderPacketPolicy policy = {0};
+    if (modern) {
+        policy = RenderPacketPolicyFor(RenderCurrent());
+        if (textured && ModernPacketEmission(w - 1, &draw.emission) && draw.emission.whiteOnly &&
+            (v[0].r != 255 || v[0].g != 255 || v[0].b != 255)) draw.emission.enabled = 0;
+        draw.hullMotion = HullMotion(w - 1, v, count);
+        draw.pointLights = !ShadowPacket(w) ? &drawnLights : NULL;
+        if (draw.pointLights && draw.semi < 0 && !draw.raw) ShieldHullGlow(w - 1, draw.shieldGlow);
+        uint32_t trackColours[4];
+        if (policy.smoothTrackLighting && quad && textured && !raw && !gouraud &&
+            ModernPacketTrack(w - 1, trackColours)) {
+            draw.smoothTrackLighting = 1;
+            for (i = 0; i < count; i++) ColourRgb(&v[i], trackColours[i]);
+        }
+    }
+    /* Modern follows the console: only shaded or texture-modulated polygons dither. */
+    if (modern) draw.dither &= gouraud || (textured && !raw);
     if (textured) {
         TextureFromPage(&draw, page);
+        if (modern) draw.ps1Light = ModernPacketPs1Light(w - 1);
         /* Port-only texture page bit: Saturn's checkerboard mesh, drawn opaque
            at alternating console pixels rather than blended with the scene. */
         if (semi && (page & 0x1000)) draw.semi = 4;
         draw.clutX = (int)(clut & 0x3F) * 16;
         draw.clutY = (int)((clut >> 6) & 0x3FF); /* (bit 15: a palette in the second half, gpu.h) */
+        draw.trackTile = policy.smoothTrackLighting && TrackPacket(w);
+        if (!draw.trackTile && policy.smoothTrackLighting && !raw && !gouraud) {
+            BlendShipLight(w - 1, v, count);
+        }
     }
     if (!gouraud && !textured) {
         for (i = 1; i < count; i++) {
@@ -1505,6 +1824,7 @@ static void Line(const uint32_t *w, uint32_t code, int words)
     int k = 0;
 
     StateFor(&draw, 0, semi, 0);
+    draw.sparkStreak = ModernSparkPacket(w - 1);
     memset(&a, 0, sizeof(a));
     Colour(&a, w[k++]);
     {
@@ -1563,6 +1883,7 @@ static void Rectangle(const uint32_t *w, uint32_t code)
         width = height = size == 1 ? 1 : size == 2 ? 8 : 16;
     }
     StateFor(&draw, textured, semi, raw);
+    if (ModernEnabled()) draw.dither = 0; /* PS1 rectangles never dither, even when E1 enables it for polygons. */
     if (textured) {
         draw.clutX = (int)((uv >> 16) & 0x3F) * 16;
         draw.clutY = (int)((uv >> 22) & 0x3FF); /* (as a polygon's) */
@@ -1641,26 +1962,32 @@ static u_long *NodeAfter(u_long *node)
    Preserve every distinct node, cutting only the edge that repeats the cycle. */
 static void EndTableCycle(u_long *head)
 {
-    u_long *slow = head, *fast = head, *tail;
-
-    while (fast && (fast = NodeAfter(fast)) != NULL) {
+    if (!head) return;
+    /* Brent's detector follows each edge once on the common acyclic path.
+       Unlike caching a validated head, it also catches direct tag rewrites
+       between the upcoming-table check and DrawOTag/interpolation. */
+    u_long *checkpoint = head, *next = NodeAfter(head);
+    size_t power = 1, period = 1;
+    while (next && checkpoint != next) {
+        if (power == period) {
+            checkpoint = next;
+            power *= 2;
+            period = 0;
+        }
+        next = NodeAfter(next);
+        period++;
+    }
+    if (!next) return;
+    u_long *slow = head, *fast = head;
+    for (size_t i = 0; i < period; i++) fast = NodeAfter(fast);
+    while (slow != fast) {
         slow = NodeAfter(slow);
         fast = NodeAfter(fast);
-        if (slow == fast) {
-            slow = head;
-            while (slow != fast) {
-                slow = NodeAfter(slow);
-                fast = NodeAfter(fast);
-            }
-            tail = slow;
-            while (NodeAfter(tail) != slow) {
-                tail = NodeAfter(tail);
-            }
-            fprintf(stderr, "libgpu: cyclic ordering table at packet %p; closing repeated link\n", (void *)slow);
-            *tail = (*tail & 0xFF000000u) | LINK_END;
-            return;
-        }
     }
+    u_long *tail = slow;
+    while (NodeAfter(tail) != slow) tail = NodeAfter(tail);
+    fprintf(stderr, "libgpu: cyclic ordering table at packet %p; closing repeated link\n", (void *)slow);
+    *tail = (*tail & 0xFF000000u) | LINK_END;
 }
 
 /* The first node from node on that carries a packet, or NULL. */
@@ -1700,7 +2027,7 @@ static u_long *PacketFromNoting(u_long *node, int *inHud)
 static void SubmitNode(u_long *node, int inHud)
 {
     hudPackets = inHud && !SceneSprite(node);
-    Submit((const uint32_t *)(node + 1), (int)(*node >> 24));
+    SubmitTablePacket(node);
     hudPackets = 0;
 }
 
@@ -1866,7 +2193,7 @@ static int PacketBounds(const uint32_t *w, int words, int box[4])
     return 1;
 }
 
-/* Widescreen (gpu_gl.c): an ordering table drawn with the HUD's elements at the edges of the wide picture. The
+/* Widescreen (gpu_renderer.c): an ordering table drawn with the HUD's elements at the edges of the wide picture. The
    HUD's packets (from hudEntry on, or all of hudTable) are taken apart into elements, runs of packets that
    touch (the letters of a text, the parts of the speedometer), and an element wholly in the left or the right
    part of the console's picture goes to that edge; what reaches the middle (centred messages, the weapon icon,
@@ -1962,6 +2289,12 @@ static int SceneSprite(const u_long *node)
 {
     int i;
 
+    if (walkTrack >= 0) {
+        const TrackPackets *table = &tableTrack[walkTrack];
+        for (i = 0; i < table->shieldCount; i++) {
+            if (PacketInRange(node, table->shields[i].shell) || PacketInRange(node, table->shields[i].hull)) return 1;
+        }
+    }
     for (i = 0; i < sceneSpriteCount; i++) {
         if (sceneSprites[i] == (const void *)node) {
             return 1;
@@ -2003,7 +2336,7 @@ static void DrawAnchored(u_long *p, int margin, int half)
                 continue;
             }
         }
-        Submit((const uint32_t *)(node + 1), (int)(*node >> 24));
+        SubmitTablePacket(node);
     }
     ReleaseShadows();
     for (first = 0; first < count;) {
@@ -2083,7 +2416,7 @@ static void DrawAnchored(u_long *p, int margin, int half)
 static struct {
     u_long *table, *second, *hudEntry;
     int left, top, width, height, offsetX, offsetY;
-    int background;
+    int background, cameraCut;
     uint8_t r, g, b;
 } upcoming;
 static uint64_t frameDrawnTicks;
@@ -2105,11 +2438,21 @@ static int TableDraws(u_long *table)
     return 0;
 }
 
-void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env)
+static int CameraBlurOn(void)
+{
+    return RenderFrameResources(RenderCurrent(), PortLinkRole() != LINK_NONE, PortTracing()).cameraBlur;
+}
+
+void PsxUpcomingCameraTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env, int cameraCut)
 {
     menuPicture.valid = 0;
     EndTableCycle(table);
     EndTableCycle(second);
+    if (CameraBlurOn()) GteKeepPast(1);
+    if (table) {
+        PrepareTrackTable(table);
+        preparedTrackTable = table;
+    }
     memcpy(centred[1], centred[0], sizeof(centred[0])); /* (PortHudCentred: the frame's, for its tables) */
     centredCount[1] = centredCount[0];
     centredCount[0] = 0;
@@ -2122,6 +2465,7 @@ void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV 
     upcoming.table = table;
     upcoming.second = second;
     upcoming.hudEntry = hudFirst;
+    upcoming.cameraCut = cameraCut;
     upcoming.left = env->clip.x;
     upcoming.top = env->clip.y;
     upcoming.width = env->clip.w;
@@ -2160,14 +2504,15 @@ int PsxInterpolationOn(void)
         on = PortLinkSplit() && PortLinkInterpolate(); /* as the first player's game (whose window it is) does */
     } else {
         on = PsxInterpolationTest() > 0 ||
-             (portSettings.frameRate != FRAME_RATE_CONSOLE && !portConfig.fixedStep && !portConfig.hidden);
+             (portSettings.frameRate != FRAME_RATE_CONSOLE &&
+              !portConfig.fixedStep && !portConfig.hidden);
         if (role == LINK_MASTER) {
             PortLinkSetInterpolate(on);
             on = on && PortLinkSplit(); /* a linked race only (the window split) */
         }
     }
     on = on && !PortTracing();
-    GteKeepPast(on);
+    GteKeepPast(on || CameraBlurOn());
     return on;
 }
 
@@ -2211,6 +2556,38 @@ void PsxDrawInterpolatedTest(int k, int n)
     PsxDrawInterpolatedAt(((float)(PsxFieldCount() - frameDrawnField - 1) + (float)k / (float)n) / 2.0f);
 }
 
+static float CameraShutterFraction(void)
+{
+    /* Fixed-step runs advance two emulated fields per game frame. */
+    float seconds = RenderResourcesFor(RenderCurrent()).motionShutterSeconds;
+    return seconds * (portConfig.fixedStep ? (portPal ? 25.0f : 30000.0f / 1001.0f)
+                                           : 1.0e9f / (float)frameTicks);
+}
+
+static void PrepareCameraBlur(float along)
+{
+    float earlier[3][4];
+    int eligible = CameraBlurOn() && !upcoming.cameraCut && !holdPicture && GpuRaceWide() &&
+                   GteCameraShutter(along, CameraShutterFraction(), earlier);
+    GpuMotionEligible(eligible);
+}
+
+static void CaptureCameraBlur(float along, int hudOnly)
+{
+    if (!CameraBlurOn() || !GpuRaceWide()) return;
+
+    GpuCameraMotion motion;
+    const GpuCameraMotion *view = NULL;
+    if (!hudOnly && !upcoming.cameraCut && !holdPicture &&
+        GteCameraShutter(along, CameraShutterFraction(), motion.earlier)) {
+        motion.centreX = (float)(int32_t)GteReadControl(24) / 65536.0f + state.offsetX;
+        motion.centreY = (float)(int32_t)GteReadControl(25) / 65536.0f + state.offsetY;
+        motion.focal = (float)(uint16_t)GteReadControl(26);
+        if (motion.focal > 0.0f) view = &motion;
+    }
+    GpuCaptureCameraMotion(upcoming.left, upcoming.top, upcoming.width, upcoming.height, view, hudOnly);
+}
+
 static int CanReuseMenuPicture(void)
 {
     return menuPicture.valid && !recordingBetween && !GpuRaceWide() && PortLinkRole() == LINK_NONE &&
@@ -2231,7 +2608,9 @@ static void DrawInterpolated(float along)
     if (CanReuseMenuPicture()) return;
     interpolationHasGeometry = 0;
     interpolating = 1;
-    interpolationAlong = along < 0.0f ? 0.0f : along > 1.0f ? 1.0f : along;
+    interpolationAlong = CameraBlurOn() && upcoming.cameraCut ? 1.0f : SDL_clamp(along, 0.0f, 1.0f);
+    PrepareCameraBlur(interpolationAlong);
+    DrawLights(interpolationAlong);
     GpuInterpolating(1);
     if (upcoming.table == loadingTable) GpuWideLoadScreen();
     state.areaLeft = upcoming.left;
@@ -2250,6 +2629,7 @@ static void DrawInterpolated(float along)
         DrawTableAgain(upcoming.second);
     }
     GpuFlush();
+    CaptureCameraBlur(interpolationAlong, 0);
     hudEntry = savedHudEntry;
     hudTable = savedHudTable;
     state = saved;
@@ -2290,6 +2670,21 @@ static __typeof__(upcoming) shownTables;
 static uint32_t shownGteFrame;
 static int shownComplete; /* the frame itself has been handed over (nothing moves until the next) */
 
+/* Apply requested settings only after the previous frame's packets have finished.
+   Presentation keeps its own snapshot until a new frame is actually drawn. */
+void PsxRendererBoundary(void)
+{
+    if (RenderCommitBefore(GpuFlush)) {
+        ModernMetadataReset();
+        ModernLightsReset();
+        memset(shipLightHistory, 0, sizeof(shipLightHistory));
+        ForgetDrawnFrame();
+        upcoming.table = NULL;
+        shownTables.table = NULL;
+        FrameCapClear();
+    }
+}
+
 void PsxLinkWaiting(void)
 {
     static uint64_t lastPicture;
@@ -2324,12 +2719,16 @@ void DrawOTag(u_long *p)
 {
     u_long *node;
     int tracing = PortTracing() && pendingCount < PENDING_TABLES, inHud = p == hudTable;
+    int mainTable = p == upcoming.table;
+    int secondTable = drawnFrame.pending && p == drawnFrame.second;
 
     menuPicture.valid = 0;
     EndTableCycle(p);
+    PrepareCameraBlur(1.0f);
+    DrawLights(1.0f);
     WalkTable(p, 1);
     tablesDrawn++;
-    if (p == upcoming.table) {
+    if (mainTable) {
         /* the frame interpolated towards is drawn: the next starts from here */
         uint64_t now = SDL_GetTicksNS();
 
@@ -2368,18 +2767,17 @@ void DrawOTag(u_long *p)
     }
     FrameCapTable(state.offsetX, state.offsetY, state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1,
                   state.areaBottom - state.areaTop + 1);
-    /* each table drawn over what is there (the depth buffer: gpu_gl.c) */
-    GpuClearDepth(state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1, state.areaBottom - state.areaTop + 1);
+    /* each table drawn over what is there (the depth buffer: gpu_renderer.c) */
+    GpuClearSceneDepth(state.areaLeft, state.areaTop, state.areaRight - state.areaLeft + 1,
+                  state.areaBottom - state.areaTop + 1, mainTable);
     drawnSinceRead = 1;
     if (PortLinkSplit() && !tracing) {
         DrawAnchored(p, PortScreenMargin(), 1);
-        GteFrameDrawn();
-        return;
+        goto finish;
     }
     if (PortScreenMargin() && GpuRaceWide() && !tracing) {
         DrawAnchored(p, PortScreenMargin(), 0);
-        GteFrameDrawn();
-        return;
+        goto finish;
     }
 
     if (tracing) {
@@ -2403,6 +2801,9 @@ void DrawOTag(u_long *p)
         PortTraceEvent(TRACE_TABLE, pending[pendingCount].nodes, pending[pendingCount].count);
         pendingCount++;
     }
+
+finish:
+    if (mainTable || secondTable) CaptureCameraBlur(1.0f, secondTable && !mainTable);
     GteFrameDrawn();
 }
 
@@ -2425,3 +2826,8 @@ int SetVideoMode(int mode)
     return previous;
 }
 
+
+void PsxUpcomingTables(u_long *table, u_long *second, u_long *hudFirst, DRAWENV *env)
+{
+    PsxUpcomingCameraTables(table, second, hudFirst, env, 0);
+}

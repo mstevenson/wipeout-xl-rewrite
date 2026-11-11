@@ -12,6 +12,7 @@
 DIR/info.json says what the game was doing when it was saved: the track (and for a guest the game it is from),
 class, race type, the player's team, lap and section, and the version and display settings.
 """
+import json
 import math
 import os
 import struct
@@ -71,6 +72,15 @@ def load(folder):
             prims.append(p)
         frames.append(dict(index=index, game=game, shown=shown, offset=(ox, oy), area=(ax, ay, aw, ah), vram=vram,
                            prims=prims, folder=folder, picture_x=picture_x, between=between))
+    metadata = os.path.join(folder, 'modern.json')
+    if os.path.exists(metadata):
+        with open(metadata) as source:
+            modern = json.load(source)
+        if modern.get('version') == 1:
+            for frame, details in zip(frames, modern['frames']):
+                frame['render'] = {k: v for k, v in details.items() if k != 'primitives'}
+                for prim, attributes in zip(frame['prims'], details['primitives']):
+                    prim.draw.update(attributes)
     return frames
 
 
@@ -145,14 +155,16 @@ def inside(a, b, c, x, y):
 
 
 def shade(frame, p, t, l):
-    """What gpu_gl.c's fragment shader writes at barycentric l of triangle t."""
+    """Source texel/tint at barycentric l; saved pictures include lighting and post effects."""
     ws = [v['w'] if v['w'] > 0 else 1.0 for v in t]
     k = [l[i] / ws[i] for i in range(3)]
     s = sum(k)
     k = [x / s for x in k]
     u = sum(k[i] * t[i]['u'] for i in range(3))
     v = sum(k[i] * t[i]['v'] for i in range(3))
-    c = [sum(k[i] * t[i][ch] for i in range(3)) for ch in 'rgba']
+    colour = l if frame.get('render', {}).get('mode') == 1 and not p.draw.get('smoothTrack') else k
+    c = [sum(colour[i] * t[i][ch] for i in range(3)) for ch in 'rgb']
+    c.append(sum(k[i] * t[i]['a'] for i in range(3)))
     out = dict(u=u, v=v, texel=None, alpha=c[3], transparent=False)
     d = p.draw
     mem = vram(frame)

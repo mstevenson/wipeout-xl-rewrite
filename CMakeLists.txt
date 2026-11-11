@@ -149,12 +149,13 @@ list(TRANSFORM PLATFORM_PSX_SOURCES PREPEND ${CMAKE_SOURCE_DIR}/)
 set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/platform/third_party/imgui)
 set(IMGUI_SOURCES ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp)
-set(DEBUG_UI_SOURCES ${CMAKE_SOURCE_DIR}/platform/render/imgui.cpp ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp ${CMAKE_SOURCE_DIR}/platform/touch.cpp ${IMGUI_SOURCES})
+set(DEBUG_UI_SOURCES ${CMAKE_SOURCE_DIR}/platform/render/modern/ui.cpp ${CMAKE_SOURCE_DIR}/platform/render/imgui.cpp ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp ${CMAKE_SOURCE_DIR}/platform/touch.cpp ${IMGUI_SOURCES})
 # (the port's own: what the second player's game has a copy of, platform/second/)
-set(PLATFORM_OWN_SOURCES ${CMAKE_SOURCE_DIR}/platform/render/imgui.cpp ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp
+set(MODERN_SOURCES platform/render/modern/lights.c platform/render/modern/metadata.c platform/render/modern/modern.c platform/render/modern/scene.c platform/render/modern/post.c platform/render/modern/source.c)
+set(PLATFORM_OWN_SOURCES ${CMAKE_SOURCE_DIR}/platform/render/modern/ui.cpp ${MODERN_SOURCES} ${CMAKE_SOURCE_DIR}/platform/render/imgui.cpp ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${CMAKE_SOURCE_DIR}/platform/debug_ui.cpp
     ${CMAKE_SOURCE_DIR}/platform/touch.cpp)
 list(SORT PLATFORM_OWN_SOURCES)
-set(PLATFORM_SOURCES ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${DEBUG_UI_SOURCES})
+set(PLATFORM_SOURCES ${MODERN_SOURCES} ${PLATFORM_TOP_SOURCES} ${PLATFORM_PSX_SOURCES} ${DEBUG_UI_SOURCES})
 # Disc images in .7z archives (platform/archive.c): the LZMA SDK's 7z decoder (platform/third_party/lzma, public
 # domain).
 file(GLOB LZMA_SOURCES ${CMAKE_SOURCE_DIR}/platform/third_party/lzma/*.c)

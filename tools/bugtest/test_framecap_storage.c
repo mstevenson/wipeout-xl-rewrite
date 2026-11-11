@@ -25,6 +25,22 @@ int GpuReadPictureStart(int reader, int x, int y, int w, int h, int margin, int 
 int PortShownFrames(void) { return 0; }
 int main(void)
 {
+    /* Modern's ordinary Gouraud colour is affine; tagged road colour and
+       baseline colour remain perspective-correct. Alpha always uses perspective. */
+    RenderFrame policy = {0};
+    FrameCapPrim primitive = {0};
+    GpuVertex vertices[3] = {{.w=100,.a=255}, {.w=200,.r=240,.a=255}, {.w=100,.a=255}};
+    const GpuVertex *triangle[3] = {vertices, vertices+1, vertices+2};
+    const float barycentric[3] = {.25f,.5f,.25f};
+    FrameCapHit sample = {0};
+    Shade(&policy, &primitive, triangle, barycentric, NULL, &sample);
+    assert(fabsf(sample.r - 80) < .01f && sample.alpha == 255);
+    policy.id = RENDER_MODERN; sample = (FrameCapHit){0};
+    Shade(&policy, &primitive, triangle, barycentric, NULL, &sample);
+    assert(fabsf(sample.r - 120) < .01f && sample.alpha == 255);
+    primitive.draw.smoothTrackLighting = 1; sample = (FrameCapHit){0};
+    Shade(&policy, &primitive, triangle, barycentric, NULL, &sample);
+    assert(fabsf(sample.r - 80) < .01f);
     SDL_setenv_unsafe("WIPEOUT_FRAMECAP", "1", 1);
     /* A small animated texture must not duplicate all of VRAM every frame. */
     int saved[90];

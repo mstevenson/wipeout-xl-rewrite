@@ -60,6 +60,7 @@ void AddRandomParticles(SParticle *particles, int count, VECTOR *pos, VECTOR *ve
             particles[i].vel.vz = (newRand() & 0x3F) - 32 + vel->vz;
             particles[i].life = 7;
             particles[i].type = 1;
+            PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
             particles[i].flags = 0;
         }
     }
@@ -82,6 +83,7 @@ void AddScrapingParticles(SParticle *particles, int count, VECTOR *pos, VECTOR *
             particles[i].vel.vz = (newRand() & 0x3F) - 32 + vel->vz;
             particles[i].life = 7;
             particles[i].type = 2;
+            PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
             particles[i].flags = 0;
         }
     }
@@ -111,6 +113,7 @@ void AddSnow(SParticle *particles, int unused, VECTOR *camera)
                         particles[i].life = 50;
                         particles[i].vel.vz = 0;
                         particles[i].type = 5;
+                        PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
                         particles[i].flags = 0;
                     }
                 }
@@ -132,6 +135,7 @@ void AddSnow(SParticle *particles, int unused, VECTOR *camera)
                         particles[i].life = 50;
                         particles[i].vel.vz = 0;
                         particles[i].type = 5;
+                        PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
                         particles[i].flags = 0;
                     }
                 }
@@ -162,6 +166,7 @@ void AddRain(SParticle *particles, int unused, VECTOR *camera)
                 particles[i].life = 20;
                 particles[i].vel.vz = 0;
                 particles[i].type = 3;
+                PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
                 particles[i].flags = 0;
             }
         }
@@ -182,6 +187,7 @@ void AddRain(SParticle *particles, int unused, VECTOR *camera)
                 particles[i].life = 20;
                 particles[i].vel.vz = 0;
                 particles[i].type = 3;
+                PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
                 particles[i].flags = 0;
             }
         }
@@ -207,6 +213,7 @@ void AddExplodingParticles(SParticle *particles, int count, VECTOR *pos)
             particles[i].vel.vz = (newRand() & 0x7F) - 0x3F;
             particles[i].life = 15;
             particles[i].type = 1;
+            PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
             particles[i].flags = 0;
         }
     }
@@ -229,6 +236,7 @@ void AddEboltParticles(SParticle *particles, int count, VECTOR *pos)
             particles[i].vel.vz = (newRand() & 0x3F) - 0x1F;
             particles[i].life = 15;
             particles[i].type = 4;
+            PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
             particles[i].flags = 0;
         }
     }
@@ -251,6 +259,7 @@ void AddRisingParticles(SParticle *particles, int count, VECTOR *pos, int fallSp
             particles[i].vel.vz = 0;
             particles[i].life = (newRand() & 7) + 8;
             particles[i].type = 2;
+            PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
             particles[i].flags = 0;
         }
     }
@@ -273,6 +282,7 @@ void AddFireyParticles(SParticle *particles, int count, VECTOR *pos, int dir, in
             particles[i].vel.vz = ((newRand() & 7) - 4) + vel->vz;
             particles[i].life = (newRand() & 7) + 20;
             particles[i].type = type;
+            PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
             particles[i].flags = 0;
         }
     }
@@ -295,6 +305,7 @@ void AddPitParticles(SParticle *particles, int count, VECTOR *pos, int fallSpeed
             particles[i].vel.vz = 0;
             particles[i].life = (newRand() & 7) + 8;
             particles[i].type = 2;
+            PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
             particles[i].flags = 0;
         }
     }
@@ -314,6 +325,7 @@ void ClearParticleTable(SParticle *particles)
         particles[i].vel.vz = 0;
         particles[i].life = 0;
         particles[i].type = 0;
+        PortModernParticleSpawn(&particles[i]); /* Port: invalidate reused presentation metadata. */
         particles[i].flags = 0;
     }
 }

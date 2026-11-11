@@ -1,6 +1,14 @@
 /* Real packet linking and table validation, including loops through empty OT entries. */
 #include "../../platform/psx/libgpu.c"
 #include <assert.h>
+#include "../../platform/render/modern/metadata.c"
+uint32_t GteFrameRecorded(void) { return 1; }
+void GteKeepPast(int enabled) { (void)enabled; }
+#ifndef main
+PortSettings portSettings;
+int PortLinkRole(void) { return 0; }
+#endif
+int PortTracing(void) { return 0; }
 
 static void Check(u_long *head, u_long **expected, int count)
 {
@@ -52,6 +60,20 @@ int main(void)
     EndTableCycle(ot + 3);
     assert(!memcmp(saved, ot, sizeof(ot)));
     EndTableCycle(NULL);
+    /* Vary both the noncyclic prefix and cycle period, including powers of two
+       around Brent's checkpoints. Repair must cut only the repeated edge. */
+    u_long chain[65];
+    for (int length = 1; length <= 65; length++) {
+        for (int entry = 0; entry < length; entry++) {
+            for (int i = 0; i < length; i++)
+                chain[i] = (4u << 24) | LinkId(&chain[i + 1 < length ? i + 1 : entry]);
+            EndTableCycle(chain);
+            for (int i = 0; i < length; i++) {
+                assert(chain[i] >> 24 == 4);
+                assert(NodeAfter(&chain[i]) == (i + 1 < length ? &chain[i + 1] : NULL));
+            }
+        }
+    }
     /* Clearing a reused frame buffer expires only that buffer's HUD packet tags. */
     PortHudColourBars(&a, &b, ot, 0);
     PortHudColourBars(&a, &b, empty, 1);
