@@ -13,7 +13,7 @@ FRAGMENTS = ("modernMotionFragment", "modernResolveFragment")
 MARKER = "\n/* Modern postprocessing */"
 HELPERS = (
     "LinearColour", "Srgb", "Score", "Scene", "Peak", "Seed", "ToneMap",
-    "ToneMapPbrNeutral", "Field", "InPicture", "SweepCoverage", "MotionColour",
+    "ToneMapPbrNeutral", "OutputDither", "Field", "InPicture", "SweepCoverage", "MotionColour",
 )
 
 

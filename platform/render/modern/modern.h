@@ -16,11 +16,12 @@ typedef struct ModernRenderSettings {
     int cameraBlur, cameraBlurAmount;
 } ModernRenderSettings;
 /* Operation/material flags shared by CPU clipping and shaders, not renderer selection. */
-enum { SHADE_RAW = 1, SHADE_WORLD_TINT = 2, SHADE_PS1_COLOUR = 4, SHADE_DITHER = 8,
+/* Modern never reproduces the console's 15-bit output or dither: bits 4 and 8 are unused. */
+enum { SHADE_RAW = 1, SHADE_WORLD_TINT = 2,
        SHADE_AFFINE_COLOUR = 16, SHADE_AFFINE_UV = 32, SHADE_N64 = 64, SHADE_SNAP = 128 };
 /* UI is independent of perspective/depth: affine world billboards are not screen-space UI. */
 typedef struct RenderMaterial {
-    int n64, fullColour, textured, raw, dither, bounds, ui, perspective;
+    int n64, fullColour, textured, raw, bounds, ui, perspective;
     int smoothTrackLighting;
 } RenderMaterial;
 typedef enum RenderFilter {

@@ -1772,8 +1772,6 @@ static void Polygon(const uint32_t *w, uint32_t code)
             for (i = 0; i < count; i++) ColourRgb(&v[i], trackColours[i]);
         }
     }
-    /* Modern follows the console: only shaded or texture-modulated polygons dither. */
-    if (modern) draw.dither &= gouraud || (textured && !raw);
     if (textured) {
         TextureFromPage(&draw, page);
         if (modern) draw.ps1Light = ModernPacketPs1Light(w - 1);
@@ -1883,7 +1881,6 @@ static void Rectangle(const uint32_t *w, uint32_t code)
         width = height = size == 1 ? 1 : size == 2 ? 8 : 16;
     }
     StateFor(&draw, textured, semi, raw);
-    if (ModernEnabled()) draw.dither = 0; /* PS1 rectangles never dither, even when E1 enables it for polygons. */
     if (textured) {
         draw.clutX = (int)((uv >> 16) & 0x3F) * 16;
         draw.clutY = (int)((uv >> 22) & 0x3FF); /* (as a polygon's) */

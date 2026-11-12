@@ -32,7 +32,12 @@ use the original authored track detail and the existing extended-road path.
 World filtering and brightness leave ordinary HUD/menu art unchanged. A chosen
 HD texture pack is always drawn, at every scale including 1x, even while the
 HD textures setting (which governs the existing renderer) is off. Classic and Soft Highlights select the two tone
-curves; HDR remains internal and output is SDR. Camera blur is eligible only in
+curves; HDR remains internal and output is SDR. Modern never reproduces the
+console's 15-bit output or its 4x4 dither; world pixels get one step of
+triangular noise before the final 8-bit write (the HDR resolve, or the scene
+target without HDR) so gradients and glow do not band. HUD/menu overlay pixels
+and blended writes are left exact. Banding stored in the 15-bit source textures
+themselves remains. Camera blur is eligible only in
 solo races with valid camera history; linking, tracing, cuts and missing history
 produce a sharp picture. The panel reports unavailable HDR/post resources without
 changing the requested preferences.

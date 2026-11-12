@@ -389,6 +389,13 @@ void ModernWriteAux(ModernGameOut in, float gain, float4 c, float covered, threa
     aux.mask = float4(emits && !overlay ? c.a : 0.0, overlay ? c.a : 0.0,
                       in.mode.z == 2 ? 0.0 : guard, in.mode.z == 2 ? guard : c.a);
 }
+/* Triangular noise of one 8-bit step: hides banding without the console's pattern. */
+float ModernOutputDither(float2 p)
+{
+    float a = fract(52.9829189 * fract(dot(p, float2(0.06711056, 0.00583715))));
+    float b = fract(52.9829189 * fract(dot(p + float2(47.0, 17.0), float2(0.06711056, 0.00583715))));
+    return (a + b - 1.0) / 255.0;
+}
 float4 ModernOutput(float3 col, float cov, bool blended, ModernGameOut in, bool saturate,
               float gain, bool hdr, float2 grid, thread ModernGameAux &aux)
 {
@@ -400,12 +407,6 @@ float4 ModernOutput(float3 col, float cov, bool blended, ModernGameOut in, bool 
     int semiMode = in.semiMode;
     int hudColourOverlay = in.hudColourOverlay;
 
-    if ((mode.y & 4) != 0) {
-        const int offsets[16] = {-4,0,-3,1, 2,-2,3,-1, -3,1,-4,0, 3,-1,2,-2};
-        int2 pixel = int2(floor(in.vPixel.xy / in.vPixel.z)) & 3;
-        float dither = (mode.y & 8) != 0 ? float(offsets[pixel.y * 4 + pixel.x]) : 0.0;
-        col = floor(clamp(floor(col * 255.0 + 0.0001) + dither, 0.0, 255.0) / 8.0) * (8.0 / 255.0);
-    }
     if (semiMode == 4) blended = false;
     float fade = vColour.a;
     if (mode.z == 3) {
@@ -432,6 +433,9 @@ float4 ModernOutput(float3 col, float cov, bool blended, ModernGameOut in, bool 
     }
     col *= fade;
     cov *= fade;
+    /* Without HDR this target is the picture; the HDR resolve dithers its own output. */
+    if (!hdr && !blended && (in.material & 512) == 0)
+        col = clamp(col + ModernOutputDither(in.position.xy), 0.0, 1.0);
     if (!blended)
         result = float4(col, cov);
     else if (hudColourOverlay != 0 && semiMode == 1) {
@@ -865,11 +869,11 @@ float3 modernResolveFragment_LinearColour(thread const float3& c)
 }
 
 static inline __attribute__((always_inline))
-float3 modernResolveFragment_Scene(thread const int2& p, constant modernResolveFragmentUniforms& _111, texture2d<float> image0, sampler image0Smplr, texture2d<float> image3, sampler image3Smplr)
+float3 modernResolveFragment_Scene(thread const int2& p, constant modernResolveFragmentUniforms& _144, texture2d<float> image0, sampler image0Smplr, texture2d<float> image3, sampler image3Smplr)
 {
-    if (_111.effect[3].x != 0.0)
+    if (_144.effect[3].x != 0.0)
     {
-        return image0.read(uint2((p - int4(_111.effect[0]).xy)), 0).xyz;
+        return image0.read(uint2((p - int4(_144.effect[0]).xy)), 0).xyz;
     }
     float3 param = fast::max(image0.read(uint2(p), 0).xyz, image3.read(uint2(p), 0).xyz);
     return modernResolveFragment_LinearColour(param);
@@ -882,23 +886,23 @@ float modernResolveFragment_Peak(thread const float3& c)
 }
 
 static inline __attribute__((always_inline))
-float3 modernResolveFragment_Seed(thread int2& p, constant modernResolveFragmentUniforms& _111, texture2d<float> image0, sampler image0Smplr, texture2d<float> image1, sampler image1Smplr)
+float3 modernResolveFragment_Seed(thread int2& p, constant modernResolveFragmentUniforms& _144, texture2d<float> image0, sampler image0Smplr, texture2d<float> image1, sampler image1Smplr)
 {
-    p = min(p, (int4(_111.effect[0]).zw - int2(1)));
+    p = min(p, (int4(_144.effect[0]).zw - int2(1)));
     float3 encoded = image0.read(uint2(p), 0).xyz;
     float2 flags = image1.read(uint2(p), 0).xy;
     float3 param = encoded;
-    bool _144 = modernResolveFragment_Peak(param) <= 1.0;
-    bool _151;
-    if (_144)
+    bool _176 = modernResolveFragment_Peak(param) <= 1.0;
+    bool _183;
+    if (_176)
     {
-        _151 = flags.x == 0.0;
+        _183 = flags.x == 0.0;
     }
     else
     {
-        _151 = _144;
+        _183 = _176;
     }
-    if (_151)
+    if (_183)
     {
         return float3(0.0);
     }
@@ -912,19 +916,19 @@ float3 modernResolveFragment_Seed(thread int2& p, constant modernResolveFragment
 }
 
 static inline __attribute__((always_inline))
-bool modernResolveFragment_InPicture(thread const int2& p, constant modernResolveFragmentUniforms& _111)
+bool modernResolveFragment_InPicture(thread const int2& p, constant modernResolveFragmentUniforms& _144)
 {
-    bool _327 = all(p >= int2(0));
-    bool _342;
-    if (_327)
+    bool _359 = all(p >= int2(0));
+    bool _374;
+    if (_359)
     {
-        _342 = all(p < (int4(_111.effect[0]).zw - int4(_111.effect[0]).xy));
+        _374 = all(p < (int4(_144.effect[0]).zw - int4(_144.effect[0]).xy));
     }
     else
     {
-        _342 = _327;
+        _374 = _359;
     }
-    return _342;
+    return _374;
 }
 
 static inline __attribute__((always_inline))
@@ -942,9 +946,9 @@ float modernResolveFragment_SweepCoverage(thread const float2& motion, thread co
 }
 
 static inline __attribute__((always_inline))
-bool modernResolveFragment_MotionColour(thread const int2& p, thread float3& scene, constant modernResolveFragmentUniforms& _111, texture2d<float> image0, sampler image0Smplr, texture2d<float> image3, sampler image3Smplr, texture2d<float> image4, sampler image4Smplr, texture2d<float> image5, sampler image5Smplr)
+bool modernResolveFragment_MotionColour(thread const int2& p, thread float3& scene, constant modernResolveFragmentUniforms& _144, texture2d<float> image0, sampler image0Smplr, texture2d<float> image3, sampler image3Smplr, texture2d<float> image4, sampler image4Smplr, texture2d<float> image5, sampler image5Smplr)
 {
-    int2 rel = p - int4(_111.effect[0]).xy;
+    int2 rel = p - int4(_144.effect[0]).xy;
     float4 centre = image4.read(uint2(rel), 0);
     if (centre.w < 0.0)
     {
@@ -959,117 +963,117 @@ bool modernResolveFragment_MotionColour(thread const int2& p, thread float3& sce
         int steps = clamp(int(ceil(reach)), 3, 12);
         float2 tapStep = centre.xy / float2(float(steps));
         float falloff = 0.60000002384185791015625 / float(steps);
-        int _444 = -steps;
-        for (int i = _444; i <= steps; i++)
+        int _476 = -steps;
+        for (int i = _476; i <= steps; i++)
         {
             if (i == 0)
             {
                 continue;
             }
             int2 tap = int2(floor(at + (tapStep * float(i))));
-            bool _470 = all(tap == rel);
-            bool _478;
-            if (!_470)
+            bool _502 = all(tap == rel);
+            bool _510;
+            if (!_502)
             {
                 int2 param = tap;
-                _478 = !modernResolveFragment_InPicture(param, _111);
+                _510 = !modernResolveFragment_InPicture(param, _144);
             }
             else
             {
-                _478 = _470;
+                _510 = _502;
             }
-            if (_478)
+            if (_510)
             {
                 continue;
             }
             float4 surface = image4.read(uint2(tap), 0);
-            bool _489 = surface.w < 0.0;
-            bool _500;
-            if (!_489)
-            {
-                _500 = surface.z > (centre.z * 1.019999980926513671875);
-            }
-            else
-            {
-                _500 = _489;
-            }
-            if (_500)
-            {
-                continue;
-            }
-            bool _510 = surface.w == centre.w;
-            bool _520;
-            if (_510)
-            {
-                _520 = surface.z >= (centre.z * 0.87999999523162841796875);
-            }
-            else
-            {
-                _520 = _510;
-            }
-            bool same = _520;
-            bool _522 = !same;
+            bool _521 = surface.w < 0.0;
             bool _532;
-            if (_522)
+            if (!_521)
             {
-                _532 = surface.z >= (centre.z * 0.980000019073486328125);
+                _532 = surface.z > (centre.z * 1.019999980926513671875);
             }
             else
             {
-                _532 = _522;
+                _532 = _521;
             }
             if (_532)
             {
                 continue;
             }
+            bool _542 = surface.w == centre.w;
+            bool _552;
+            if (_542)
+            {
+                _552 = surface.z >= (centre.z * 0.87999999523162841796875);
+            }
+            else
+            {
+                _552 = _542;
+            }
+            bool same = _552;
+            bool _554 = !same;
+            bool _564;
+            if (_554)
+            {
+                _564 = surface.z >= (centre.z * 0.980000019073486328125);
+            }
+            else
+            {
+                _564 = _554;
+            }
+            if (_564)
+            {
+                continue;
+            }
             float weight = (1.0 - (falloff * float(abs(i)))) * (same ? 1.0 : 0.64999997615814208984375);
-            int2 param_1 = tap + int4(_111.effect[0]).xy;
-            sum += (modernResolveFragment_Scene(param_1, _111, image0, image0Smplr, image3, image3Smplr) * weight);
+            int2 param_1 = tap + int4(_144.effect[0]).xy;
+            sum += (modernResolveFragment_Scene(param_1, _144, image0, image0Smplr, image3, image3Smplr) * weight);
             total += weight;
         }
     }
-    float4 nearby = image5.read(uint2((rel / int2(int(_111.effect[2].x)))), 0);
+    float4 nearby = image5.read(uint2((rel / int2(int(_144.effect[2].x)))), 0);
     float nearReach = length(nearby.xy);
     if ((nearby.z > (centre.z * 1.019999980926513671875)) && (nearReach >= 0.5))
     {
         int steps_1 = clamp(int(ceil(nearReach)), 3, 12);
         float2 tapStep_1 = nearby.xy / float2(float(steps_1));
         float falloff_1 = 0.60000002384185791015625 / float(steps_1);
-        int _609 = -steps_1;
-        for (int i_1 = _609; i_1 <= steps_1; i_1++)
+        int _641 = -steps_1;
+        for (int i_1 = _641; i_1 <= steps_1; i_1++)
         {
             if (i_1 == 0)
             {
                 continue;
             }
             int2 tap_1 = int2(floor(at + (tapStep_1 * float(i_1))));
-            bool _635 = all(tap_1 == rel);
-            bool _643;
-            if (!_635)
+            bool _667 = all(tap_1 == rel);
+            bool _675;
+            if (!_667)
             {
                 int2 param_2 = tap_1;
-                _643 = !modernResolveFragment_InPicture(param_2, _111);
+                _675 = !modernResolveFragment_InPicture(param_2, _144);
             }
             else
             {
-                _643 = _635;
+                _675 = _667;
             }
-            if (_643)
+            if (_675)
             {
                 continue;
             }
             float4 surface_1 = image4.read(uint2(tap_1), 0);
-            bool _654 = surface_1.w < 0.0;
-            bool _664;
-            if (!_654)
+            bool _686 = surface_1.w < 0.0;
+            bool _696;
+            if (!_686)
             {
-                _664 = surface_1.z <= (centre.z * 1.019999980926513671875);
+                _696 = surface_1.z <= (centre.z * 1.019999980926513671875);
             }
             else
             {
-                _664 = _654;
+                _696 = _686;
             }
-            if (_664)
+            if (_696)
             {
                 continue;
             }
@@ -1080,8 +1084,8 @@ bool modernResolveFragment_MotionColour(thread const int2& p, thread float3& sce
             {
                 continue;
             }
-            int2 param_5 = tap_1 + int4(_111.effect[0]).xy;
-            sum += (modernResolveFragment_Scene(param_5, _111, image0, image0Smplr, image3, image3Smplr) * weight_1);
+            int2 param_5 = tap_1 + int4(_144.effect[0]).xy;
+            sum += (modernResolveFragment_Scene(param_5, _144, image0, image0Smplr, image3, image3Smplr) * weight_1);
             total += weight_1;
         }
     }
@@ -1100,6 +1104,14 @@ float3 modernResolveFragment_Srgb(thread const float3& c)
 }
 
 static inline __attribute__((always_inline))
+float modernResolveFragment_OutputDither(thread const float2& p)
+{
+    float a = fract(52.98291778564453125 * fract(dot(p, float2(0.067110560834407806396484375, 0.005837149918079376220703125))));
+    float b = fract(52.98291778564453125 * fract(dot(p + float2(47.0, 17.0), float2(0.067110560834407806396484375, 0.005837149918079376220703125))));
+    return ((a + b) - 1.0) / 255.0;
+}
+
+static inline __attribute__((always_inline))
 float3 modernResolveFragment_ToneMap(thread const float3& c)
 {
     float3 param = c;
@@ -1112,16 +1124,16 @@ static inline __attribute__((always_inline))
 float3 modernResolveFragment_ToneMapPbrNeutral(thread float3& c)
 {
     float low = fast::min(fast::min(c.x, c.y), c.z);
-    float _233;
+    float _265;
     if (low < 0.07999999821186065673828125)
     {
-        _233 = low * (1.0 - (low / 0.1599999964237213134765625));
+        _265 = low * (1.0 - (low / 0.1599999964237213134765625));
     }
     else
     {
-        _233 = 0.039999999105930328369140625;
+        _265 = 0.039999999105930328369140625;
     }
-    float offset = _233;
+    float offset = _265;
     c -= float3(offset);
     float3 param = c;
     float peak = modernResolveFragment_Peak(param);
@@ -1134,96 +1146,99 @@ float3 modernResolveFragment_ToneMapPbrNeutral(thread float3& c)
     return mix(c * (mappedPeak / peak), float3(mappedPeak), float3(desaturation / (1.0 + desaturation)));
 }
 
-fragment modernResolveFragment_out modernResolveFragment(constant modernResolveFragmentUniforms& _111 [[buffer(3)]], texture2d<float> image0 [[texture(0)]], texture2d<float> image1 [[texture(1)]], texture2d<float> image2 [[texture(2)]], texture2d<float> image3 [[texture(3)]], texture2d<float> image4 [[texture(4)]], texture2d<float> image5 [[texture(5)]], sampler image0Smplr [[sampler(0)]], sampler image1Smplr [[sampler(1)]], sampler image2Smplr [[sampler(2)]], sampler image3Smplr [[sampler(3)]], sampler image4Smplr [[sampler(4)]], sampler image5Smplr [[sampler(5)]], float4 gl_FragCoord [[position]])
+fragment modernResolveFragment_out modernResolveFragment(constant modernResolveFragmentUniforms& _144 [[buffer(3)]], texture2d<float> image0 [[texture(0)]], texture2d<float> image1 [[texture(1)]], texture2d<float> image2 [[texture(2)]], texture2d<float> image3 [[texture(3)]], texture2d<float> image4 [[texture(4)]], texture2d<float> image5 [[texture(5)]], sampler image0Smplr [[sampler(0)]], sampler image1Smplr [[sampler(1)]], sampler image2Smplr [[sampler(2)]], sampler image3Smplr [[sampler(3)]], sampler image4Smplr [[sampler(4)]], sampler image5Smplr [[sampler(5)]], float4 gl_FragCoord [[position]])
 {
     modernResolveFragment_out out = {};
-    if (int(_111.effect[1].z) == 4)
+    if (int(_144.effect[1].z) == 4)
     {
-        int2 param = int4(_111.effect[0]).xy + int2(gl_FragCoord.xy);
-        out.colour = float4(modernResolveFragment_Scene(param, _111, image0, image0Smplr, image3, image3Smplr), 1.0);
+        int2 param = int4(_144.effect[0]).xy + int2(gl_FragCoord.xy);
+        out.colour = float4(modernResolveFragment_Scene(param, _144, image0, image0Smplr, image3, image3Smplr), 1.0);
         return out;
     }
-    if (int(_111.effect[1].z) == 1)
+    if (int(_144.effect[1].z) == 1)
     {
-        int2 p = int4(_111.effect[0]).xy + (int2(int(_111.effect[1].w)) * int2(gl_FragCoord.xy));
+        int2 p = int4(_144.effect[0]).xy + (int2(int(_144.effect[1].w)) * int2(gl_FragCoord.xy));
         float3 sum = float3(0.0);
-        for (int y = 0; y < int(_111.effect[1].w); y++)
+        for (int y = 0; y < int(_144.effect[1].w); y++)
         {
-            for (int x = 0; x < int(_111.effect[1].w); x++)
+            for (int x = 0; x < int(_144.effect[1].w); x++)
             {
                 int2 param_1 = p + int2(x, y);
-                float3 _794 = modernResolveFragment_Seed(param_1, _111, image0, image0Smplr, image1, image1Smplr);
-                sum += _794;
+                float3 _826 = modernResolveFragment_Seed(param_1, _144, image0, image0Smplr, image1, image1Smplr);
+                sum += _826;
             }
         }
-        out.colour = float4(sum / float3(float(int(_111.effect[1].w) * int(_111.effect[1].w))), 1.0);
+        out.colour = float4(sum / float3(float(int(_144.effect[1].w) * int(_144.effect[1].w))), 1.0);
     }
     else
     {
-        if (int(_111.effect[1].z) == 2)
+        if (int(_144.effect[1].z) == 2)
         {
             float2 uv = gl_FragCoord.xy / float2(int2(image0.get_width(), image0.get_height()));
             float3 sum_1 = image0.sample(image0Smplr, uv).xyz * 0.227026998996734619140625;
-            sum_1 += ((image0.sample(image0Smplr, (uv - (_111.effect[1].xy * 1.3846149444580078125))).xyz + image0.sample(image0Smplr, (uv + (_111.effect[1].xy * 1.3846149444580078125))).xyz) * 0.316215991973876953125);
-            sum_1 += ((image0.sample(image0Smplr, (uv - (_111.effect[1].xy * 3.2307689189910888671875))).xyz + image0.sample(image0Smplr, (uv + (_111.effect[1].xy * 3.2307689189910888671875))).xyz) * 0.070270001888275146484375);
+            sum_1 += ((image0.sample(image0Smplr, (uv - (_144.effect[1].xy * 1.3846149444580078125))).xyz + image0.sample(image0Smplr, (uv + (_144.effect[1].xy * 1.3846149444580078125))).xyz) * 0.316215991973876953125);
+            sum_1 += ((image0.sample(image0Smplr, (uv - (_144.effect[1].xy * 3.2307689189910888671875))).xyz + image0.sample(image0Smplr, (uv + (_144.effect[1].xy * 3.2307689189910888671875))).xyz) * 0.070270001888275146484375);
             out.colour = float4(sum_1, 1.0);
         }
         else
         {
-            int2 rel = clamp(int2(gl_FragCoord.xy) - int2(1), int2(0), (int4(_111.effect[0]).zw - int4(_111.effect[0]).xy) - int2(1));
-            int2 p_1 = int4(_111.effect[0]).xy + rel;
+            int2 rel = clamp(int2(gl_FragCoord.xy) - int2(1), int2(0), (int4(_144.effect[0]).zw - int4(_144.effect[0]).xy) - int2(1));
+            int2 p_1 = int4(_144.effect[0]).xy + rel;
             float4 original = image3.read(uint2(p_1), 0);
             float overlay = image1.read(uint2(p_1), 0).y;
             int2 param_2 = p_1;
-            float3 scene = modernResolveFragment_Scene(param_2, _111, image0, image0Smplr, image3, image3Smplr);
+            float3 scene = modernResolveFragment_Scene(param_2, _144, image0, image0Smplr, image3, image3Smplr);
             bool mixed = false;
-            if (int(_111.effect[2].x) > 0)
+            if (int(_144.effect[2].x) > 0)
             {
                 int2 param_3 = p_1;
                 float3 param_4 = scene;
-                bool _943 = modernResolveFragment_MotionColour(param_3, param_4, _111, image0, image0Smplr, image3, image3Smplr, image4, image4Smplr, image5, image5Smplr);
+                bool _975 = modernResolveFragment_MotionColour(param_3, param_4, _144, image0, image0Smplr, image3, image3Smplr, image4, image4Smplr, image5, image5Smplr);
                 scene = param_4;
-                mixed = _943;
+                mixed = _975;
             }
-            if (!(_111.effect[2].w != 0.0))
+            if (!(_144.effect[2].w != 0.0))
             {
-                float4 _952;
+                float4 _984;
                 if (mixed)
                 {
                     float3 param_5 = scene;
-                    _952 = float4(modernResolveFragment_Srgb(param_5), original.w);
+                    float2 param_6 = gl_FragCoord.xy;
+                    _984 = float4(fast::clamp(modernResolveFragment_Srgb(param_5) + float3(modernResolveFragment_OutputDither(param_6)), float3(0.0), float3(1.0)), original.w);
                 }
                 else
                 {
-                    _952 = original;
+                    _984 = original;
                 }
-                out.colour = _952;
+                out.colour = _984;
                 return out;
             }
-            float2 glowSize = float2(int2(image2.get_width(), image2.get_height())) * float(int(_111.effect[1].w));
+            float2 glowSize = float2(int2(image2.get_width(), image2.get_height())) * float(int(_144.effect[1].w));
             float3 glow = image2.sample(image2Smplr, ((float2(rel) + float2(0.5)) / glowSize)).xyz;
-            float3 _994;
-            if (_111.effect[2].z != 0.0)
+            float3 _1035;
+            if (_144.effect[2].z != 0.0)
             {
-                _994 = glow * 0.25;
+                _1035 = glow * 0.25;
             }
             else
             {
-                _994 = float3(0.0);
+                _1035 = float3(0.0);
             }
-            float3 hdr = scene + _994;
-            float3 param_6 = hdr;
-            float3 mapped = modernResolveFragment_ToneMap(param_6);
-            if (_111.effect[2].y != 0.0)
+            float3 hdr = scene + _1035;
+            float3 param_7 = hdr;
+            float3 mapped = modernResolveFragment_ToneMap(param_7);
+            if (_144.effect[2].y != 0.0)
             {
-                float3 param_7 = hdr;
-                float weight = smoothstep(0.1500000059604644775390625, 0.75, modernResolveFragment_Peak(param_7));
                 float3 param_8 = hdr;
-                float3 _1021 = modernResolveFragment_ToneMapPbrNeutral(param_8);
-                mapped = mix(mapped, _1021, float3(weight * weight));
+                float weight = smoothstep(0.1500000059604644775390625, 0.75, modernResolveFragment_Peak(param_8));
+                float3 param_9 = hdr;
+                float3 _1062 = modernResolveFragment_ToneMapPbrNeutral(param_9);
+                mapped = mix(mapped, _1062, float3(weight * weight));
             }
-            float3 param_9 = mapped;
-            out.colour = float4(mix(modernResolveFragment_Srgb(param_9), original.xyz, float3(overlay)), original.w);
+            float3 param_10 = mapped;
+            float2 param_11 = gl_FragCoord.xy;
+            float3 world = fast::clamp(modernResolveFragment_Srgb(param_10) + float3(modernResolveFragment_OutputDither(param_11)), float3(0.0), float3(1.0));
+            out.colour = float4(mix(world, original.xyz, float3(overlay)), original.w);
         }
     }
     return out;
