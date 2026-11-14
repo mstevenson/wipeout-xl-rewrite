@@ -1,23 +1,16 @@
 #include "metadata.h"
-#include "../../platform.h"
 #include "../../psx/gpu.h"
-#include "../../original.h"
 #include "../../pc.h"
 #include "../../saturn.h"
 #include "../../psx/framecap.h"
-#include <SDL3/SDL.h>
 #include <string.h>
 
 int PortOriginalTrack(void); /* game source selection */
 int PortActiveTrackNumber(void); /* game/src/portinfo.c */
 
-
-
-void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, uint32_t assetTag, int index,
+void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name, int index,
                         const int position[3])
 {
-    /* The synthetic PRM's scratch word is copied byte-for-byte by the loader. */
-    (void)assetTag;
     FrameCapTag(start, end, what, name, index);
     if (!ModernEnabled() || start == end || !name || PortOriginalTrack() >= 0 || PortPcData() || PortSaturnDisc()) return;
     int track = PortActiveTrackNumber();

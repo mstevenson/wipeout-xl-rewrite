@@ -19,7 +19,7 @@ int ModernPacketTrack(const void *packet, uint32_t colours[4]);
 int ModernSparkPacket(const void *packet);
 void ModernMetadataReset(void);
 void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name,
-                        uint32_t assetTag, int index, const int position[3]);
+                        int index, const int position[3]);
 #ifdef __cplusplus
 }
 #endif

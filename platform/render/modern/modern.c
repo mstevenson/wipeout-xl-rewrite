@@ -78,8 +78,7 @@ int RenderCommitBefore(void (*beforeChange)(void))
         /* Overrides affect the immutable frame, never saved preferences. */
         Number(getenv("WIPEOUT_MODERN_BLOOM"), 0, 1, &m->bloom);
     }
-    int changed = !valid || next.id != current.id || memcmp(&next.settings, &current.settings, sizeof(next.settings));
-    if (!changed) return 0;
+    if (valid && next.id == current.id && !memcmp(&next.settings, &current.settings, sizeof(next.settings))) return 0;
     /* A flush may itself query policy. Even after invalidation, it must see
        the old frame rather than recursively publishing the requested one. */
     valid = 1;
@@ -87,9 +86,9 @@ int RenderCommitBefore(void (*beforeChange)(void))
     if (beforeChange) beforeChange();
     next.generation = current.generation + 1;
     current = next;
-    valid = 1;
+    valid = 1; /* (the flush may have invalidated the old frame) */
     renderModernActive = current.id == RENDER_MODERN;
-    return changed;
+    return 1;
 }
 int RenderCommit(void) { return RenderCommitBefore(NULL); }
 const RenderFrame *RenderCurrent(void)

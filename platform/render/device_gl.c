@@ -460,7 +460,7 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
     if (s->shader == RENDER_UI) {
         if (layout) {
             glBindBuffer(GL_ARRAY_BUFFER, (GLuint)draw->vertices);
-                glEnableVertexAttribArray(0);
+            glEnableVertexAttribArray(0);
             glEnableVertexAttribArray(1);
             glEnableVertexAttribArray(2);
             glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 20, (void *)draw->vertexOffset);
@@ -473,9 +473,8 @@ static int Draw(RenderDevice *d, const RenderDraw *draw) {
         glDrawElements(GL_TRIANGLES, draw->count,
                        draw->indexBytes == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT,
                        (void *)((size_t)draw->first * draw->indexBytes));
-    } else {
+    } else
         glDrawArrays(GL_TRIANGLES, draw->first, draw->count);
-    }
     g->last = *draw;
     g->valid = 1;
     return 1;

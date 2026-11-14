@@ -38,6 +38,11 @@ void ModernMetadataReset(void)
     if (populated) memset(entries, 0, sizeof(entries));
     populated = 0;
 }
+/* An existing annotation, only while Modern reads them. */
+static const PacketMetadata *Lookup(const void *packet)
+{
+    return populated && ModernEnabled() ? Find(packet, 0) : NULL;
+}
 void ModernPacketReused(const void *packet)
 {
     if (!populated) return;
@@ -52,8 +57,7 @@ void PortTagTrackLight(const void *packet, const uint32_t colours[4])
 }
 int ModernPacketTrack(const void *packet, uint32_t colours[4])
 {
-    if (!populated || !ModernEnabled()) return 0;
-    PacketMetadata *entry = Find(packet, 0);
+    const PacketMetadata *entry = Lookup(packet);
     if (!entry || !entry->track) return 0;
     memcpy(colours, entry->colours, sizeof(entry->colours));
     return 1;
@@ -72,8 +76,7 @@ void GpuTagEmission(const void *start, const void *end, const MaterialEmission *
 }
 int ModernPacketEmission(const void *packet, MaterialEmission *emission)
 {
-    if (!populated || !ModernEnabled()) return 0;
-    PacketMetadata *entry = Find(packet, 0);
+    const PacketMetadata *entry = Lookup(packet);
     if (!entry || !entry->emission.enabled) return 0;
     *emission = entry->emission;
     return 1;
@@ -86,8 +89,7 @@ void PortTagSparkStreak(const LINE_G2 *line)
 }
 int ModernSparkPacket(const void *packet)
 {
-    if (!populated || !ModernEnabled()) return 0;
-    PacketMetadata *entry = Find(packet, 0);
+    const PacketMetadata *entry = Lookup(packet);
     return entry && entry->spark;
 }
 
@@ -99,7 +101,6 @@ void PortTagTrackEncoding(const void *packet, int ps1)
 }
 int ModernPacketPs1Light(const void *packet)
 {
-    if (!populated || !ModernEnabled()) return 0;
-    PacketMetadata *entry = Find(packet, 0);
+    const PacketMetadata *entry = Lookup(packet);
     return entry && entry->ps1Light;
 }

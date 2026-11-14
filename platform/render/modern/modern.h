@@ -18,22 +18,19 @@ typedef struct ModernRenderSettings {
 /* Operation/material flags shared by CPU clipping and shaders, not renderer selection. */
 /* Modern never reproduces the console's 15-bit output or dither: bits 4 and 8 are unused. */
 enum { SHADE_RAW = 1, SHADE_WORLD_TINT = 2,
-       SHADE_AFFINE_COLOUR = 16, SHADE_AFFINE_UV = 32, SHADE_N64 = 64, SHADE_SNAP = 128 };
+       SHADE_AFFINE_COLOUR = 16, SHADE_AFFINE_UV = 32, SHADE_N64 = 64 };
 /* UI is independent of perspective/depth: affine world billboards are not screen-space UI. */
 typedef struct RenderMaterial {
-    int n64, fullColour, textured, raw, bounds, ui, perspective;
+    int n64, textured, raw, bounds, ui;
     int smoothTrackLighting;
 } RenderMaterial;
+/* The value is packed into the vertex's sampling bits (gpu_renderer.c:Add). */
 typedef enum RenderFilter {
-    RENDER_NEAREST, RENDER_THREE_POINT, RENDER_BILINEAR
+    RENDER_NEAREST = 0, RENDER_BILINEAR = 2
 } RenderFilter;
-typedef enum RenderCoverage {
-    RENDER_COVERAGE_DEFAULT, RENDER_COVERAGE_HALF, RENDER_COVERAGE_MESH
-} RenderCoverage;
 typedef struct RenderStyle {
     unsigned shade;
     RenderFilter filter;
-    RenderCoverage coverage;
     int nativeBounds; /* request for source bounds */
 } RenderStyle;
 
@@ -43,14 +40,12 @@ static inline unsigned RenderBaseShade(const RenderMaterial *material)
            (material->n64 ? SHADE_N64 : 0);
 }
 /* Optional resources/operations requested by Modern, implemented by shared transport. */
+/* Modern always draws the chosen HD pack, at every scale and even while the HD textures setting is off. */
 typedef struct RenderResources {
-    int hdTexturesAtNativeScale, hdr, cameraBlur;
-    int hdTexturesAlways; /* draw the chosen HD pack even while the HD textures setting is off */
-    float motionShutterSeconds; /* presentation exposure sampled by motion transport */
+    int hdr, cameraBlur;
 } RenderResources;
-typedef struct RenderPacketPolicy {
-    int smoothTrackLighting;
-} RenderPacketPolicy;
+/* Presentation exposure sampled by motion transport. */
+#define MODERN_SHUTTER_SECONDS 0.008f
 
 #define MODERN_DEFAULTS {1,85,1,1,MODERN_TONEMAP_SOFT_SHADOWS,1,1,1,100}
 typedef struct RenderSettings { RendererId selection; ModernRenderSettings modern; } RenderSettings;
@@ -71,7 +66,6 @@ void RenderSave(FILE *file, const RenderSettings *settings);
 RenderStyle RenderPrepare(const RenderFrame *, const RenderMaterial *);
 RenderResources RenderResourcesFor(const RenderFrame *);
 RenderResources RenderFrameResources(const RenderFrame *, int linked, int tracing);
-RenderPacketPolicy RenderPacketPolicyFor(const RenderFrame *);
 /* Read-only outside modern.c. -1 means lazy initialization is still needed.
    The frame boundary publishes this with current; packet hot paths need only
    one load, not an out-of-line policy query for every corner. */

@@ -1,4 +1,4 @@
-/* The drawing backend under libgpu (render/gl_backend.c): the PlayStation's
+/* The drawing backend under libgpu (gpu_renderer.c): the PlayStation's
    primitives drawn at any resolution with OpenGL, textured straight from a
    copy of the console's video memory. */
 #ifndef PSX_GPU_H
@@ -97,13 +97,11 @@ typedef struct GpuDrawState {
    An affine billboard may belong to the world even when it has no reciprocal depth. */
 static inline RenderMaterial GpuMaterialFor(const GpuDrawState *draw, const GpuVertex *vertices, int count)
 {
-    RenderMaterial material = {.n64 = draw->n64, .fullColour = draw->depth == 3,
-        .textured = draw->textured, .raw = draw->raw, .ui = 1, .perspective = 1,
+    RenderMaterial material = {.n64 = draw->n64,
+        .textured = draw->textured, .raw = draw->raw, .ui = 1,
         .smoothTrackLighting = draw->smoothTrackLighting};
     for (int i = 0; i < count; i++) {
-        int projected = vertices[i].w > 0.0f;
-        material.perspective &= projected;
-        material.ui &= !vertices[i].world && !projected;
+        material.ui &= !vertices[i].world && !(vertices[i].w > 0.0f);
         material.n64 |= vertices[i].n64;
     }
     return material;

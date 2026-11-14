@@ -829,12 +829,6 @@ void RgGameAttachments(const RgHandle auxiliary[3], float sparkGain)
     else memset(gameAttachments, 0, sizeof(gameAttachments));
 }
 
-void RgGameGrid(float x, float y)
-{
-    modernUniforms.effect[0][1] = x;
-    modernUniforms.effect[0][2] = y;
-}
-
 int RgAllocateImage(RgHandle handle, int width, int height, RenderFormat format)
 {
     if (!handle || handle >= RESOURCES || !images[handle].used ||

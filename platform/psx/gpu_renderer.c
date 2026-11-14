@@ -55,10 +55,6 @@
 /* ---- state ---- */
 
 static int scale = 1;
-static int PixelX(float x) { return (int)SDL_lroundf(x * scale); }
-static int PixelY(float y) { return (int)SDL_lroundf(y * scale); }
-static int SpanX(float x, float w) { return PixelX(x + w) - PixelX(x); }
-static int SpanY(float y, float h) { return PixelY(y + h) - PixelY(y); }
 static RgHandle framebuffer, colour;   /* all of video memory, scaled */
 typedef struct DepthUse {
     int written, left, top, right, bottom;
@@ -230,14 +226,14 @@ static int CreateFramebuffer(void)
 {
     RgGenTextures(1, &colour);
     RgBindTexture(RG_TEXTURE_2D, colour);
-    RgTexImage2D(RG_TEXTURE_2D, 0, RG_RGBA8, PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT), 0, RG_RGBA, RG_UNSIGNED_BYTE,
+    RgTexImage2D(RG_TEXTURE_2D, 0, RG_RGBA8, VRAM_WIDTH * scale, VRAM_HEIGHT * scale, 0, RG_RGBA, RG_UNSIGNED_BYTE,
                  NULL);
     RgTexParameteri(RG_TEXTURE_2D, RG_TEXTURE_MIN_FILTER, RG_LINEAR);
     RgTexParameteri(RG_TEXTURE_2D, RG_TEXTURE_MAG_FILTER, RG_LINEAR);
     RgGenFramebuffers(1, &framebuffer);
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
     RgFramebufferTexture2D(RG_FRAMEBUFFER, RG_COLOR_ATTACHMENT0, RG_TEXTURE_2D, colour, 0);
-    depthBuffer = DepthFor(PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT));
+    depthBuffer = DepthFor(VRAM_WIDTH * scale, VRAM_HEIGHT * scale);
     depthUse.written = 0;
     if (RgCheckFramebufferStatus(RG_FRAMEBUFFER) != RG_FRAMEBUFFER_COMPLETE) {
         SDL_Log("framebuffer incomplete at scale %d", scale);
@@ -335,7 +331,7 @@ int GpuInit(void)
     if (!CreateFramebuffer()) {
         return 0;
     }
-    RgViewport(0, 0, PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT));
+    RgViewport(0, 0, VRAM_WIDTH * scale, VRAM_HEIGHT * scale);
     RgClearColor(0, 0, 0, 1);
     RgClear(RG_COLOR_BUFFER_BIT);
     initialised = 1;
@@ -530,7 +526,7 @@ static int AllocateSceneAux(SceneAuxiliary *scene, int width, int withMotion)
         for (int band = 0; band < 2; band++) cameraMotion[band].revision = 0;
     }
     if (scene->unavailable) return 0;
-    int height = PixelY(VRAM_HEIGHT);
+    int height = VRAM_HEIGHT * scale;
     if (!ModernSurfaceResize(&scene->hdr, width, height, RENDER_RGBA16_FLOAT) ||
         !ModernSurfaceResize(&scene->mask, width, height, RENDER_RGBA8)) {
         FreeSceneAux(scene);
@@ -581,7 +577,7 @@ static void SeedSceneBands(SceneAuxiliary *scene, RgHandle sdr, unsigned bands, 
     for (int band = 0; band < 2; band++) {
         unsigned bit = 1u << band;
         if (!(bands & bit) || (scene->bands & bit)) continue;
-        int y = PixelY(band * 256), h = SpanY(band * 256, 256);
+        int y = band * 256 * scale, h = 256 * scale;
         SeedSceneRect(scene, sdr, 0, y, width, h);
         scene->bands |= bit;
     }
@@ -592,11 +588,11 @@ static void CopySceneCentre(SceneAuxiliary *source, SceneAuxiliary *dest, RgHand
     dest->bands &= source->bands;
     if (!source->bands || !AllocateSceneAux(dest, width, 0)) return;
     if (to) SeedSceneBands(dest, sdr, source->bands, width);
-    int across = PixelX(SCREEN_COLUMNS);
+    int across = SCREEN_COLUMNS * scale;
     for (int band = 0; band < 2; band++) {
         unsigned bit = 1u << band;
         if (!(source->bands & bit)) continue;
-        int y = PixelY(band * 256), h = SpanY(band * 256, 256);
+        int y = band * 256 * scale, h = 256 * scale;
         CopyPixels(source->hdr.target, dest->hdr.target, from, y, across, h, to);
         CopyPixels(source->mask.target, dest->mask.target, from, y, across, h, to);
         dest->bands |= bit;
@@ -617,11 +613,11 @@ static void SeedWrittenPicture(int x, int y, int w, int h)
         cameraMotion[band].revision = 0;
     }
     if (sceneAux.bands & bands)
-        SeedSceneRect(&sceneAux, framebuffer, PixelX(left), PixelY(y), SpanX(left, right - left), SpanY(y, h));
+        SeedSceneRect(&sceneAux, framebuffer, left * scale, y * scale, (right - left) * scale, h * scale);
     if (wideAux.bands & bands) {
         int whole = left == 0 && right == SCREEN_COLUMNS;
         int from = whole ? 0 : left + wideMargin, to = whole ? WideWidth() : right + wideMargin;
-        SeedSceneRect(&wideAux, wideFramebuffer, PixelX(from), PixelY(y), SpanX(from, to - from), SpanY(y, h));
+        SeedSceneRect(&wideAux, wideFramebuffer, from * scale, y * scale, (to - from) * scale, h * scale);
     }
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
 }
@@ -656,13 +652,13 @@ static void PrepareModernDraw(void)
         return;
     }
     if ((!resources.hdr && !resources.cameraBlur) || !GpuRaceWide() ||
-        !AllocateSceneAux(scene, PixelX(areaWide ? WideWidth() : VRAM_WIDTH), resources.cameraBlur)) {
+        !AllocateSceneAux(scene, (areaWide ? WideWidth() : VRAM_WIDTH) * scale, resources.cameraBlur)) {
         scene->bands &= ~bands;
         return;
     }
 
     SeedSceneBands(scene, areaWide ? wideFramebuffer : framebuffer, bands,
-                   PixelX(areaWide ? WideWidth() : SCREEN_COLUMNS));
+                   (areaWide ? WideWidth() : SCREEN_COLUMNS) * scale);
     RgHandle auxiliary[3] = {scene->hdr.texture, scene->mask.texture,
                              resources.cameraBlur && scene->velocity.width ? scene->velocity.texture : 0};
     RgGameAttachments(auxiliary, frame->settings.modern.bloom ? 8.0f : 1.0f);
@@ -677,9 +673,9 @@ static void SyncWide(void)
     RgBindFramebuffer(RG_READ_FRAMEBUFFER, wideFramebuffer);
     RgBindFramebuffer(RG_DRAW_FRAMEBUFFER, framebuffer);
     RgDisable(RG_SCISSOR_TEST);
-    RgBlitFramebuffer(PixelX(wideMargin), 0, PixelX(wideMargin + SCREEN_COLUMNS), PixelY(VRAM_HEIGHT), 0, 0,
-                      PixelX(SCREEN_COLUMNS), PixelY(VRAM_HEIGHT), RG_COLOR_BUFFER_BIT, RG_NEAREST);
-    CopySceneCentre(&wideAux, &sceneAux, framebuffer, PixelX(VRAM_WIDTH), PixelX(wideMargin), 0);
+    RgBlitFramebuffer(wideMargin * scale, 0, (wideMargin + SCREEN_COLUMNS) * scale, VRAM_HEIGHT * scale, 0, 0,
+                      SCREEN_COLUMNS * scale, VRAM_HEIGHT * scale, RG_COLOR_BUFFER_BIT, RG_NEAREST);
+    CopySceneCentre(&wideAux, &sceneAux, framebuffer, VRAM_WIDTH * scale, wideMargin * scale, 0);
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
     wideDirty = 0;
 }
@@ -690,9 +686,9 @@ static void ClearWideSides(int y, int h, float r, float g, float b)
     RgBindFramebuffer(RG_FRAMEBUFFER, wideFramebuffer);
     RgEnable(RG_SCISSOR_TEST);
     RgClearColor(r, g, b, 1.0f);
-    RgScissor(0, PixelY(y), PixelX(wideMargin), SpanY(y, h));
+    RgScissor(0, y * scale, wideMargin * scale, h * scale);
     RgClear(RG_COLOR_BUFFER_BIT);
-    RgScissor(PixelX(wideMargin + SCREEN_COLUMNS), PixelY(y), PixelX(wideMargin), SpanY(y, h));
+    RgScissor((wideMargin + SCREEN_COLUMNS) * scale, y * scale, wideMargin * scale, h * scale);
     RgClear(RG_COLOR_BUFFER_BIT);
     RgDisable(RG_SCISSOR_TEST);
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
@@ -710,8 +706,8 @@ static void CopyToWide(int x, int y, int w, int h)
     RgBindFramebuffer(RG_READ_FRAMEBUFFER, framebuffer);
     RgBindFramebuffer(RG_DRAW_FRAMEBUFFER, wideFramebuffer);
     RgDisable(RG_SCISSOR_TEST);
-    RgBlitFramebuffer(PixelX(left), PixelY(y), PixelX(right), PixelY(y + h), PixelX(left + wideMargin), PixelY(y),
-                      PixelX(right + wideMargin), PixelY(y + h), RG_COLOR_BUFFER_BIT, RG_NEAREST);
+    RgBlitFramebuffer(left * scale, y * scale, right * scale, (y + h) * scale, (left + wideMargin) * scale, y * scale,
+                      (right + wideMargin) * scale, (y + h) * scale, RG_COLOR_BUFFER_BIT, RG_NEAREST);
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
     if (left == 0 && right == SCREEN_COLUMNS) {
         ClearWideSides(y, h, 0, 0, 0);
@@ -764,20 +760,20 @@ static void SetWideMargin(int margin)
     if (margin) {
         RgGenTextures(1, &wideColour);
         RgBindTexture(RG_TEXTURE_2D, wideColour);
-        RgTexImage2D(RG_TEXTURE_2D, 0, RG_RGBA8, PixelX(WideWidth()), PixelY(VRAM_HEIGHT), 0, RG_RGBA, RG_UNSIGNED_BYTE,
+        RgTexImage2D(RG_TEXTURE_2D, 0, RG_RGBA8, WideWidth() * scale, VRAM_HEIGHT * scale, 0, RG_RGBA, RG_UNSIGNED_BYTE,
                      NULL);
         RgTexParameteri(RG_TEXTURE_2D, RG_TEXTURE_MIN_FILTER, RG_LINEAR);
         RgTexParameteri(RG_TEXTURE_2D, RG_TEXTURE_MAG_FILTER, RG_LINEAR);
         RgGenFramebuffers(1, &wideFramebuffer);
         RgBindFramebuffer(RG_FRAMEBUFFER, wideFramebuffer);
         RgFramebufferTexture2D(RG_FRAMEBUFFER, RG_COLOR_ATTACHMENT0, RG_TEXTURE_2D, wideColour, 0);
-        wideDepth = DepthFor(PixelX(WideWidth()), PixelY(VRAM_HEIGHT));
+        wideDepth = DepthFor(WideWidth() * scale, VRAM_HEIGHT * scale);
         wideDepthUse.written = 0;
         RgDisable(RG_SCISSOR_TEST);
         RgClearColor(0, 0, 0, 1);
         RgClear(RG_COLOR_BUFFER_BIT);
         CopyToWide(0, 0, SCREEN_COLUMNS, VRAM_HEIGHT);
-        CopySceneCentre(&sceneAux, &wideAux, wideFramebuffer, PixelX(WideWidth()), 0, PixelX(margin));
+        CopySceneCentre(&sceneAux, &wideAux, wideFramebuffer, WideWidth() * scale, 0, margin * scale);
     }
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
     areaWide = InScreenColumns(areaX, areaW) && areaX >= 0 && areaX + areaW <= SCREEN_COLUMNS;
@@ -831,21 +827,21 @@ static void BindTarget(void)
         int full = areaX == 0 && areaW == SCREEN_COLUMNS;
 
         RgBindFramebuffer(RG_FRAMEBUFFER, wideFramebuffer);
-        RgViewport(0, 0, PixelX(WideWidth()), PixelY(VRAM_HEIGHT));
+        RgViewport(0, 0, WideWidth() * scale, VRAM_HEIGHT * scale);
         RgEnable(RG_SCISSOR_TEST);
-        RgScissor(full ? 0 : PixelX(areaX + wideMargin), PixelY(areaY), (full ? PixelX(WideWidth()) : SpanX(areaX + wideMargin, areaW)),
-                  SpanY(areaY, areaH));
-        RgUniform2f(uniformTarget, PixelX(WideWidth()) / (float)scale, PixelY(VRAM_HEIGHT) / (float)scale);
-        RgUniform2f(uniformOrigin, -PixelX(wideMargin) / (float)scale, 0.0f);
+        RgScissor(full ? 0 : (areaX + wideMargin) * scale, areaY * scale, (full ? WideWidth() : areaW) * scale,
+                  areaH * scale);
+        RgUniform2f(uniformTarget, (float)WideWidth(), (float)VRAM_HEIGHT);
+        RgUniform2f(uniformOrigin, (float)-wideMargin, 0.0f);
         wideDirty = 1;
         drawnSincePresent |= !interpolatingDraw;
         return;
     }
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
-    RgViewport(0, 0, PixelX(VRAM_WIDTH), PixelY(VRAM_HEIGHT));
+    RgViewport(0, 0, VRAM_WIDTH * scale, VRAM_HEIGHT * scale);
     RgEnable(RG_SCISSOR_TEST);
-    RgScissor(PixelX(areaX), PixelY(areaY), SpanX(areaX, areaW), SpanY(areaY, areaH));
-    RgUniform2f(uniformTarget, PixelX(VRAM_WIDTH) / (float)scale, PixelY(VRAM_HEIGHT) / (float)scale);
+    RgScissor(areaX * scale, areaY * scale, areaW * scale, areaH * scale);
+    RgUniform2f(uniformTarget, (float)VRAM_WIDTH, (float)VRAM_HEIGHT);
     RgUniform2f(uniformOrigin, 0.0f, 0.0f);
     drawnSincePresent |= !interpolatingDraw;
 }
@@ -877,17 +873,18 @@ static void CopyDrawState(GpuDrawState *out, const GpuDrawState *in)
     }
 }
 
-static int SameLights(const GpuDrawState *a, const GpuDrawState *b)
+/* Modern lighting is per draw: a batch or command keeps one light set and shield glow. */
+static int SameLights(const struct GpuLightSet *a, const float aGlow[4], const struct GpuLightSet *b, const float bGlow[4])
 {
-    return !ModernEnabled() || (a->pointLights == b->pointLights &&
-        !memcmp(a->shieldGlow, b->shieldGlow, sizeof(a->shieldGlow)));
+    return !ModernEnabled() || (a == b && !memcmp(aGlow, bGlow, 4 * sizeof(*aGlow)));
 }
 
 static int SameState(const GpuDrawState *a, const GpuDrawState *b, int blend)
 {
     /* (the console's subtraction is a blend of its own; the opaque are drawn without blending, which is cheaper) */
     /* Filtered cutouts blend their edges but still write depth at full coverage. */
-    return (a->semi == 2) == (b->semi == 2) && blend == batchBlend && SameLights(a, b) &&
+    return (a->semi == 2) == (b->semi == 2) && blend == batchBlend &&
+           SameLights(a->pointLights, a->shieldGlow, b->pointLights, b->shieldGlow) &&
            (!ModernEnabled() || DepthPass(a) == DepthPass(b));
 }
 
@@ -1019,11 +1016,11 @@ static int OpaqueTextureRegion(const GpuDrawState *s, const int uv[4])
    modulation, texture windows and semi-transparency stay identical in the shader.
    Four-way buckets bound lookup work; a layer referenced by queued geometry is
    pinned until submission, with the original sampler as the overflow fallback. */
-static int DecodedLayer(const RenderVertex *v)
+static int DecodedLayer(const int16_t texture[4], int depth)
 {
-    uint64_t key = (uint64_t)(v->texture[0] & 1023) | (uint64_t)(v->texture[1] & 1023) << 10 |
-                   (uint64_t)(v->texture[2] & 1023) << 20 | (uint64_t)(v->texture[3] & 1023) << 30 |
-                   (uint64_t)(v->mode[2] & 3) << 40;
+    uint64_t key = (uint64_t)(texture[0] & 1023) | (uint64_t)(texture[1] & 1023) << 10 |
+                   (uint64_t)(texture[2] & 1023) << 20 | (uint64_t)(texture[3] & 1023) << 30 |
+                   (uint64_t)depth << 40;
     unsigned bucket = (unsigned)((key ^ (key >> 13) ^ (key >> 27)) * UINT64_C(0x9e3779b97f4a7c15) >> 58) * 4;
     int slot = -1;
     struct DecodedPage *page;
@@ -1039,9 +1036,9 @@ static int DecodedLayer(const RenderVertex *v)
     }
     if (slot < 0) return -1;
     page = &decodedPages[slot];
-    page->x = v->texture[0]; page->y = v->texture[1];
-    page->clutX = v->texture[2]; page->clutY = v->texture[3];
-    page->depth = v->mode[2] & 3;
+    page->x = texture[0]; page->y = texture[1];
+    page->clutX = texture[2]; page->clutY = texture[3];
+    page->depth = depth;
     for (int y = 0; y < 256; y++) {
         for (int x = 0; x < 256; x++) {
             int shift = page->depth ? 1 : 2, bits = page->depth ? 8 : 4;
@@ -1065,21 +1062,18 @@ static void DecodeBatch(void)
     if (!decodedCacheEnabled || HdTexActive()) return;
     const int modern = ModernEnabled();
     for (int i = 0; i < batchCount; i += 3) {
-        RenderVertex prefix, *v = &baselineBatch[i];
-        if (modern) { memcpy(&prefix, &batch[i], sizeof(prefix)); v = &prefix; }
-        if ((v->mode[0] & 3) && (v->mode[2] & 3) < 2 && !v->hd[2]) {
-            int layer = DecodedLayer(v);
-            if (layer >= 0) {
-                for (int k = 0; k < 3; k++) {
-                    if (modern) {
-                        batch[i+k].mode[0] = (batch[i+k].mode[0] & ~3) | 2;
-                        batch[i+k].texture[0] = (int16_t)layer;
-                    } else {
-                        v[k].mode[0] = (v[k].mode[0] & ~3) | 2;
-                        v[k].texture[0] = (int16_t)layer;
-                    }
-                }
-            }
+        /* (both vertex layouts share these fields; three corners carry the same texture) */
+        const int16_t *texture = modern ? batch[i].texture : baselineBatch[i].texture;
+        const uint8_t *mode = modern ? batch[i].mode : baselineBatch[i].mode;
+        const uint16_t *hd = modern ? batch[i].hd : baselineBatch[i].hd;
+        if (!(mode[0] & 3) || (mode[2] & 3) >= 2 || hd[2]) continue;
+        int layer = DecodedLayer(texture, mode[2] & 3);
+        if (layer < 0) continue;
+        for (int k = 0; k < 3; k++) {
+            uint8_t *cornerMode = modern ? batch[i + k].mode : baselineBatch[i + k].mode;
+            int16_t *cornerTexture = modern ? batch[i + k].texture : baselineBatch[i + k].texture;
+            cornerMode[0] = (cornerMode[0] & ~3) | 2;
+            cornerTexture[0] = (int16_t)layer;
         }
     }
 }
@@ -1215,8 +1209,7 @@ static void AppendCommand(DrawCommand *pending, DrawCommand next, int *pass, int
 {
     if (pending->count && pending->first + pending->count == next.first &&
         pending->pass == next.pass && pending->blend == next.blend &&
-        (!ModernEnabled() || (pending->state->pointLights == next.state->pointLights &&
-         !memcmp(pending->state->shieldGlow, next.state->shieldGlow, sizeof(next.state->shieldGlow))))) {
+        SameLights(pending->state->pointLights, pending->state->shieldGlow, next.state->pointLights, next.state->shieldGlow)) {
         pending->count += next.count;
     } else {
         ExecuteCommand(pending, pass, blend);
@@ -1242,7 +1235,6 @@ static void SubmitRanges(void)
         uniformRasterScale = RgGetUniformLocation(program, "rasterScale");
     }
     PrepareModernDraw();
-    RgGameGrid(1.0f, 1.0f);
     RgUseProgram(program);
     BindTarget();
     RgBindVertexArray(vertexArray);
@@ -1460,7 +1452,7 @@ static void FindHd(const GpuDrawState *state, const GpuVertex *vertices, int cou
     primitiveHdOpaque = 0;
     memset(primitiveHd, 0, sizeof(primitiveHd));
     if (!state->textured || state->depth > 3 ||
-        (state->depth != 3 && (!HdTexActive() || (scale == 1 && !RenderResourcesFor(RenderCurrent()).hdTexturesAtNativeScale)))) {
+        (state->depth != 3 && (!HdTexActive() || (scale == 1 && !ModernEnabled())))) {
         return;
     }
     for (i = 1; i < count; i++) {
@@ -1583,7 +1575,7 @@ static void Add(const GpuVertex *v, unsigned shade, float brightness, int pcTint
     out->window[1] = (uint8_t)primitiveState.windowMaskY;
     out->window[2] = (uint8_t)primitiveState.windowOffsetX;
     out->window[3] = (uint8_t)primitiveState.windowOffsetY;
-    out->mode[0] = (uint8_t)(primitiveState.textured | (primitiveState.filtered & 12) | (primitiveState.emission.enabled ? 16 : 0) |
+    out->mode[0] = (uint8_t)(primitiveState.textured | (primitiveState.emission.enabled ? 16 : 0) |
                             (primitiveState.screenOverlay ? 32 : 0) | (primitiveState.hullMotion ? 64 : 0) |
                             (primitiveState.sparkStreak ? 128 : 0));
     for (int i = 0; i < 4; i++) out->emission[i] = (int16_t)primitiveState.emission.uv[i];
@@ -1698,13 +1690,31 @@ static int FilteredTextureOpaque(const GpuDrawState *s, const GpuVertex *vertice
         top = SDL_min(top, v);
         bottom = SDL_max(bottom, v);
     }
-    float offset = filter == RENDER_BILINEAR ? 0.5f : 0.0f;
+    const float offset = 0.5f; /* (bilinear taps) */
     int maskX = s->n64 ? 0 : s->windowMaskX, maskY = s->n64 ? 0 : s->windowMaskY;
     if ((unsigned)maskX > 31 || (unsigned)maskY > 31) return 0;
     int uv[4];
     FilterAxis(left, right, offset, maskX, s->windowOffsetX, &uv[0], &uv[2]);
     FilterAxis(top, bottom, offset, maskY, s->windowOffsetY, &uv[1], &uv[3]);
     return OpaqueTextureRegion(s, uv);
+}
+
+/* A vertex as drawn: 2D without perspective, and widened over the wide picture's sides when it fills them. */
+SDL_FORCE_INLINE GpuVertex PlacedVertex(const GpuVertex *in, int perspective, int stretch, int backdrop)
+{
+    GpuVertex v = *in;
+    if (!perspective) {
+        v.w = 0.0f;
+    }
+    if (stretch) {
+        v.x = v.x * WideWidth() / SCREEN_COLUMNS - wideMargin;
+    } else if (backdrop) {
+        float zoom = (float)WideWidth() / SCREEN_COLUMNS, middle = areaY + areaH * 0.5f;
+
+        v.x = SCREEN_COLUMNS * 0.5f + (v.x - SCREEN_COLUMNS * 0.5f) * zoom;
+        v.y = middle + (v.y - middle) * zoom;
+    }
+    return v;
 }
 
 void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int count)
@@ -1768,22 +1778,21 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
     float brightness = 1.0f;
     if (frame) {
         RenderMaterial material = GpuMaterialFor(state, vertices, count);
-        faded.n64 = material.n64;
         primitiveFilterBounds[0] = primitiveFilterBounds[1] = 0;
         primitiveFilterBounds[2] = primitiveFilterBounds[3] = -1;
-        int bounds = frame->id == RENDER_MODERN && faded.textured && faded.depth < 3 &&
+        int bounds = faded.textured && faded.depth < 3 &&
             PortN64TextureInfo(faded.pageX, faded.pageY, faded.depth, faded.clutX, faded.clutY,
                                vertices[0].u, vertices[0].v, primitiveFilterBounds, &faded.textureFlags);
         faded.n64 = material.n64 = bounds || material.n64;
         int nativeBounds[4];
-        int native = frame->id == RENDER_MODERN && !material.ui && faded.textured && !faded.n64 &&
+        int native = !material.ui && faded.textured && !faded.n64 &&
                      NativeFilterBounds(state, vertices, count, nativeBounds);
         material.bounds = bounds || native;
         style = RenderPrepare(frame, &material);
         if (style.nativeBounds) memcpy(primitiveFilterBounds, nativeBounds, sizeof(nativeBounds));
-        faded.filtered = style.filter | (style.coverage << 2);
+        faded.filtered = style.filter;
         faded.screenOverlay = material.ui;
-        if (frame->id != RENDER_MODERN || !frame->settings.modern.weaponLights) {
+        if (!frame->settings.modern.weaponLights) {
             faded.pointLights = NULL;
             memset(faded.shieldGlow, 0, sizeof(faded.shieldGlow));
         }
@@ -1798,34 +1807,12 @@ void GpuTriangles(const GpuDrawState *given, const GpuVertex *vertices, int coun
     /* Separate loops let the baseline discard the unused vertex tail entirely. */
     if (!frame) {
         for (i = 0; i < count; i++) {
-            GpuVertex v = vertices[i];
-            if (!perspective) {
-                v.w = 0.0f;
-            }
-            if (stretch) {
-                v.x = v.x * WideWidth() / SCREEN_COLUMNS - wideMargin;
-            } else if (backdrop) {
-                float zoom = (float)WideWidth() / SCREEN_COLUMNS, middle = areaY + areaH * 0.5f;
-
-                v.x = SCREEN_COLUMNS * 0.5f + (v.x - SCREEN_COLUMNS * 0.5f) * zoom;
-                v.y = middle + (v.y - middle) * zoom;
-            }
+            GpuVertex v = PlacedVertex(&vertices[i], perspective, stretch, backdrop);
             AddExisting(&v);
         }
     } else {
         for (i = 0; i < count; i++) {
-            GpuVertex v = vertices[i];
-            if (!perspective) {
-                v.w = 0.0f;
-            }
-            if (stretch) {
-                v.x = v.x * WideWidth() / SCREEN_COLUMNS - wideMargin;
-            } else if (backdrop) {
-                float zoom = (float)WideWidth() / SCREEN_COLUMNS, middle = areaY + areaH * 0.5f;
-
-                v.x = SCREEN_COLUMNS * 0.5f + (v.x - SCREEN_COLUMNS * 0.5f) * zoom;
-                v.y = middle + (v.y - middle) * zoom;
-            }
+            GpuVertex v = PlacedVertex(&vertices[i], perspective, stretch, backdrop);
             Add(&v, style.shade, brightness, 0);
         }
     }
@@ -1895,7 +1882,7 @@ static void Clear(int x, int y, int w, int h, RgBits buffers, uint8_t r, uint8_t
     needed = NeededClear(&depthUse, x, y, w, h, buffers);
     if (needed) {
         RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
-        RgScissor(PixelX(x), PixelY(y), SpanX(x, w), SpanY(y, h));
+        RgScissor(x * scale, y * scale, w * scale, h * scale);
         RgClear(needed);
     }
     if (InScreenColumns(x, w) && wideFramebuffer) {
@@ -1906,7 +1893,7 @@ static void Clear(int x, int y, int w, int h, RgBits buffers, uint8_t r, uint8_t
         needed = NeededClear(&wideDepthUse, left, y, right - left, h, buffers);
         if (needed) {
             RgBindFramebuffer(RG_FRAMEBUFFER, wideFramebuffer);
-            RgScissor(PixelX(left), PixelY(y), SpanX(left, right - left), SpanY(y, h));
+            RgScissor(left * scale, y * scale, (right - left) * scale, h * scale);
             RgClear(needed);
         }
     }
@@ -1937,7 +1924,7 @@ void GpuCaptureCameraMotion(int x, int y, int w, int h, const GpuCameraMotion *m
     int band = y / 256, wide = wideMargin != 0;
     SceneAuxiliary *scene = wide ? &wideAux : &sceneAux;
     ModernMotion *snapshot = &cameraMotion[band];
-    RenderRect region = {0, PixelY(y), PixelX(wide ? WideWidth() : w), SpanY(y, h)};
+    RenderRect region = {0, y * scale, (wide ? WideWidth() : w) * scale, h * scale};
     if (hudOnly) {
         if (snapshot->revision && snapshot->pass + 1 == drawPass && snapshot->wide == wide &&
             !memcmp(&snapshot->region, &region, sizeof(region)))
@@ -1955,7 +1942,7 @@ void GpuCaptureCameraMotion(int x, int y, int w, int h, const GpuCameraMotion *m
                       RG_DEPTH_BUFFER_BIT, RG_NEAREST);
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
     snapshot->region = region;
-    snapshot->projection[0] = motion->centreX * (float)scale + (wide ? PixelX(wideMargin) : 0);
+    snapshot->projection[0] = motion->centreX * (float)scale + (wide ? wideMargin * scale : 0);
     snapshot->projection[1] = motion->centreY * (float)scale;
     snapshot->projection[2] = motion->focal * (float)scale;
     snapshot->projection[3] = motion->focal * (float)scale;
@@ -2002,7 +1989,7 @@ void GpuReadBack(int x, int y, int w, int h)
         RgBindFramebuffer(RG_READ_FRAMEBUFFER, framebuffer);
         RgBindFramebuffer(RG_DRAW_FRAMEBUFFER, small);
         RgDisable(RG_SCISSOR_TEST);
-        RgBlitFramebuffer(PixelX(x), PixelY(y), PixelX(x + w), PixelY(y + h), 0, 0, w, h, RG_COLOR_BUFFER_BIT,
+        RgBlitFramebuffer(x * scale, y * scale, (x + w) * scale, (y + h) * scale, 0, 0, w, h, RG_COLOR_BUFFER_BIT,
                           RG_NEAREST);
         RgBindFramebuffer(RG_READ_FRAMEBUFFER, small);
         RgReadPixels(0, 0, w, h, RG_RGBA, RG_UNSIGNED_BYTE, pixels);
@@ -2058,7 +2045,7 @@ void GpuWriteFramebuffer(int x, int y, int w, int h)
     RgFramebufferTexture2D(RG_READ_FRAMEBUFFER, RG_COLOR_ATTACHMENT0, RG_TEXTURE_2D, texture, 0);
     RgBindFramebuffer(RG_DRAW_FRAMEBUFFER, framebuffer);
     RgDisable(RG_SCISSOR_TEST);
-    RgBlitFramebuffer(0, 0, w, h, PixelX(x), PixelY(y), PixelX(x + w), PixelY(y + h), RG_COLOR_BUFFER_BIT, RG_NEAREST);
+    RgBlitFramebuffer(0, 0, w, h, x * scale, y * scale, (x + w) * scale, (y + h) * scale, RG_COLOR_BUFFER_BIT, RG_NEAREST);
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
     ClearDrawn(x, y, w, h);
     CopyToWide(x, y, w, h);
@@ -2083,13 +2070,13 @@ void GpuMoveFramebuffer(int x, int y, int w, int h, int toX, int toY)
     }
     RgBindFramebuffer(RG_READ_FRAMEBUFFER, framebuffer);
     RgBindTexture(RG_TEXTURE_2D, texture);
-    RgTexImage2D(RG_TEXTURE_2D, 0, RG_RGBA8, SpanX(x, w), SpanY(y, h), 0, RG_RGBA, RG_UNSIGNED_BYTE, NULL);
-    RgCopyTexSubImage2D(RG_TEXTURE_2D, 0, 0, 0, PixelX(x), PixelY(y), SpanX(x, w), SpanY(y, h));
+    RgTexImage2D(RG_TEXTURE_2D, 0, RG_RGBA8, w * scale, h * scale, 0, RG_RGBA, RG_UNSIGNED_BYTE, NULL);
+    RgCopyTexSubImage2D(RG_TEXTURE_2D, 0, 0, 0, x * scale, y * scale, w * scale, h * scale);
     RgBindFramebuffer(RG_READ_FRAMEBUFFER, readFramebuffer);
     RgFramebufferTexture2D(RG_READ_FRAMEBUFFER, RG_COLOR_ATTACHMENT0, RG_TEXTURE_2D, texture, 0);
     RgBindFramebuffer(RG_DRAW_FRAMEBUFFER, framebuffer);
     RgDisable(RG_SCISSOR_TEST);
-    RgBlitFramebuffer(0, 0, SpanX(x, w), SpanY(y, h), PixelX(toX), PixelY(toY), PixelX(toX + w), PixelY(toY + h),
+    RgBlitFramebuffer(0, 0, w * scale, h * scale, toX * scale, toY * scale, (toX + w) * scale, (toY + h) * scale,
                       RG_COLOR_BUFFER_BIT, RG_NEAREST);
     RgBindFramebuffer(RG_FRAMEBUFFER, framebuffer);
     /* both copies now agree in the destination */
@@ -2127,7 +2114,7 @@ static void BarColour(int x, int y, int h, float colour[3])
 {
     static uint8_t *pixels;
     static size_t size;
-    size_t need = (size_t)SpanY(y, h) * 4;
+    size_t need = (size_t)h * scale * 4;
     size_t i;
 
     colour[0] = colour[1] = colour[2] = 0;
@@ -2137,7 +2124,7 @@ static void BarColour(int x, int y, int h, float colour[3])
     }
     RgBindFramebuffer(RG_READ_FRAMEBUFFER, framebuffer);
     RgPixelStorei(RG_PACK_ALIGNMENT, 4);
-    RgReadPixels(PixelX(x), PixelY(y), 1, SpanY(y, h), RG_RGBA, RG_UNSIGNED_BYTE, pixels);
+    RgReadPixels(x * scale, y * scale, 1, h * scale, RG_RGBA, RG_UNSIGNED_BYTE, pixels);
     for (i = 4; i < need; i += 4) {
         if (memcmp(pixels + i, pixels, 3) != 0) {
             return;
@@ -2234,8 +2221,8 @@ static void BlitPicture(int wide, int left, int top, int right, int bottom, RgHa
     RgHandle picture;
     RgHandle sourceFramebuffer = wide ? wideFramebuffer : framebuffer;
     RgHandle sourceColour = wide ? wideColour : colour;
-    int band = top < PixelY(256) ? 0 : 1;
-    int acrossBands = band == 0 && bottom > PixelY(256);
+    int band = top < 256 * scale ? 0 : 1;
+    int acrossBands = band == 0 && bottom > 256 * scale;
     uint64_t revision = pictureOwners[band].revision;
     const RenderFrame *profile = revision ? &pictureOwners[band].profile : RenderCurrent();
     const SceneAuxiliary *scene = wide ? &wideAux : &sceneAux;
@@ -2243,7 +2230,7 @@ static void BlitPicture(int wide, int left, int top, int right, int bottom, RgHa
     const ModernSurface *modern = NULL;
     int cropLeft = wide ? 0 : left;
     if (profile->id == RENDER_MODERN && pictureOwners[band].race &&
-        (scene->bands & bands) == bands && (wide || right <= PixelX(SCREEN_COLUMNS))) {
+        (scene->bands & bands) == bands && (wide || right <= SCREEN_COLUMNS * scale)) {
         const ModernMotion *motion = &cameraMotion[band];
         if (acrossBands || motion->revision != revision || motion->wide != wide ||
             motion->region.y != top || motion->region.h != bottom - top)
@@ -2251,7 +2238,7 @@ static void BlitPicture(int wide, int left, int top, int right, int bottom, RgHa
         ModernPicture input = {
             sourceColour, scene->hdr.texture, scene->mask.texture, scene->velocity.texture,
             acrossBands ? SDL_max(revision, pictureOwners[1].revision) : revision,
-            {cropLeft, top, (wide ? PixelX(WideWidth()) : right) - cropLeft, bottom - top},
+            {cropLeft, top, (wide ? WideWidth() * scale : right) - cropLeft, bottom - top},
             motion, scale
         };
         modern = ModernResolvePicture(&input, &profile->settings.modern);
@@ -2360,9 +2347,9 @@ static void Present(int x, int y, int w, int h, int interpolated)
         if (!wide) {
             SyncWide();
         }
-        left = wide ? PixelX((float)(WideWidth() - across) / 2) : PixelX(x);
-        right = wide ? PixelX(WideWidth()) - left : PixelX(x + w);
-        BlitPicture(wide, left, PixelY(y), right, PixelY(y + h), windowFramebuffer,
+        left = wide ? (int)SDL_lround((WideWidth() - across) / 2 * scale) : x * scale;
+        right = wide ? WideWidth() * scale - left : (x + w) * scale;
+        BlitPicture(wide, left, y * scale, right, (y + h) * scale, windowFramebuffer,
                     outX, outY + outH, outX + outW, outY);
         if (!wide && portSettings.widescreen && outX > 0) {
             float colour[3];
@@ -2399,7 +2386,6 @@ static void SetScale(int newScale)
     RgHandle oldColour = colour, oldFramebuffer = framebuffer, oldDepth = depthBuffer;
     DepthUse oldDepthUse = depthUse;
     int oldScale = scale, margin = wideMargin;
-    int oldW = PixelX(VRAM_WIDTH), oldH = PixelY(VRAM_HEIGHT);
 
     Flush();
     SetWideMargin(0); /* (its middle into video memory's first) */
@@ -2423,8 +2409,8 @@ static void SetScale(int newScale)
         RgBindFramebuffer(RG_READ_FRAMEBUFFER, oldFramebuffer);
         RgBindFramebuffer(RG_DRAW_FRAMEBUFFER, framebuffer);
         RgDisable(RG_SCISSOR_TEST);
-        RgBlitFramebuffer(0, 0, oldW, oldH, 0, 0, PixelX(VRAM_WIDTH),
-                          PixelY(VRAM_HEIGHT), RG_COLOR_BUFFER_BIT, PixelX(VRAM_WIDTH) < oldW || PixelY(VRAM_HEIGHT) < oldH ? RG_LINEAR : RG_NEAREST);
+        RgBlitFramebuffer(0, 0, VRAM_WIDTH * oldScale, VRAM_HEIGHT * oldScale, 0, 0, VRAM_WIDTH * scale,
+                          VRAM_HEIGHT * scale, RG_COLOR_BUFFER_BIT, scale < oldScale ? RG_LINEAR : RG_NEAREST);
         RgDeleteFramebuffers(1, &oldFramebuffer);
         RgDeleteTextures(1, &oldColour);
         RgDeleteRenderbuffers(1, &oldDepth);
@@ -2493,7 +2479,7 @@ uint8_t *GpuReadArea(int x, int y, int w, int h, int *outW, int *outH)
 {
     static uint8_t *pixels;
     static size_t size;
-    size_t need = (size_t)SpanX(x, w) * SpanY(y, h) * 4;
+    size_t need = (size_t)w * scale * h * scale * 4;
 
     Flush();
     SyncWide();
@@ -2503,10 +2489,10 @@ uint8_t *GpuReadArea(int x, int y, int w, int h, int *outW, int *outH)
     }
     RgBindFramebuffer(RG_READ_FRAMEBUFFER, framebuffer);
     RgPixelStorei(RG_PACK_ALIGNMENT, 4);
-    RgReadPixels(PixelX(x), PixelY(y), SpanX(x, w), SpanY(y, h), RG_RGBA, RG_UNSIGNED_BYTE, pixels);
+    RgReadPixels(x * scale, y * scale, w * scale, h * scale, RG_RGBA, RG_UNSIGNED_BYTE, pixels);
     RgBindFramebuffer(RG_FRAMEBUFFER, windowFramebuffer);
-    *outW = SpanX(x, w);
-    *outH = SpanY(y, h);
+    *outW = w * scale;
+    *outH = h * scale;
     return pixels;
 }
 
@@ -2540,8 +2526,8 @@ static void ScalePicture(int x, int y, int w, int h, int margin, int outW, int o
         smallH = outH;
     }
     RgDisable(RG_SCISSOR_TEST);
-    BlitPicture(wide, wide ? 0 : PixelX(x), PixelY(y), PixelX(wide ? WideWidth() : x + w),
-                PixelY(y + h), small, 0, 0, outW, outH);
+    BlitPicture(wide, wide ? 0 : x * scale, y * scale, (wide ? WideWidth() : x + w) * scale,
+                (y + h) * scale, small, 0, 0, outW, outH);
     RgBindFramebuffer(RG_READ_FRAMEBUFFER, small);
     RgPixelStorei(RG_PACK_ALIGNMENT, 4);
 }
@@ -2601,8 +2587,8 @@ void GpuPresentSplit(int x, int y, int w, int h, const uint8_t *lower, int lower
     /* the upper half: this game's band (OpenGL's rows go up: the upper half is from height / 2), its pixels as wide
        as the console's are (PAL's 256 lines across the same 4:3 screen: wider than tall) */
     Fit(0, height - height / 2, width, height / 2, across * GPU_LINES, h * 240, &ox, &oy, &ow, &oh);
-    BlitPicture(wide, wide ? 0 : PixelX(x), PixelY(y), PixelX(wide ? across : x + w),
-                PixelY(y + h), windowFramebuffer, ox, oy + oh, ox + ow, oy);
+    BlitPicture(wide, wide ? 0 : x * scale, y * scale, (wide ? across : x + w) * scale,
+                (y + h) * scale, windowFramebuffer, ox, oy + oh, ox + ow, oy);
     /* the lower half: the other game's band, as it read it (rows from the bottom) */
     if (lower && lowerW > 0 && lowerH > 0) {
         if (!texture) {

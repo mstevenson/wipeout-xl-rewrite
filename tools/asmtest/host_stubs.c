@@ -40,7 +40,7 @@ void PortTagSparkStreak(const LINE_G2 *line) { abort(); }
 void PortShipPackets(int ship, const void *start, const void *end, const CVECTOR *roadLight) { abort(); }
 void PortTagPrims(const void *start, const void *end, const char *what, const char *name, int index) {}
 void PortTagObjectPrims(const void *start, const void *end, const char *what, const char *name,
-                        uint32_t assetTag, int index, const int position[3]) {}
+                        int index, const int position[3]) {}
 /* These are linked for unreachable near-plane extensions. */
 void SetPolyG3(POLY_G3 *p) { abort(); }
 void SetPolyG4(POLY_G4 *p) { abort(); }

@@ -1550,6 +1550,7 @@ static void CutTriangle(const GpuDrawState *draw, const CutCorner *in, int back,
     }
     for (i = 1; i + 1 < cut; i++) {
         GpuVertex triangle[3] = {out[0].v, out[i].v, out[i + 1].v};
+
         GpuTriangles(draw, triangle, 3);
     }
 }
@@ -1581,7 +1582,6 @@ static int NearCut(const GpuDrawState *draw, const GpuVertex *v, int count)
     if (ModernEnabled()) {
         RenderMaterial material = GpuMaterialFor(draw, v, count);
         material.ui = 0;
-        material.perspective = 1;
         style = RenderPrepare(RenderCurrent(), &material);
     }
     CutTriangle(draw, &in[0], 0, style.shade);
@@ -1609,7 +1609,6 @@ static void TextureFromPage(GpuDrawState *draw, uint32_t page)
     draw->pageX = (int)(page & 0xF) * 64;
     draw->pageY = (int)((page >> 4) & 1) * 256 + (int)((page >> 11) & 1) * VRAM_HEIGHT; /* (the second half: gpu.h) */
     draw->depth = (int)((page >> 7) & 3);
-
 }
 
 static void StateFor(GpuDrawState *draw, int textured, int semi, int raw)
@@ -1628,7 +1627,6 @@ static void StateFor(GpuDrawState *draw, int textured, int semi, int raw)
     draw->windowOffsetY = state.windowOffsetY;
     draw->dither = (state.texpage >> 9) & 1;
     TextureFromPage(draw, state.texpage);
-    if (!textured) draw->n64 = 0;
 }
 
 /* The console's GPU skips triangles wider than 1023 or taller than 511
@@ -1757,16 +1755,15 @@ static void Polygon(const uint32_t *w, uint32_t code)
     }
     StateFor(&draw, textured, semi, raw);
     const int modern = ModernEnabled();
-    RenderPacketPolicy policy = {0};
+    const int smoothTrack = modern && RenderCurrent()->settings.modern.smoothTrackLighting;
     if (modern) {
-        policy = RenderPacketPolicyFor(RenderCurrent());
         if (textured && ModernPacketEmission(w - 1, &draw.emission) && draw.emission.whiteOnly &&
             (v[0].r != 255 || v[0].g != 255 || v[0].b != 255)) draw.emission.enabled = 0;
         draw.hullMotion = HullMotion(w - 1, v, count);
         draw.pointLights = !ShadowPacket(w) ? &drawnLights : NULL;
         if (draw.pointLights && draw.semi < 0 && !draw.raw) ShieldHullGlow(w - 1, draw.shieldGlow);
         uint32_t trackColours[4];
-        if (policy.smoothTrackLighting && quad && textured && !raw && !gouraud &&
+        if (smoothTrack && quad && textured && !raw && !gouraud &&
             ModernPacketTrack(w - 1, trackColours)) {
             draw.smoothTrackLighting = 1;
             for (i = 0; i < count; i++) ColourRgb(&v[i], trackColours[i]);
@@ -1780,8 +1777,8 @@ static void Polygon(const uint32_t *w, uint32_t code)
         if (semi && (page & 0x1000)) draw.semi = 4;
         draw.clutX = (int)(clut & 0x3F) * 16;
         draw.clutY = (int)((clut >> 6) & 0x3FF); /* (bit 15: a palette in the second half, gpu.h) */
-        draw.trackTile = policy.smoothTrackLighting && TrackPacket(w);
-        if (!draw.trackTile && policy.smoothTrackLighting && !raw && !gouraud) {
+        draw.trackTile = smoothTrack && TrackPacket(w);
+        if (!draw.trackTile && smoothTrack && !raw && !gouraud) {
             BlendShipLight(w - 1, v, count);
         }
     }
@@ -2556,8 +2553,7 @@ void PsxDrawInterpolatedTest(int k, int n)
 static float CameraShutterFraction(void)
 {
     /* Fixed-step runs advance two emulated fields per game frame. */
-    float seconds = RenderResourcesFor(RenderCurrent()).motionShutterSeconds;
-    return seconds * (portConfig.fixedStep ? (portPal ? 25.0f : 30000.0f / 1001.0f)
+    return MODERN_SHUTTER_SECONDS * (portConfig.fixedStep ? (portPal ? 25.0f : 30000.0f / 1001.0f)
                                            : 1.0e9f / (float)frameTicks);
 }
 

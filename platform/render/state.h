@@ -80,7 +80,6 @@ int RgGetUniformLocation(RgHandle program, const char *name);
 void RgUseProgram(RgHandle program);
 void RgLighting(const RenderLighting *lighting);
 void RgGameAttachments(const RgHandle auxiliary[3], float sparkGain);
-void RgGameGrid(float x, float y);
 int RgAllocateImage(RgHandle handle, int width, int height, RenderFormat format);
 /* Call after the last use of a scratch image that will be overwritten before reuse. */
 void RgDiscardImageContents(RgHandle handle);

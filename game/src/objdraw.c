@@ -370,7 +370,7 @@ static char *DrawTexturedQuad(DrawKind kind, char *out, u_long *ordering, int fi
 static int GouraudColours(DrawKind kind)
 {
     if (kind == DRAW_LIT) return 1;
-    if (kind != DRAW_FIXED && !(ModernEnabled() && PortRenderGeometry().originalSceneryColours && kind == DRAW_PLAIN))
+    if (kind != DRAW_FIXED && !(ModernEnabled() && kind == DRAW_PLAIN))
         return 0;
     return PortOriginalLooks();
 }
@@ -884,7 +884,7 @@ static int DrawClippedPrimitive(Object *object, int index, u_long *ordering, Pol
     }
     /* Port: tag the emitted packet with the model identity from the synthetic PRM. */
     if (ModernEnabled())
-        PortTagObjectPrims(start, out, kind == DRAW_FIXED ? "clipped sky" : "near object", object->name, object->scratch, index,
+        PortTagObjectPrims(start, out, kind == DRAW_FIXED ? "clipped sky" : "near object", object->name, index,
                            object->skeleton->relative.t);
     else PortTagPrims(start, out, kind == DRAW_FIXED ? "clipped sky" : "near object", object->name, index);
     return 1;
@@ -892,11 +892,10 @@ static int DrawClippedPrimitive(Object *object, int index, u_long *ordering, Pol
 
 /* Port: only imported road RGB8 needs conversion for PS1-scaled object lighting.
    Gameplay-authored pad colours already use PS1 tint, even on an imported track. */
-static CVECTOR ObjectLight(const Object *object, const CVECTOR *colour, RenderGeometry geometry)
+static CVECTOR ObjectLight(const Object *object, const CVECTOR *colour)
 {
     CVECTOR result = *colour;
-    if (geometry.lightFormat == RENDER_LIGHT_PS1 && PortOriginalTrackIs64() &&
-        colour->cd == RENDER_LIGHT_RGB8) {
+    if (PortOriginalTrackIs64() && colour->cd == RENDER_LIGHT_RGB8) {
         result.r = PortN64Modulation(colour->r);
         result.g = PortN64Modulation(colour->g);
         result.b = PortN64Modulation(colour->b);
@@ -933,14 +932,13 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
     unsigned char *drawnFlags = NULL;
     const unsigned char *skip = NULL;
     CVECTOR compatibleLight;
-    const RenderGeometry geometry = PortRenderGeometry();
     int     ship = kind == DRAW_LIT ? nextInstance : -1;
     int     gouraud = GouraudTextured(kind, object);
     char   *firstPacket;
 
     /* Port: colour.cd carries the track face's light format, not its texture identity. */
     if (modernArena && kind == DRAW_LIT && colour) {
-        compatibleLight = ObjectLight(object, colour, geometry);
+        compatibleLight = ObjectLight(object, colour);
         colour = &compatibleLight;
     }
 
@@ -950,7 +948,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         /* the primitives the game handled (scenery; a ship model can serve several ships) */
         skip = kind == DRAW_LIT ? NULL : PortFarObjectDrawn(object, &complete);
         /* the largest packet per primitive, in the far view's own memory */
-        out = PortFarAlloc(((u_short)object->primitiveCount) * (int)sizeof(POLY_GT4));
+        out = PortFarAlloc((u_short)object->primitiveCount * (int)sizeof(POLY_GT4));
         if (!out) {
             return;
         }
@@ -1023,7 +1021,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             if (kind == DRAW_FIXED) {
                 goto finished;
             }
-            if (geometry.worldBillboards) { /* Port: 3D billboard geometry is independent of lighting/depth toggles. */
+            if (modernArena) { /* Port: 3D billboard geometry is independent of lighting/depth toggles. */
                 out = DrawWorldSprite(object, index, out, ordering, prim.spr);
             } else {
                 out = DrawSprite(kind, out, ordering, roll, prim.spr, prim.prim->type == TypeTSPR);
@@ -1041,14 +1039,14 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         }
         /* Port: recorder identity and source placement for renderer material tags. */
         if (modernArena)
-            PortTagObjectPrims(before, out, farView ? "far object" : "object", object->name, object->scratch, index,
+            PortTagObjectPrims(before, out, farView ? "far object" : "object", object->name, index,
                                object->skeleton->relative.t);
         else PortTagPrims(before, out, farView ? "far object" : "object", object->name, index);
         index++;
     } while (--count > 0);
 finished:
     /* Port: shield compositing and, with smooth track lighting, tint between game frames. */
-    if (modernArena && ship >= 0) PortShipPackets(ship, firstPacket, out, geometry.smoothTrackLighting ? colour : NULL);
+    if (modernArena && ship >= 0) PortShipPackets(ship, firstPacket, out, PortRenderGeometry().smoothTrackLighting ? colour : NULL);
     if (modernArena) GteSetN64(0); /* Port: subsequent PS1 projections keep their own material identity. */
     forceReject = 0;
     if (farView || modernArena) {

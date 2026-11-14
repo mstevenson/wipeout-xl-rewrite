@@ -315,7 +315,6 @@ struct ModernGameOut {
     float4 position [[position]];
     float4 vColour;
     float4 vTexel;
-    float3 vPixel;
     int semiMode [[flat]];
     int hudColourOverlay [[flat]];
     int4 texturePage [[flat]];
@@ -334,9 +333,7 @@ vertex ModernGameOut ModerngameVertex(ModernGameIn a [[stage_in]], constant Mode
 {
     ModernGameOut o;
     float w = a.position.z != 0.0 ? abs(a.position.z) : 1.0;
-    float2 grid = u.effect[0].yz;
-    float2 pixel = (a.mode.y & 128u) != 0u ? floor(a.position.xy * grid) / grid : a.position.xy;
-    float2 ndc = (pixel - float2(u.originX, u.originY)) / float2(u.targetX, u.targetY) * 2.0 - 1.0;
+    float2 ndc = (a.position.xy - float2(u.originX, u.originY)) / float2(u.targetX, u.targetY) * 2.0 - 1.0;
     float pull = u.depthPass == 1 || (a.mode.w & 1u) == 1u ? 1.0 : u.depthPull;
     float z = a.position.z > 0.0 ? w - pull : (u.depthPass == 1 ? w : 0.0);
     o.position = float4(ndc.x * w, (u.window ? ndc.y : -ndc.y) * w, z, w);
@@ -346,14 +343,13 @@ vertex ModernGameOut ModerngameVertex(ModernGameIn a [[stage_in]], constant Mode
     o.emission = a.emission;
     o.vColour = float4(a.colour.rgb * colourWeight, a.colour.a);
     o.vTexel = (a.mode.y & 32u) != 0u ? float4(a.texel * w, w, colourWeight) : float4(a.texel, 1.0, colourWeight);
-    o.vPixel = float3(pixel * w, w);
     o.texturePage = int4(a.page.xy, 0, 0);
     o.clut = int4(a.page.zw, 0, 0);
     o.semiMode = int(a.mode.w >> 4u) - 1;
     o.hudColourOverlay = int((a.mode.w >> 1u) & 1u);
     o.vWindow = int4(a.window);
     o.mode = int4(int(a.mode.x & 3u), int(a.mode.y), u.pass, int(a.mode.z & 3u));
-    o.material = int((a.mode.w >> 2u) & 3u) | (int(a.mode.z >> 2u) << 2) | (int(a.mode.x >> 4u) << 8) | (int((a.mode.x >> 2u) & 3u) << 12);
+    o.material = int((a.mode.w >> 2u) & 3u) | (int(a.mode.z >> 2u) << 2) | (int(a.mode.x >> 4u) << 8);
     o.filterBounds = a.filterBounds;
     o.hd = a.hd;
     o.hdTexels = a.hdTexels;
@@ -397,7 +393,7 @@ float ModernOutputDither(float2 p)
     return (a + b - 1.0) / 255.0;
 }
 float4 ModernOutput(float3 col, float cov, bool blended, ModernGameOut in, bool saturate,
-              float gain, bool hdr, float2 grid, thread ModernGameAux &aux)
+              float gain, bool hdr, thread ModernGameAux &aux)
 {
     float4 result;
     float3 unclamped = col;
@@ -419,18 +415,6 @@ float4 ModernOutput(float3 col, float cov, bool blended, ModernGameOut in, bool 
         discard_fragment();
     if (mode.z == 2 && !blended)
         discard_fragment();
-    int coverageMode = (in.material >> 12) & 3;
-    if (coverageMode != 0 && blended && semiMode != 2) {
-        if (semiMode != 0 && all(col == float3(0.0))) discard_fragment();
-        if (coverageMode == 2) {
-            int2 dot = int2(floor(in.vPixel.xy / in.vPixel.z * grid));
-            if (((dot.x + dot.y) & 1) != 0) discard_fragment();
-        } else {
-            col *= 0.5;
-            cov *= 0.5;
-        }
-        if (semiMode == 0) blended = false;
-    }
     col *= fade;
     cov *= fade;
     /* Without HDR this target is the picture; the HDR resolve dithers its own output. */
@@ -526,31 +510,24 @@ float3 ModernLightMaterial(float3 c, float3 albedo, float coverage, float3 illum
     return mix(lit * 12.92, 1.055 * pow(lit, float3(1.0 / 2.4)) - 0.055, step(float3(0.0031308), lit)) * coverage;
 }
 float4 ModernFiltered(ModernGameOut in, texture2d<uint> vram, texture2d_array<uint> decoded, texture2d<float> hdAtlas,
-                float2 uv, float3 tint, int kind, bool useHd, float3 illumination,
+                float2 uv, float3 tint, bool useHd, float3 illumination,
                 float gain, bool hdr, thread ModernGameAux &aux) {
     uint4 hd = in.hd;
     int4 hdTexels = in.hdTexels, mode = in.mode;
     int semiMode = in.semiMode;
     float2 size = float2(hd.zw), nativeSize = float2(hdTexels.zw);
-    float2 at = uv - (kind == 2 ? 0.5 : 0.0);
+    float2 at = uv - 0.5;
     if (useHd) {
         float2 into = float2(SampleUV(in, int2(floor(uv))) - hdTexels.xy) + fract(uv);
-        at = (into + (kind == 1 ? 0.5 : 0.0)) * size / nativeSize - 0.5;
+        at = into * size / nativeSize - 0.5;
     }
     float2 f = fract(at);
     int2 base = int2(floor(at));
     float4 opaque = float4(0.0), semi = float4(0.0);
-    if (kind == 1) f = floor(f * 32.0) / 32.0;
-    bool upper = f.x + f.y >= 1.0;
     for (int tap = 0; tap < 4; tap++) {
-        if (kind == 1 && tap == 3) break;
         int2 offset = int2(tap & 1, tap >> 1);
         float2 weights = mix(1.0 - f, f, float2(offset));
         float weight = weights.x * weights.y;
-        if (kind == 1) {
-            if (tap == 0) offset = upper ? int2(1) : int2(0);
-            weight = (upper ? float3(f.x + f.y - 1.0, 1.0 - f.y, 1.0 - f.x) : float3(1.0 - f.x - f.y, f.x, f.y))[tap];
-        }
         int2 p = base + offset;
         float4 texel = useHd ? hdAtlas.read(uint2(int2(hd.xy) + clamp(p, int2(0), int2(hd.zw) - 1)))
                            : ModernReadTexel(in, vram, decoded, SampleUV(in, p));
@@ -606,7 +583,7 @@ float4 ModernShadeGame(ModernGameOut in, constant ModernUniforms &u, texture2d<u
     float3 illumination = ModernSurfaceLighting(in, u);
     float3 c = vColour.rgb / in.vTexel.w;
     if (mode.x == 0) {
-        return ModernOutput(ModernLightMaterial(c, c, 1.0, illumination), 1.0, semiMode >= 0, in, false, gain, hdr, u.effect[0].yz, aux);
+        return ModernOutput(ModernLightMaterial(c, c, 1.0, illumination), 1.0, semiMode >= 0, in, false, gain, hdr, aux);
     }
     float2 t = vTexel.xy;
     int portPage = texturePage.x / 64 + 16 * ((texturePage.y / 256) & 1) + (texturePage.y >= 512 ? 32 : 0);
@@ -618,14 +595,14 @@ float4 ModernShadeGame(ModernGameOut in, constant ModernUniforms &u, texture2d<u
         float4 g = portPages.sample(portSampler, at / float2(2048.0, 2048.0));
         if (g.a < 0.004)
             discard_fragment();
-        return ModernOutput((mode.y & 1) == 0 ? g.rgb * c : g.rgb, g.a, semiMode >= 0, in, false, gain, hdr, u.effect[0].yz, aux);
+        return ModernOutput((mode.y & 1) == 0 ? g.rgb * c : g.rgb, g.a, semiMode >= 0, in, false, gain, hdr, aux);
     }
     if (mode.w == 3) {
         float4 g = glyphs.sample(glyphSampler, t / 256.0);
         if (g.a < 0.004)
             discard_fragment();
         float3 rgb = (mode.y & 1) == 0 ? min(g.rgb * c * (255.0 / 128.0), float3(g.a)) : g.rgb;
-        return ModernOutput(rgb, g.a, semiMode >= 0, in, false, gain, hdr, u.effect[0].yz, aux);
+        return ModernOutput(rgb, g.a, semiMode >= 0, in, false, gain, hdr, aux);
     }
     float3 tint = (mode.y & 1) != 0 ? float3(1.0)
         : c * (((mode.y & 64) != 0 || (in.material & 64) != 0) && (in.material & 32) == 0 ? 1.0 : 255.0 / 128.0);
@@ -633,7 +610,7 @@ float4 ModernShadeGame(ModernGameOut in, constant ModernUniforms &u, texture2d<u
     float2 into = float2(uv - hdTexels.xy) + fract(t);
     bool useHd = hd.z > 0u && all(into >= float2(0.0)) && all(into < float2(hdTexels.zw));
     if ((in.material & 3) != 0 && semiMode != 4) {
-        return ModernFiltered(in, vram, decoded, hdAtlas, t, tint, in.material & 3, useHd, illumination, gain, hdr, aux);
+        return ModernFiltered(in, vram, decoded, hdAtlas, t, tint, useHd, illumination, gain, hdr, aux);
     }
     float4 texel;
     if (useHd) {
@@ -644,7 +621,7 @@ float4 ModernShadeGame(ModernGameOut in, constant ModernUniforms &u, texture2d<u
     }
     if (texel.a < 0.25) discard_fragment();
     bool semi = (mode.y & 64) != 0 || texel.a < 0.75;
-    return ModernOutput(ModernLightMaterial(texel.rgb * tint, texel.rgb, 1.0, illumination), 1.0, semiMode >= 0 && semi, in, true, gain, hdr, u.effect[0].yz, aux);
+    return ModernOutput(ModernLightMaterial(texel.rgb * tint, texel.rgb, 1.0, illumination), 1.0, semiMode >= 0 && semi, in, true, gain, hdr, aux);
 }
 struct ModernGameHdrResult {
     float4 sdr [[color(0)]], hdr [[color(1)]], mask [[color(2)]];

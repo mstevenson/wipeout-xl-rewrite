@@ -1157,7 +1157,7 @@ int HdTexActive(void)
     static int tried;
 
     /* Modern draws the chosen pack whenever there is one; the setting governs the existing renderer. */
-    if (!portSettings.hdTextures && !(ModernEnabled() && RenderResourcesFor(RenderCurrent()).hdTexturesAlways)) {
+    if (!portSettings.hdTextures && !ModernEnabled()) {
         return 0;
     }
     if (!tried) {
