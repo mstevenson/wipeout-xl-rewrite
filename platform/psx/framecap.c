@@ -978,10 +978,11 @@ static void Shade(const FrameCapPrim *p, const GpuVertex *t[3], const float l[3]
         h->texel = texel;
         h->transparent = texel == 0;
         {
+            float neutral = p->draw.n64Tint ? 255.0f : 128.0f;
             float t8[3] = {(texel & 31) * 8.0f, ((texel >> 5) & 31) * 8.0f, ((texel >> 10) & 31) * 8.0f};
             for (i = 0; i < 3; i++) {
                 if (!p->draw.raw) {
-                    t8[i] = SDL_min(t8[i] * c[i] / 128.0f, 255.0f);
+                    t8[i] = SDL_min(t8[i] * c[i] / neutral, 255.0f);
                 }
             }
             h->r = t8[0];

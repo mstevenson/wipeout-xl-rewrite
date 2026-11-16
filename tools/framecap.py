@@ -28,6 +28,7 @@ DRAW_FIELDS = ('textured', 'raw', 'semi', 'depth', 'pageX', 'pageY', 'clutX', 'c
                'windowOffsetX', 'windowOffsetY', 'dither', 'fade', 'depthTest')
 KINDS = ('polygon', 'line', 'rectangle', 'fill')
 SKIP0, SKIP1, FAR, PRECISE, DROPPED = 1, 2, 4, 8, 16
+TPAGE_N64, TPAGE_PS1_LIGHT = 0x4000, 0x8000  # platform/n64_material.h
 BLENDS = ('B/2+F/2', 'B+F', 'B-F', 'B+F/4')
 
 
@@ -177,7 +178,9 @@ def shade(frame, p, t, l):
     out['transparent'] = texel == 0
     t8 = [(texel & 31) * 8, ((texel >> 5) & 31) * 8, ((texel >> 10) & 31) * 8]
     if not d['raw']:
-        t8 = [min(t8[i] * c[i] / 128.0, 255.0) for i in range(3)]
+        n64 = (p.tpage & (TPAGE_N64 | TPAGE_PS1_LIGHT)) == TPAGE_N64
+        neutral = 255.0 if p.kind == 0 and n64 else 128.0
+        t8 = [min(t8[i] * c[i] / neutral, 255.0) for i in range(3)]
     out['rgb'] = t8
     return out
 

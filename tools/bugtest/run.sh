@@ -210,6 +210,10 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform -Iplatform
     $(pkg-config --cflags sdl3) tools/bugtest/test_saturn_text.c platform/psx/gte.c platform/psx/gte_tables.c \
     $(pkg-config --libs sdl3) -lm -o "$test_build/saturn_text"
 "$test_build/saturn_text"
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform -Iplatform/psx -iquote game/include \
+    $(pkg-config --cflags sdl3) tools/bugtest/test_n64_light.c platform/psx/gte.c platform/psx/gte_tables.c \
+    $(pkg-config --libs sdl3) -lm -o "$test_build/n64_light"
+"$test_build/n64_light"
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform -iquote game/include $(pkg-config --cflags sdl3) \
     tools/bugtest/test_saturn_art.c $(pkg-config --libs sdl3) -o "$test_build/saturn_art"
 "$test_build/saturn_art"

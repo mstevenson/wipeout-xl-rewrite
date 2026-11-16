@@ -12,6 +12,7 @@ PortSettings portSettings;
 uint16_t psxVram[VRAM_HEIGHT][VRAM_WIDTH], psxVramHigh[VRAM_HEIGHT][VRAM_WIDTH];
 int portPal;
 static int hdEnabled, referenceMode;
+static unsigned hdTextureEpoch = 1;
 static uint8_t hdPixels[16 * 16 * 4];
 static uint32_t glyphPixels[GLYPH_ATLAS_SIZE * GLYPH_ATLAS_SIZE], portPixels[256 * 256];
 int PortLinkDownsample(void) { return -1; }
@@ -19,7 +20,7 @@ int PortLinkDownsampleStyle(void) { return -1; }
 void PortDrawableSize(int *w, int *h) { *w = 320; *h = 240; }
 void HdTexSetScale(int n) {}
 int HdTexActive(void) { return hdEnabled || referenceMode; }
-unsigned HdTexEpoch(void) { return 1; }
+unsigned HdTexEpoch(void) { return hdTextureEpoch; }
 int HdTexImageCount(void) { return 1; }
 const uint8_t *HdTexImage(int i, int *w, int *h) { *w = *h = 16; return hdPixels; }
 int HdTexFind(int a, int b, int c, int d, int e, float f, float g, float h, float i, HdTexHit *hit)
@@ -82,6 +83,50 @@ static void PaletteChanges(void)
             assert(pixel[2] == (step == 1 ? 96 : 0));
         }
     }
+}
+
+static void SceneryTint(void)
+{
+    static const struct {
+        int n64Tint, raw, r, g, b;
+        int expected[3];
+    } draws[] = {
+        {1, 0, 255, 129, 130, {248, 125, 126}},
+        {0, 0, 128,  64, 192, {248, 124, 255}},
+        {1, 1,   0,   0,   0, {248, 248, 248}},
+    };
+
+    GpuSetDrawArea(0, 0, 64, 32, 0, 0);
+    psxVram[128][512] = 0x7fff;
+    GpuVramChanged(512, 128, 1, 1);
+    for (int i = 0; i < 16 * 16; i++) {
+        hdPixels[i * 4] = hdPixels[i * 4 + 1] = hdPixels[i * 4 + 2] = 248;
+        hdPixels[i * 4 + 3] = 255;
+    }
+    for (int hd = 0; hd < 2; hd++) {
+        hdEnabled = hd;
+        GpuClearArea(0, 0, 64, 32, 0, 0, 0);
+        for (int i = 0; i < (int)SDL_arraysize(draws); i++) {
+            GpuDrawState state = {.textured = 1, .semi = -1, .depth = 2, .pageX = 512, .pageY = 128,
+                                  .raw = draws[i].raw, .n64Tint = draws[i].n64Tint};
+            GpuVertex triangle[3] = {{.x = i * 16, .y = 0}, {.x = i * 16 + 12, .y = 0},
+                                     {.x = i * 16, .y = 12}};
+            for (int j = 0; j < 3; j++) {
+                triangle[j].r = draws[i].r;
+                triangle[j].g = draws[i].g;
+                triangle[j].b = draws[i].b;
+                triangle[j].a = 255;
+            }
+            GpuTriangles(&state, triangle, 3);
+        }
+        for (int i = 0; i < (int)SDL_arraysize(draws); i++) {
+            int w, h;
+            const uint8_t *pixel = GpuReadArea(i * 16 + 2, 2, 1, 1, &w, &h);
+            for (int c = 0; c < 3; c++) assert(pixel[c] == draws[i].expected[c]);
+        }
+    }
+    hdEnabled = 0;
+    puts("N64 and PS1 tints coexist in one batch and preserve adjacent N64 values: OK");
 }
 
 /* More live palettes than cache layers, then texture and CLUT writes with both
@@ -196,6 +241,7 @@ int main(int argc, char **argv)
     assert(GpuInit());
     if(SDL_getenv("WIPEOUT_TEST_METAL")){assert(RenderRequestBackend(RENDER_METAL));assert(RenderApplyBackend());}
     PaletteChanges();
+    SceneryTint();
     PageChanges();
     OffscreenPicture();
     PartialDepthClear();
@@ -203,6 +249,7 @@ int main(int argc, char **argv)
         hdPixels[i * 4] = i; hdPixels[i * 4 + 1] = 255 - i; hdPixels[i * 4 + 2] = 128;
         hdPixels[i * 4 + 3] = i % 3 == 0 ? 0 : i % 3 == 1 ? 128 : 255;
     }
+    hdTextureEpoch++;
     for (int i = 0; i < GLYPH_ATLAS_SIZE * GLYPH_ATLAS_SIZE; i++) {
         glyphPixels[i] = ((uint32_t)i * 7919u) | 0xff000000u;
     }

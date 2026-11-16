@@ -1,6 +1,7 @@
 #include "functions.h"
 #include "trackasm.h"
 #include "crack.h"
+#include "track.h" /* Port: PortTrackLightPage */
 #include "../../platform/psx/gte.h" /* Port: frame interpolation */
 
 extern TrackData   *track;
@@ -66,7 +67,7 @@ void FillMedLoCrack(TrackSection *section, Skeleton *view)
                     tile = &tileSurfaces[face->texture][0].low[0];
                 }
                 poly->cba = tile->cba;
-                poly->tsb = tile->tsb;
+                poly->tsb = PortTrackLightPage(tile->tsb, face); /* Port: with the scale of the face's colour */
                 poly->u0 = tile->u0;
                 poly->v0 = tile->v0;
                 poly->u1 = (tile->u0 + tile->u1) >> 1;
@@ -171,7 +172,7 @@ void FillHiMedCrack(TrackSection *hiSection, Skeleton *camera)
             }
             tile = &surface->med[0];
             ft3->cba = tile->cba;
-            ft3->tsb = tile->tsb;
+            ft3->tsb = PortTrackLightPage(tile->tsb, hiFace); /* Port: with the scale of the face's colour */
             ft3->u0 = tile->u0;
             ft3->v0 = tile->v0;
             ft3->u1 = (tile->u0 + tile->u1) >> 1;
@@ -197,7 +198,7 @@ void FillHiMedCrack(TrackSection *hiSection, Skeleton *camera)
             }
             tile = &surface->med[1];
             ft3->cba = tile->cba;
-            ft3->tsb = tile->tsb;
+            ft3->tsb = PortTrackLightPage(tile->tsb, hiFace); /* Port: with the scale of the face's colour */
             ft3->u0 = tile->u0;
             ft3->v0 = tile->v0;
             ft3->u1 = (tile->u0 + tile->u1) >> 1;

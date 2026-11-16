@@ -1098,7 +1098,8 @@ static void Add(const GpuVertex *v)
     out->window[2] = (uint8_t)primitiveState.windowOffsetX;
     out->window[3] = (uint8_t)primitiveState.windowOffsetY;
     out->mode[0] = (uint8_t)primitiveState.textured;
-    out->mode[1] = (uint8_t)primitiveState.raw;
+    /* Texture colour mode: bit 0 bypasses tint, bit 1 selects N64 tint. */
+    out->mode[1] = (uint8_t)(primitiveState.raw | (primitiveState.n64Tint << 1));
     out->mode[2] = (uint8_t)primitiveState.depth;
     /* (the vertex shader's: a polygon seen from behind; the blending) */
     out->mode[3] = (uint8_t)((v->backFacing || v->exactDepth) |

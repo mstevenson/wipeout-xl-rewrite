@@ -413,6 +413,8 @@ typedef struct Face {
     u_char  red;
     u_char  green;
     u_char  blue;
+    u_char  lightFormat; /* Port: the padding: the colour's scale (RENDER_LIGHT_*, n64_material.h); set on loading.
+                            The colour is also passed as a CVECTOR, whose cd this is. */
 } Face;
 
 typedef struct TrackSection {

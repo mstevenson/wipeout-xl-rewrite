@@ -10,6 +10,8 @@ static void *packet;
 static u_long *packetSlot;
 static int originalLook;
 int PortOriginalLooks(void) { return originalLook; }
+static int track64;
+int PortOriginalTrackIs64(void) { return track64; }
 int PortTracing(void) { return 0; }
 int PortScreenMargin(void) { return 0; }
 char *PortNearAlloc(int bytes) { assert(bytes <= sizeof(arena)); return arena.bytes; }
@@ -54,7 +56,7 @@ int main(void)
         projected[i].flag = 1;
         projected[i].depth = vertices[i].vz > 0 ? vertices[i].vz : 0;
     }
-    assert(DrawNearPrimitive(&object, 0, ordering, prim));
+    assert(DrawClippedPrimitive(&object, 0, ordering, prim, DRAW_PLAIN, 0));
     assert(linked == 1 && packet == &arena.gt);
     assert(arena.gt.code == 0x3e); /* a quad, not a fan on the other diagonal */
     assert(arena.gt.u0 == 130 && arena.gt.u1 == 250 && arena.gt.u2 == 130 && arena.gt.u3 == 250);
@@ -75,28 +77,78 @@ int main(void)
             smooth.colour[i].b = 30 + i * 20;
         }
         linked = 0; prim.g4 = &smooth;
-        assert(DrawNearPrimitive(&object, 0, ordering, prim));
+        assert(DrawClippedPrimitive(&object, 0, ordering, prim, DRAW_PLAIN, 0));
         assert(linked == 1 && arena.g.code == 0x38);
         assert(arena.g.r0 == 10 && arena.g.r1 == 30 && arena.g.r2 == 50 && arena.g.r3 == 70);
         CheckView(&arena.g.x3, &vertices[3]);
     }
     {
-        GT3 smooth = {0};
-        smooth.type = TypeGT3;
-        memcpy(smooth.coords, face.coords, sizeof(smooth.coords));
-        smooth.colour[0].r = 40; smooth.colour[1].r = 80; smooth.colour[2].r = 120;
-        linked = 0; prim.gt3 = &smooth;
-        assert(DrawNearPrimitive(&object, 0, ordering, prim));
+        GT3 triangle = {0};
+        GT4 quad = {0};
+        triangle.type = TypeGT3;
+        quad.type = TypeGT4;
+        triangle.tsb = quad.tsb = face.tsb;
+        memcpy(triangle.coords, face.coords, sizeof(triangle.coords));
+        memcpy(quad.coords, face.coords, sizeof(quad.coords));
+        for (int i = 0; i < 4; i++) {
+            quad.colour[i] = (CVECTOR){40 + 40 * i, 30 + 30 * i, 20 + 20 * i, 0};
+            if (i < 3) triangle.colour[i] = quad.colour[i];
+        }
+        linked = 0; prim.gt3 = &triangle;
+        assert(DrawClippedPrimitive(&object, 0, ordering, prim, DRAW_PLAIN, 0));
         assert(linked == 1 && arena.gt.code == 0x34);
         assert(arena.gt.r0 == 40 && arena.gt.r1 == 40 && arena.gt.r2 == 40);
+        assert(arena.gt.tpage == face.tsb);
+
+        /* A Wipeout 64 texture's polygons keep each colour through the GPU's near-plane clip. */
+        triangle.tsb = quad.tsb = face.tsb | PORT_TPAGE_N64;
+        linked = 0;
+        assert(DrawClippedPrimitive(&object, 0, ordering, prim, DRAW_PLAIN, 0));
+        assert(linked == 1 && arena.gt.code == 0x34);
+        assert(arena.gt.r0 == 40 && arena.gt.r1 == 80 && arena.gt.r2 == 120);
+        assert(arena.gt.tpage == (face.tsb | PORT_TPAGE_N64));
+        linked = 0; prim.gt4 = &quad;
+        assert(DrawClippedPrimitive(&object, 0, ordering, prim, DRAW_PLAIN, 0));
+        assert(linked == 1 && arena.gt.code == 0x3c);
+        assert(arena.gt.r0 == 40 && arena.gt.r1 == 80 && arena.gt.r2 == 120 && arena.gt.r3 == 160);
+        assert(arena.gt.g3 == 120 && arena.gt.b3 == 80);
+        assert(arena.gt.tpage == (face.tsb | PORT_TPAGE_N64));
+        CheckView(&arena.gt.x3, &vertices[3]);
+        /* ... and so does the sky's boundary fallback. */
+        linked = 0;
+        assert(DrawClippedPrimitive(&object, 0, ordering, prim, DRAW_FIXED, 8191));
+        assert(linked == 1 && arena.gt.code == 0x3c && arena.gt.r3 == 160);
+
+        /* On screen, in every renderer, by the texture page alone. */
+        assert(GouraudTextured(DRAW_PLAIN, PORT_TPAGE_N64) && GouraudTextured(DRAW_FIXED, PORT_TPAGE_N64));
+        assert(!GouraudTextured(DRAW_PLAIN, face.tsb) && !GouraudTextured(DRAW_FIXED, face.tsb));
+        for (int i = 0; i < 4; i++) projected[i].flag = 0;
+        linked = 0;
+        assert(DrawGouraudTexturedQuad(DRAW_PLAIN, arena.bytes, ordering, 0, &quad) == arena.bytes + sizeof(POLY_GT4));
+        assert(linked == 1 && arena.gt.code == 0x3c);
+        assert(arena.gt.r0 == 40 && arena.gt.r1 == 80 && arena.gt.r2 == 120 && arena.gt.r3 == 160);
+        assert(arena.gt.tpage == (face.tsb | PORT_TPAGE_N64));
+        for (int i = 0; i < 4; i++) projected[i].flag = 1;
+    }
+    /* A Wipeout 64 road face's colour lights an XL ship on the PS1's scale; a pad's colour the game wrote is
+       already on it, and XL's own tracks' colours are left as they are. */
+    {
+        CVECTOR road = {255, 128, 0, RENDER_LIGHT_RGB8}, pad = {35, 35, 255, RENDER_LIGHT_PS1}, light;
+        const CVECTOR *lit;
+        track64 = 1;
+        lit = LitColour(&road, &light);
+        assert(lit == &light && light.r == 128 && light.g == 64 && light.b == 0 && light.cd == RENDER_LIGHT_PS1);
+        assert(LitColour(&pad, &light) == &pad);
+        track64 = 0;
+        assert(LitColour(&road, &light) == &road);
     }
     prim.ft4 = &face;
     /* Fully hidden polygons and invalid vertex references must still be rejected. */
     linked = 0;
     for (int i = 0; i < 4; i++) vertices[i].vz = -100;
-    assert(!DrawNearPrimitive(&object, 0, ordering, prim) && linked == 0);
+    assert(!DrawClippedPrimitive(&object, 0, ordering, prim, DRAW_PLAIN, 0) && linked == 0);
     face.coords[3] = 4;
-    assert(!DrawNearPrimitive(&object, 0, ordering, prim));
+    assert(!DrawClippedPrimitive(&object, 0, ordering, prim, DRAW_PLAIN, 0));
     /* The 1995 sky keeps four independent colours at the fixed background slot.
        Flattening these to colour[0] turns the aurora into solid bands. */
     {
@@ -197,6 +249,7 @@ int main(void)
         assert(!DrawSkyBoundaryPrimitive(&object, 11, ordering, prim, 8191) && !linked);
     }
     puts("near scenery keeps PS1 quad geometry and original vertex positions: OK");
+    puts("Wipeout 64 textures keep their polygons' corner colours; its road light is converted for XL ships: OK");
     puts("1995 sky keeps Gouraud corner colours in the fixed background slot: OK");
     return 0;
 }

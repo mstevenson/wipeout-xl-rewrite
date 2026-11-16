@@ -18,6 +18,7 @@
 
 #include "discimage.h"
 #include "original.h"
+#include "n64_material.h"
 #include "platform.h"
 #include "saturn.h"
 #include "settings.h"
@@ -1734,7 +1735,8 @@ static int PlaceTims(Layout *l, TimList *list, const int *own)
         if (!clut || !PlaceImage(l, Le16(image + 8), Le16(image + 10), &x, &y)) {
             return 0;
         }
-        list->tims[i][4] &= 0x0F; /* (the N64's own flags above the mode) */
+        /* (the N64's own flags above the mode), and the mark of the cartridge's colour scale (n64_material.h) */
+        PutLe32(list->tims[i] + 4, (list->tims[i][4] & 0x0F) | PORT_TIM_N64);
         PutLe16(image + 4, x);
         PutLe16(image + 6, y);
         if (!PlacePalette(l, clut + 12, Le16(clut + 8), own && own[i], &x, &y)) {
@@ -1757,7 +1759,7 @@ static uint8_t *Window(const uint8_t *clut, const uint8_t *image, int fromX, int
     *size = 8 + clutLength + imageLength;
     tim = SDL_calloc(1, *size);
     tim[0] = 0x10;
-    tim[4] = (uint8_t)flags;
+    PutLe32(tim + 4, (uint32_t)flags);
     memcpy(tim + 8, clut, clutLength);
     PutLe32(tim + 8 + clutLength, imageLength);
     PutLe16(tim + 8 + clutLength + 4, x);
@@ -1795,7 +1797,7 @@ static int MakeLibrary(const uint8_t *cmp, size_t length, Layout *l, uint8_t **l
                 ph = h;
                 px = py = 0;
             }
-            piece = Window(clut, image, px, py, pw, ph, x + px, y + py, tiles.tims[t][4], &size);
+            piece = Window(clut, image, px, py, pw, ph, x + px, y + py, (int)Le32(tiles.tims[t] + 4), &size);
             TimAdd(&pieces, piece, size); /* (size only once Window has set it: the order a call's arguments
                                              are worked out in is the compiler's, and GCC's is the other way) */
             PutBe16(*templates + ((size_t)t * 21 + k) * 2, t * 21 + k);
