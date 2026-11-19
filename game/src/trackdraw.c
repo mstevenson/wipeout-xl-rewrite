@@ -31,16 +31,6 @@ static Surface *FaceSurface(Face *face)
     return &tileSurfaces[(u_char)face->texture][(face->flags & FLIP) != 0];
 }
 
-/* Port: a face's colour into its quad (after its texture page). The colour the game wrote on a Wipeout 64 track
-   (its pads: PortSetTrackColour) is on the PS1's scale, not the cartridge's that the texture page says. */
-static void SetTrackLight(POLY_FT4 *poly, const Face *face)
-{
-    poly->r0 = face->red;
-    poly->g0 = face->green;
-    poly->b0 = face->blue;
-    poly->tpage = PortTrackLightPage(poly->tpage, face);
-}
-
 /* Puts the tile's texture page, palette and texture coordinates into a textured quad. */
 static void SetQuadTile(POLY_FT4 *poly, Tile *tile)
 {
@@ -148,7 +138,9 @@ void AsmTrackLo(TrackSection *firstSection, Skeleton *camera, short loCount)
                a mirrored face, before moving on to the mirrored surface, so they always come from the plain one. */
             poly->tpage = tileSurfaces[(u_char)face->texture][0].low[0].tsb;
             poly->clut = tileSurfaces[(u_char)face->texture][0].low[0].cba;
-            SetTrackLight(poly, face); /* Port: with the scale of its colour */
+            poly->r0 = face->red;
+            poly->g0 = face->green;
+            poly->b0 = face->blue;
             AddPrim((u_long *)((char *)ordering + (depth & 0xFFFC)), poly);
             PortFarMarkFace(face); /* Port: the far view draws the faces the game did not */
             PortTagPrims(poly, poly + 1, "track lo face", NULL, (int)(face - track->faces)); /* Port: the frame recorder */
@@ -203,7 +195,9 @@ static POLY_FT4 *DrawGridQuad(POLY_FT4 *poly, u_long *ordering, Face *face, Tile
     GteBindPrecise(&poly->x2, p2->handle);
     GteBindPrecise(&poly->x3, p3->handle);
     SetQuadTile(poly, tile);
-    SetTrackLight(poly, face); /* Port: with the scale of its colour */
+    poly->r0 = face->red;
+    poly->g0 = face->green;
+    poly->b0 = face->blue;
     GteWriteData(16, p0->depth);
     GteWriteData(17, p1->depth);
     GteWriteData(18, p2->depth);
@@ -412,7 +406,9 @@ static void DrawPartialCell(GridPoint *cell[4], Tile *tile, Face *face, u_long *
         poly->u3 = (u_char)uv[gridQuad[i][3]]; poly->v3 = (u_char)(uv[gridQuad[i][3]] >> 8);
         poly->tpage = tile->tsb;
         poly->clut = tile->cba;
-        SetTrackLight(poly, face); /* Port: with the scale of its colour */
+        poly->r0 = face->red;
+        poly->g0 = face->green;
+        poly->b0 = face->blue;
         GteWriteData(16, a->depth);
         GteWriteData(17, b->depth);
         GteWriteData(18, c->depth);
@@ -565,7 +561,9 @@ static void DrawNearFace(Face *face, const PortView *view, u_short tpage, u_shor
     SetQuadTile(poly, &FaceSurface(face)->low[0]);
     poly->tpage = tpage;
     poly->clut = clut;
-    SetTrackLight(poly, face); /* Port: with the scale of its colour */
+    poly->r0 = face->red;
+    poly->g0 = face->green;
+    poly->b0 = face->blue;
     /* behind whatever the game drew of the face, and nearer things */
     AddPrim(PortFarSlot((int)deepest >> 2, deepest), poly);
     PortTagPrims(poly, poly + 1, "near fill face", NULL, (int)(face - track->faces));
@@ -631,7 +629,9 @@ void PortTrackFar(TrackSection *section, const PortView *view)
         SetQuadTile(poly, &FaceSurface(face)->low[0]);
         poly->tpage = tileSurfaces[(u_char)face->texture][0].low[0].tsb;
         poly->clut = tileSurfaces[(u_char)face->texture][0].low[0].cba;
-        SetTrackLight(poly, face); /* Port: with the scale of its colour */
+        poly->r0 = face->red;
+        poly->g0 = face->green;
+        poly->b0 = face->blue;
         /* AsmTrackLo's slot: the depth of the last corner of RTPT (vertex 2), a quarter per entry */
         AddPrim(PortFarSlot((int)corner[2].z >> 2, corner[2].z), poly);
         PortTagPrims(poly, poly + 1, "far track face", NULL, (int)(face - track->faces));

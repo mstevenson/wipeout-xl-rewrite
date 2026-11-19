@@ -53,6 +53,10 @@ char *PortWidenPrmImage(HeapBlock *heap, char *file, int *length);
    two scenery files are made one (platform/original.c); 0 if the walk does not reach the file's end. */
 int PortPrmShiftTextures(char *file, int length, int shift);
 
+/* Puts the colours of a Wipeout 64 prm file's textured primitives on the PS1's scale and marks its objects
+   PORT_OBJECT_N64 (platform/n64_material.h); 0 if the walk does not reach the file's end. */
+int PortPrmN64(char *file, int length);
+
 /* Length of the widened image PortWidenPrmImage built last (the weapon code copies whole images). */
 extern int portLastPrmImageLength;
 

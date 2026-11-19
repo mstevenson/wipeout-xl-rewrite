@@ -1,23 +1,16 @@
-/* Wipeout 64's colour scale, carried with its data. The cartridge modulates textures with 8-bit colours where 255
-   leaves a texture unchanged (the RDP's TEXEL x SHADE or TEXEL x PRIM); the PS1's equivalent is 128. Its textures
-   are marked when they are placed (platform/original.c), so everything drawn with them, the road, scenery, sky and
-   signs alike, is modulated at its scale; colours the game itself writes stay at the PS1's. */
+/* Wipeout 64's colours. The cartridge modulates textures with 8-bit colours where 255 leaves a texture unchanged
+   (the RDP's TEXEL x SHADE or TEXEL x PRIM); the PS1's equivalent is 128. Its road faces' and textured primitives'
+   colours are put on the PS1's scale as the track is made XL's (platform/original.c), so they draw as XL's do and
+   light XL's ships as XL's road does. Its untextured colours mean the same on both and are left as they are. */
 #ifndef PORT_N64_MATERIAL_H
 #define PORT_N64_MATERIAL_H
 
-/* A TIM's flags word: the image is the cartridge's (beyond the CLUT mode and the console's flags). */
-#define PORT_TIM_N64 0x10000000
-/* Texture page bits the console's GPU leaves unused, carried on a textured polygon's packet: its texture is the
-   cartridge's (on Texture.tsb from loading on, so on every packet drawn with it) ... */
-#define PORT_TPAGE_N64 0x4000
-/* ... and its colour is the PS1's nonetheless (a road face's colour the game wrote: speed pads, weapon pads,
-   checkpoints, the pit lane). Set on packets only, never on a texture. */
-#define PORT_TPAGE_PS1_LIGHT 0x8000
+/* Object.flags: the object is the cartridge's (set on import; XL's and the original Wipeout's files leave the flags
+   0). Its textured Gouraud polygons keep their corner colours in every renderer, as the cartridge draws them. */
+#define PORT_OBJECT_N64 0x4000
 
-/* Face.lightFormat: the scale of a road face's colour. */
-enum { RENDER_LIGHT_PS1, RENDER_LIGHT_RGB8 };
-
-/* An N64 colour on the PS1's scale (a road face's colour lighting an XL ship). */
+/* An N64 colour on the PS1's scale: 255 to 128, rounded. The cartridge's textures have five bits a channel and it
+   draws to a 16-bit frame buffer, so the bit this drops never reaches its screen. */
 static inline unsigned char PortN64Modulation(unsigned char value)
 {
     return (unsigned char)(((unsigned)value * 128 + 127) / 255);

@@ -113,8 +113,6 @@ fragment float4 gameFragment(GameOut in [[stage_in]], constant Uniforms &u [[buf
         return Output(c, 1.0, semiMode >= 0, in);
     }
     float2 t = vTexel.xy;
-    bool raw = (mode.y & 1) != 0;
-    float tintScale = (mode.y & 2) != 0 ? 1.0 : (255.0 / 128.0);
     int portPage = texturePage.x / 64 + 16 * ((texturePage.y / 256) & 1) + (texturePage.y >= 512 ? 32 : 0);
     if (mode.w == 3 && portPage > 0) {
         int k = portPage - 1;
@@ -124,13 +122,13 @@ fragment float4 gameFragment(GameOut in [[stage_in]], constant Uniforms &u [[buf
         float4 g = portPages.sample(portSampler, at / float2(2048.0, 2048.0));
         if (g.a < 0.004)
             discard_fragment();
-        return Output(raw ? g.rgb : g.rgb * c, g.a, semiMode >= 0, in);
+        return Output(mode.y == 0 ? g.rgb * c : g.rgb, g.a, semiMode >= 0, in);
     }
     if (mode.w == 3) {
         float4 g = glyphs.sample(glyphSampler, t / 256.0);
         if (g.a < 0.004)
             discard_fragment();
-        float3 rgb = raw ? g.rgb : min(g.rgb * c * tintScale, float3(g.a));
+        float3 rgb = mode.y == 0 ? min(g.rgb * c * (255.0 / 128.0), float3(g.a)) : g.rgb;
         return Output(rgb, g.a, semiMode >= 0, in);
     }
     int2 uv = int2(floor(t)) & 255;
@@ -144,7 +142,7 @@ fragment float4 gameFragment(GameOut in [[stage_in]], constant Uniforms &u [[buf
             if (h.a < 0.25)
                 discard_fragment();
             bool hdSemi = h.a < 0.75;
-            float3 hc = raw ? h.rgb : min(h.rgb * c * tintScale, float3(1.0));
+            float3 hc = mode.y == 0 ? min(h.rgb * c * (255.0 / 128.0), float3(1.0)) : h.rgb;
             return Output(hc, 1.0, semiMode >= 0 && hdSemi, in);
         }
     }
@@ -167,8 +165,8 @@ fragment float4 gameFragment(GameOut in [[stage_in]], constant Uniforms &u [[buf
     bool semi = (texel & 0x8000u) != 0u;
     float3 t8 =
         float3(float(texel & 31u), float((texel >> 5) & 31u), float((texel >> 10) & 31u)) * 8.0 / 255.0;
-    if (!raw) {
-        t8 = min(t8 * c * tintScale, float3(1.0));
+    if (mode.y == 0) {
+        t8 = min(t8 * c * (255.0 / 128.0), float3(1.0));
     }
     return Output(t8, 1.0, semiMode >= 0 && semi, in);
 }

@@ -20,7 +20,6 @@
 #include "../trace.h"
 #include "framecap.h"
 #include "gpu.h"
-#include "../n64_material.h"
 #include "../link.h"
 #include "../settings.h"
 #include "gte.h"
@@ -1463,9 +1462,6 @@ static void Polygon(const uint32_t *w, uint32_t code)
     StateFor(&draw, textured, semi, raw);
     if (textured) {
         TextureFromPage(&draw, page);
-        /* Port-only texture page bits: a Wipeout 64 texture, modulated at the cartridge's scale unless the
-           colour is the PS1's (n64_material.h). Only this packet's: the current page never keeps them. */
-        draw.n64Tint = (page & (PORT_TPAGE_N64 | PORT_TPAGE_PS1_LIGHT)) == PORT_TPAGE_N64;
         /* Port-only texture page bit: Saturn's checkerboard mesh, drawn opaque
            at alternating console pixels rather than blended with the scene. */
         if (semi && (page & 0x1000)) draw.semi = 4;

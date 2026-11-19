@@ -1,6 +1,5 @@
 #include "functions.h"
 #include "tim.h"
-#include "../../platform/n64_material.h" /* Port: Wipeout 64's colour scale */
 #include "ships.h"
 #include "portorig.h" /* Port: the original Wipeout's and Wipeout 64's tracks */
 
@@ -326,8 +325,6 @@ Texture *NewLoadTexture(struct Tim *tim, int context, int scene)
     } else {
         texture = 0;
     }
-    /* Port: a Wipeout 64 image's packets are modulated at the cartridge's scale (n64_material.h). */
-    if (texture && (tim->flags & PORT_TIM_N64)) texture->tsb |= PORT_TPAGE_N64;
     return texture;
 }
 

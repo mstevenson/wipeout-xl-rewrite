@@ -17,8 +17,8 @@
 #include <string.h>
 
 #include "discimage.h"
-#include "original.h"
 #include "n64_material.h"
+#include "original.h"
 #include "platform.h"
 #include "saturn.h"
 #include "settings.h"
@@ -876,6 +876,7 @@ static int Wipeout64Gates(const uint8_t *sections, int count, const uint8_t *fac
 static uint8_t *Relocate(const uint8_t *cmp, size_t length, int *paletteSlot, size_t *size);
 static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes);
 int PortPrmShiftTextures(char *file, int length, int shift); /* (game/src/port_widen.c) */
+int PortPrmN64(char *file, int length);                       /* (the same) */
 
 static int Build(void)
 {
@@ -1735,8 +1736,7 @@ static int PlaceTims(Layout *l, TimList *list, const int *own)
         if (!clut || !PlaceImage(l, Le16(image + 8), Le16(image + 10), &x, &y)) {
             return 0;
         }
-        /* (the N64's own flags above the mode), and the mark of the cartridge's colour scale (n64_material.h) */
-        PutLe32(list->tims[i] + 4, (list->tims[i][4] & 0x0F) | PORT_TIM_N64);
+        list->tims[i][4] &= 0x0F; /* (the N64's own flags above the mode) */
         PutLe16(image + 4, x);
         PutLe16(image + 6, y);
         if (!PlacePalette(l, clut + 12, Le16(clut + 8), own && own[i], &x, &y)) {
@@ -1759,7 +1759,7 @@ static uint8_t *Window(const uint8_t *clut, const uint8_t *image, int fromX, int
     *size = 8 + clutLength + imageLength;
     tim = SDL_calloc(1, *size);
     tim[0] = 0x10;
-    PutLe32(tim + 4, (uint32_t)flags);
+    tim[4] = (uint8_t)flags;
     memcpy(tim + 8, clut, clutLength);
     PutLe32(tim + 8 + clutLength, imageLength);
     PutLe16(tim + 8 + clutLength + 4, x);
@@ -1797,7 +1797,7 @@ static int MakeLibrary(const uint8_t *cmp, size_t length, Layout *l, uint8_t **l
                 ph = h;
                 px = py = 0;
             }
-            piece = Window(clut, image, px, py, pw, ph, x + px, y + py, (int)Le32(tiles.tims[t] + 4), &size);
+            piece = Window(clut, image, px, py, pw, ph, x + px, y + py, tiles.tims[t][4], &size);
             TimAdd(&pieces, piece, size); /* (size only once Window has set it: the order a call's arguments
                                              are worked out in is the compiler's, and GCC's is the other way) */
             PutBe16(*templates + ((size_t)t * 21 + k) * 2, t * 21 + k);
@@ -1988,7 +1988,7 @@ static int Wipeout64Sky(uint8_t *model, size_t size, const TimList *sky)
 static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
 {
     static const char *const copied[] = {"track.trv", "track.trf", "track.trs", "track.vew"};
-    size_t at = wads[index], size, comSize, sinSize;
+    size_t at = wads[index], size, comSize, sinSize, face;
     Layout layout = {0};
     TimList scene = {0}, sky = {0};
     const uint8_t *data, *com, *sin;
@@ -1999,6 +1999,12 @@ static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
         parts[i] = SDL_malloc(size + 1);
         memcpy(parts[i], data, size);
         sizes[i] = size;
+    }
+    /* the road faces' colours on the PS1's scale (n64_material.h) */
+    for (face = 0; face + FACE_BYTES <= sizes[1]; face += FACE_BYTES) {
+        for (i = 16; i < 19; i++) { /* (red, green, blue) */
+            parts[1][face + i] = PortN64Modulation(parts[1][face + i]);
+        }
     }
     data = WadPart(at, "library.cmp", &size);
     ok = MakeLibrary(data, size, &layout, &parts[4], &sizes[4], &parts[5], &sizes[5]);
@@ -2028,12 +2034,13 @@ static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
         memcpy(parts[8], com, comSize);
         memcpy(parts[8] + comSize, sin, sinSize);
         sizes[8] = comSize + sinSize;
-        ok = PortPrmShiftTextures((char *)parts[8] + comSize, (int)sinSize, comCount);
+        ok = PortPrmShiftTextures((char *)parts[8] + comSize, (int)sinSize, comCount) &&
+             PortPrmN64((char *)parts[8], (int)sizes[8]); /* (its colours and its mark: n64_material.h) */
         data = WadPart(at, "sky.prm", &size);
         parts[9] = SDL_malloc(size + 1);
         memcpy(parts[9], data, size);
         sizes[9] = size;
-        ok = ok && Wipeout64Sky(parts[9], sizes[9], &sky);
+        ok = ok && Wipeout64Sky(parts[9], sizes[9], &sky) && PortPrmN64((char *)parts[9], (int)sizes[9]);
     }
     if (ok) {
         TimList signs = {0};
@@ -2046,6 +2053,7 @@ static int Wipeout64Parts(int index, uint8_t **parts, size_t *sizes)
             if (ok) {
                 markerModel = SDL_malloc(markerModelSize);
                 memcpy(markerModel, data, markerModelSize);
+                ok = PortPrmN64((char *)markerModel, (int)markerModelSize);
             }
         }
         TimFree(&signs);

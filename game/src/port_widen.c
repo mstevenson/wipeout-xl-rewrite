@@ -1,6 +1,7 @@
 /* Port: widening of 32-bit file records to native records. See port_widen.h. */
 #include "functions.h"
 #include "port_widen.h"
+#include "../../platform/n64_material.h" /* Port: Wipeout 64's colours */
 
 extern char errorString[];
 
@@ -197,14 +198,37 @@ static int TextureOffset(int type)
     return 0;
 }
 
-int PortPrmShiftTextures(char *file, int length, int shift)
+/* The file offset of a textured primitive's colours and their count (0: untextured, so not modulated). */
+static int TintOffset(int type, int *count)
+{
+    *count = 1;
+    switch (type) {
+    case TypeFT3: return offsetof(FT3, colour);
+    case TypeFT4: return offsetof(FT4, colour);
+    case TypeGT3: *count = 3; return offsetof(GT3, colour);
+    case TypeGT4: *count = 4; return offsetof(GT4, colour);
+    case TypeLSFT3: return offsetof(LSFT3, colour);
+    case TypeLSFT4: return offsetof(LSFT4, colour);
+    case TypeLSGT3: *count = 3; return offsetof(LSGT3, colour);
+    case TypeLSGT4: *count = 4; return offsetof(LSGT4, colour);
+    case TypeTSPR:
+    case TypeBSPR: return offsetof(SPR, colour);
+    }
+    *count = 0;
+    return 0;
+}
+
+/* Walks a prm file as on disc (big-endian): adds shift to the texture numbers, and for Wipeout 64's (n64) puts the
+   textured primitives' colours on the PS1's scale and marks the objects (n64_material.h). */
+static int ConvertPrm(char *file, int length, int shift, int n64)
 {
     unsigned char *in = (unsigned char *)file;
     const PortRecordTable *objectTable = &PortRecord_Object;
     const PortRecordField *vertexCountField = FindField(objectTable, "vertexCount");
     const PortRecordField *primitiveCountField = FindField(objectTable, "primitiveCount");
+    const PortRecordField *flagsField = FindField(objectTable, "flags");
     int fixed = objectTable->fileSize + PortRecord_Skeleton.fileSize;
-    int pos = 0, i;
+    int pos = 0, i, j, k;
 
     while (length - pos >= fixed) {
         int vertexCount = ReadBigShort(in + pos + vertexCountField->fileOffset);
@@ -217,20 +241,41 @@ int PortPrmShiftTextures(char *file, int length, int shift)
         for (i = 0; i < primitiveCount; i++) {
             int type = length - end >= 2 ? ReadBigShort(in + end) : -1;
             int size = type >= 0 ? PrimitiveSize(type) : 0;
-            int at = TextureOffset(type);
+            int at = TextureOffset(type), count, tint = TintOffset(type, &count);
 
             if (size == 0 || size > length - end)
                 return 0;
-            if (at) {
+            if (at && shift) {
                 int texture = ReadBigShort(in + end + at) + shift;
                 in[end + at] = (unsigned char)(texture >> 8);
                 in[end + at + 1] = (unsigned char)texture;
             }
+            for (j = 0; n64 && j < count; j++) {
+                unsigned char *colour = in + end + tint + j * (int)sizeof(CVECTOR);
+                for (k = 0; k < 3; k++) { /* r, g, b: the code byte is kept */
+                    colour[k] = PortN64Modulation(colour[k]);
+                }
+            }
             end += size;
+        }
+        if (n64) {
+            int at = pos + flagsField->fileOffset, flags = ReadBigShort(in + at) | PORT_OBJECT_N64;
+            in[at] = (unsigned char)(flags >> 8);
+            in[at + 1] = (unsigned char)flags;
         }
         pos = end;
     }
     return pos == length;
+}
+
+int PortPrmShiftTextures(char *file, int length, int shift)
+{
+    return ConvertPrm(file, length, shift, 0);
+}
+
+int PortPrmN64(char *file, int length)
+{
+    return ConvertPrm(file, length, 0, 1);
 }
 
 int portLastPrmImageLength;

@@ -1991,11 +1991,15 @@ void CycleWeaponGrids(ShipData *ships, struct WeaponGridZone *grids, int noGrids
             }
             grid->angle += 32;
             if (grid->attr & WEAPON_GRID_LEFT) {
-                PortSetTrackColour(face, grid->r, grid->g, grid->b);
+                face->red = grid->r;
+                face->green = grid->g;
+                face->blue = grid->b;
             }
             face++;
             if (grid->attr & WEAPON_GRID_RIGHT) {
-                PortSetTrackColour(face, grid->r, grid->g, grid->b);
+                face->red = grid->r;
+                face->green = grid->g;
+                face->blue = grid->b;
             }
             k++;
         } while (grids + k < grids + noGrids);

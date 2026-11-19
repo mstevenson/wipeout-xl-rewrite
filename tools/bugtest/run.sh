@@ -148,6 +148,10 @@ for test in electric near_object; do
         "tools/bugtest/test_$test.c" $gte_sources -lm -o "$test_build/$test"
     "$test_build/$test"
 done
+${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Wno-deprecated-declarations \
+    -include platform/include/port.h -iquote game/include tools/bugtest/test_n64_import.c game/src/port_records.c \
+    -o "$test_build/n64_import"
+"$test_build/n64_import"
 
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -DPORT_VERSION='"0.0.6"' \
     -Iplatform -Iplatform/psx $(pkg-config --cflags sdl3) \
@@ -210,10 +214,6 @@ ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform -Iplatform
     $(pkg-config --cflags sdl3) tools/bugtest/test_saturn_text.c platform/psx/gte.c platform/psx/gte_tables.c \
     $(pkg-config --libs sdl3) -lm -o "$test_build/saturn_text"
 "$test_build/saturn_text"
-${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform -Iplatform/psx -iquote game/include \
-    $(pkg-config --cflags sdl3) tools/bugtest/test_n64_light.c platform/psx/gte.c platform/psx/gte_tables.c \
-    $(pkg-config --libs sdl3) -lm -o "$test_build/n64_light"
-"$test_build/n64_light"
 ${CC:-cc} -O1 -ffunction-sections -fdata-sections $discard -Iplatform -iquote game/include $(pkg-config --cflags sdl3) \
     tools/bugtest/test_saturn_art.c $(pkg-config --libs sdl3) -o "$test_build/saturn_art"
 "$test_build/saturn_art"

@@ -15,8 +15,7 @@
                          get the semi-transparency bit; depth is the average of the vertices' depths; billboard
                          sprites (types 10 and 11) are scaled by distance and rotated by `roll`.
      AsmDrawObjectLit    the same, except that gouraud polygons keep their colours, flat textured polygons are
-                         tinted by `colour` (Port: a Wipeout 64 road face's on the PS1's scale), and everything
-                         is linked 0x78 slots nearer.
+                         tinted by `colour`, and everything is linked 0x78 slots nearer.
      AsmDrawObjectFixed  for the sky: XL draws it flat, while the original Wipeout's guest skies keep
                          their corner colours. All use one fixed slot, facing tests and no sprites. */
 #include "functions.h"
@@ -24,7 +23,7 @@
 #include "../../platform/psx/gte.h"
 #include "portfar.h"
 #include "portorig.h"
-#include "../../platform/n64_material.h" /* Port: Wipeout 64's colour scale */
+#include "../../platform/n64_material.h" /* Port: Wipeout 64's objects */
 
 extern short   CurrentScreen;
 extern u_long *OT[2];
@@ -368,11 +367,11 @@ static int GouraudColours(DrawKind kind)
     return kind == DRAW_LIT || (kind == DRAW_FIXED && PortOriginalLooks());
 }
 
-/* Port: ... and Wipeout 64's textured polygons keep their corner colours in every renderer, as the cartridge's
-   draw them (its texture page's mark: n64_material.h). */
-static int GouraudTextured(DrawKind kind, int page)
+/* Port: ... and Wipeout 64's textured polygons keep their corner colours in every renderer, as the cartridge draws
+   them (its objects' mark: n64_material.h). */
+static int GouraudTextured(DrawKind kind, const Object *object)
 {
-    return GouraudColours(kind) || (page & PORT_TPAGE_N64) != 0;
+    return GouraudColours(kind) || (object->flags & PORT_OBJECT_N64) != 0;
 }
 
 static char *DrawGouraudTexturedTriangle(DrawKind kind, char *out, u_long *ordering, int fixedSlot, const GT3 *prim)
@@ -683,7 +682,7 @@ static int DrawClippedPrimitive(Object *object, int index, u_long *ordering, Pol
     case TypeGT3: /* the plain renderer draws it flat, in its first colour (Port: not Wipeout 64's) */
         coords = prim.gt3->coords, count = 3, uv = &prim.gt3->u0, colours = prim.gt3->colour;
         tsb = prim.gt3->tsb, cba = prim.gt3->cba;
-        gouraud = GouraudTextured(kind, tsb);
+        gouraud = GouraudTextured(kind, object);
         break;
     case TypeFT4:
         coords = prim.ft4->coords, count = 4, uv = &prim.ft4->u0, colours = &prim.ft4->colour;
@@ -692,7 +691,7 @@ static int DrawClippedPrimitive(Object *object, int index, u_long *ordering, Pol
     case TypeGT4:
         coords = prim.gt4->coords, count = 4, uv = &prim.gt4->u0, colours = prim.gt4->colour;
         tsb = prim.gt4->tsb, cba = prim.gt4->cba;
-        gouraud = GouraudTextured(kind, tsb);
+        gouraud = GouraudTextured(kind, object);
         break;
     case TypeG3: coords = prim.g3->coords, count = 3, colours = prim.g3->colour, gouraud = kind != DRAW_FIXED || GouraudColours(kind); break;
     case TypeG4: coords = prim.g4->coords, count = 4, colours = prim.g4->colour, gouraud = kind != DRAW_FIXED || GouraudColours(kind); break;
@@ -809,29 +808,15 @@ static int DrawSkyBoundaryPrimitive(Object *object, int index, u_long *ordering,
     return drawn;
 }
 
-/* Port: the lit renderer's colour: a Wipeout 64 road face's (its cd: Face.lightFormat) lights an XL model on the
-   PS1's scale, in `light`. */
-static const CVECTOR *LitColour(const CVECTOR *colour, CVECTOR *light)
-{
-    if (colour->cd != RENDER_LIGHT_RGB8 || !PortOriginalTrackIs64()) {
-        return colour;
-    }
-    *light = (CVECTOR){PortN64Modulation(colour->r), PortN64Modulation(colour->g), PortN64Modulation(colour->b),
-                       RENDER_LIGHT_PS1};
-    return light;
-}
-
 static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *colour, int fixedSlot)
 {
     u_long *ordering;
     char   *out;
     char   *primitive;
     int     count, index = 0;
+    int     gouraud = GouraudTextured(kind, object);
     unsigned char *drawnFlags = NULL;
     const unsigned char *skip = NULL;
-    CVECTOR light;
-
-    if (colour) colour = LitColour(colour, &light);
 
     if (farView) {
         int complete;
@@ -866,7 +851,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
         culled = 0;
         switch ((u_short)prim.prim->type) {
         case TypeGT3:
-            if (GouraudTextured(kind, prim.gt3->tsb)) {
+            if (gouraud) {
                 out = DrawGouraudTexturedTriangle(kind, out, ordering, fixedSlot, prim.gt3);
             } else {
                 out = DrawTexturedTriangle(kind, out, ordering, fixedSlot, (const FT3 *)prim.gt3, &prim.gt3->colour[0]);
@@ -874,7 +859,7 @@ static void DrawObject(Object *object, DrawKind kind, int roll, const CVECTOR *c
             primitive += sizeof(GT3);
             break;
         case TypeGT4:
-            if (GouraudTextured(kind, prim.gt4->tsb)) {
+            if (gouraud) {
                 out = DrawGouraudTexturedQuad(kind, out, ordering, fixedSlot, prim.gt4);
             } else {
                 out = DrawTexturedQuad(kind, out, ordering, fixedSlot, (const FT4 *)prim.gt4, &prim.gt4->colour[0]);

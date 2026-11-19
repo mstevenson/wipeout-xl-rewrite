@@ -45,8 +45,8 @@ void GpuSetPortPage(int page, const uint32_t *rgba);
 
 /* A vertex: position in the drawing area's pixels (fractional when the GTE
    supplied a precise one), w for perspective-correct texturing (1 when not
-   known), colour 0-255 per channel (128 = unmodulated texture, or 255 when
-   GpuDrawState.n64Tint is set), texture coordinates in texels. */
+   known), colour 0-255 per channel (128 = unmodulated texture), texture
+   coordinates in texels. */
 typedef struct GpuVertex {
     float x, y, w;
     uint8_t r, g, b, a;
@@ -69,7 +69,6 @@ typedef struct GpuDrawState {
     int dither;
     int fade;          /* the port's distance fade: the vertices' alpha (GpuVertex.a) blends it out */
     int hudColourOverlay; /* coloured HUD fill attenuates the background; black stays transparent */
-    int n64Tint;       /* neutral textured colour is 255 instead of 128 (Wipeout 64's: n64_material.h) */
 } GpuDrawState;
 
 int GpuInit(void);
